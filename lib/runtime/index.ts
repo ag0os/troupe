@@ -95,7 +95,7 @@ export const INSTALL_INSTRUCTIONS: Record<RuntimeBackend, string> = {
 		"Install Codex CLI with: npm install -g @openai/codex\n" +
 		"Then authenticate with: codex auth",
 	"codex-sdk":
-		"Note: codex-sdk backend is not implemented in claude-forge yet.\n" +
+		"Note: codex-sdk backend is not implemented in troupe yet.\n" +
 		"Use codex-cli for now. If you are implementing the SDK backend:\n" +
 		"Install Codex SDK with: npm install @openai/codex\n" +
 		"Then set your OPENAI_API_KEY environment variable",

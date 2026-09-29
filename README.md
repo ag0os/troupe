@@ -1,6 +1,8 @@
-# claude-forge
+# Troupe
 
-A collection of TypeScript agents and utilities for enhancing Claude Code CLI functionality with custom configurations, MCP integrations, and specialized workflows.
+A troupe of agents: each one declared once in this repo, compiled into a binary in `bin/`, and run from the terminal. Claude Code is the main backend today; Codex support is in progress, and the format is meant to stay backend agnostic.
+
+Formerly `claude-forge`; the repo was renamed in place on 2026-09-29.
 
 ## Origins
 
@@ -35,8 +37,8 @@ npm install -g @anthropic-ai/claude-code
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/ag0os/claude-forge.git
-cd claude-forge
+git clone https://github.com/ag0os/troupe.git
+cd troupe
 ```
 
 2. **Install dependencies:**
@@ -87,7 +89,7 @@ After compilation, add the `bin` directory to your PATH to use agents as global 
 
 ```bash
 # Add to your shell profile (~/.bashrc, ~/.zshrc, ~/.bash_profile, etc.)
-export PATH="$PATH:/path/to/claude-forge/bin"
+export PATH="$PATH:/path/to/troupe/bin"
 
 # Reload your shell configuration
 source ~/.zshrc  # or ~/.bashrc, depending on your shell

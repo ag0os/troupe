@@ -15,7 +15,7 @@ import type {
 } from "./types";
 
 const NOT_IMPLEMENTED_MESSAGE =
-	"codex-sdk backend is not implemented in claude-forge yet. Use codex-cli instead.";
+	"codex-sdk backend is not implemented in troupe yet. Use codex-cli instead.";
 
 export class CodexSdkRuntime implements AgentRuntime {
 	readonly backend = "codex-sdk" as const;

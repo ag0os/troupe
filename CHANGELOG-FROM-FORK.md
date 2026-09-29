@@ -1,4 +1,4 @@
-# Claude Forge: Evolution from claude-workshop-live
+# Troupe (formerly Claude Forge): Evolution from claude-workshop-live
 
 This document describes the major changes made after forking from [johnlindquist/claude-workshop-live](https://github.com/johnlindquist/claude-workshop-live).
 
@@ -130,7 +130,7 @@ Restructured agents from flat directory to functional namespaces:
 
 ### 6. Infrastructure Improvements
 
-- Project renamed from `claude-workshop-live` to `claude-forge`
+- Project renamed from `claude-workshop-live` to `claude-forge`, and on 2026-09-29 to `troupe`
 - Enhanced asset generation system (`lib/assets.gen.ts`)
 - Improved lib exports and module organization
 - Additional test coverage for forge-tasks
