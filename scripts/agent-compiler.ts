@@ -614,16 +614,21 @@ function isSideEffectFree(expression: ts.Expression): boolean {
 /**
  * Entry source for a compiled agent. It embeds the spec and imports only the
  * reserved extension exports. It parses its argv with the shared CLI (help
- * and parse errors exit there); until the runner lands it then prints the
- * embedded definition and the parsed invocation as JSON.
+ * and parse errors exit there) and serves `--show-prompt` through the
+ * runner's preview; until execution lands it otherwise prints the embedded
+ * definition and the parsed invocation as JSON.
  */
 export function generateEntry(agent: LoadedAgent): string {
 	const cli = fileURLToPath(
 		new URL("../lib/agent-format/cli.ts", import.meta.url),
 	);
+	const run = fileURLToPath(
+		new URL("../lib/agent-format/run.ts", import.meta.url),
+	);
 	const lines: string[] = [
 		'import { statSync } from "node:fs";',
 		`import { resolveCli } from ${JSON.stringify(cli)};`,
+		`import { previewAndExit } from ${JSON.stringify(run)};`,
 	];
 	const names = agent.extension?.exports ?? [];
 	if (agent.extension && names.length > 0) {
@@ -634,13 +639,15 @@ export function generateEntry(agent: LoadedAgent): string {
 	lines.push(
 		`const spec = ${JSON.stringify(agent.spec, null, "\t")};`,
 		`const extension = { ${names.join(", ")} };`,
-		"const cli = resolveCli(spec, process.argv.slice(2), {",
+		"const io = {",
 		"\tcwd: process.cwd(),",
 		"\tstdout: (text) => process.stdout.write(text),",
 		"\tstderr: (text) => process.stderr.write(text),",
 		'\tisDirectory: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? "missing",',
-		"});",
+		"};",
+		"const cli = resolveCli(spec, process.argv.slice(2), io);",
 		'if ("exitCode" in cli) process.exit(cli.exitCode);',
+		"if (cli.invocation.showPrompt) await previewAndExit(spec, extension, cli.invocation, io);",
 		"process.stdout.write(`${JSON.stringify({ spec, extension: Object.keys(extension), invocation: cli.invocation })}\\n`);",
 		"",
 	);

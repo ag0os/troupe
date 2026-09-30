@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -507,4 +508,175 @@ Body
 			Bun.spawnSync(["ls", "-A", join(root, "bin")]).stdout.toString(),
 		).toBe("");
 	});
+});
+
+describe("compiled --show-prompt (B-003, D-012)", () => {
+	test("prints exactly the envelope on both backends and nothing executes", async () => {
+		// A secret command that leaves a marker if anything ever runs it.
+		const marker = join(root, "secret-ran");
+		write(
+			"fake-bin/secret-cmd",
+			`#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho leaked-secret\n`,
+		);
+		Bun.spawnSync(["chmod", "+x", join(root, "fake-bin/secret-cmd")]);
+		write(
+			"agents/fixture/audit.md",
+			`---
+description: Fixture
+backends: [claude, codex]
+promptMode: replace
+initialPrompt: "Audit {{args}}"
+flags:
+  fail: { type: boolean, description: Make prepare throw }
+mcp:
+  api:
+    url: https://api.example.test/mcp
+    headers:
+      Authorization: "Bearer \${cmd:secret-cmd --reveal}"
+  local:
+    command: local-mcp
+    env:
+      TOKEN: "\${env:SECRET_TOKEN}"
+---
+Audit body
+`,
+		);
+		// Prepare creates a directory and runs a child only outside preview,
+		// and prints carelessly: the runner must absorb it.
+		write(
+			"agents/fixture/audit.ts",
+			`import { mkdirSync } from "node:fs";
+export async function prepare(ctx) {
+	const dir = ctx.cwd + "/.audit";
+	if (!ctx.preview) {
+		mkdirSync(dir);
+		await ctx.runCommand({ argv: ["secret-cmd"] });
+	}
+	if (ctx.flags.fail) throw new Error("prepare exploded");
+	for (const name of ["log", "info", "debug", "write", "dir", "dirxml", "table", "count", "countReset", "group", "groupCollapsed", "groupEnd", "trace", "timeLog", "timeEnd"]) {
+		console[name]("LEAK " + name);
+	}
+	process.stdout.write("LEAK write\\n");
+	// Output scheduled to land after prepare returns.
+	queueMicrotask(() => console.log("LEAK microtask"));
+	Promise.resolve().then(() => process.stdout.write("LEAK promise\\n"));
+	setTimeout(() => console.log("LEAK timer"), 0);
+	setTimeout(() => process.stdout.write("LEAK late timer\\n"), 50);
+	setImmediate(() => console.log("LEAK immediate"));
+	return {
+		systemPromptFragments: ["Report dir: " + dir],
+		beforeRunMessages: ["BANNER before"],
+		afterRunMessages: ["BANNER after"],
+	};
+}
+`,
+		);
+		const outFile = join(root, "bin/fixture:audit");
+		await compileAgent({ root, file: "agents/fixture/audit.md", outFile });
+
+		const workspace = realpathSync(mkdtempSync(join(tmpdir(), "preview-ws-")));
+		const tmp = realpathSync(mkdtempSync(join(tmpdir(), "preview-tmp-")));
+		try {
+			const runBinary = (...argv: string[]) => {
+				const child = Bun.spawnSync([outFile, ...argv], {
+					cwd: workspace,
+					env: {
+						...process.env,
+						PATH: `${join(root, "fake-bin")}:${process.env.PATH}`,
+						SECRET_TOKEN: "super-secret-value",
+						TMPDIR: tmp,
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				return {
+					code: child.exitCode,
+					stdout: child.stdout.toString(),
+					stderr: child.stderr.toString(),
+				};
+			};
+			const system = `Audit body${PROMPT_SEPARATOR}Report dir: ${workspace}/.audit`;
+			const envelope = (backend: string, argv: string[]) =>
+				[
+					`Backend: ${backend}`,
+					"--- System prompt ---",
+					system,
+					"--- Initial prompt ---",
+					"Audit src",
+					"--- Argv ---",
+					JSON.stringify(argv),
+					"",
+				].join("\n");
+			const mcpJson = JSON.stringify({
+				mcpServers: {
+					api: {
+						type: "http",
+						url: "https://api.example.test/mcp",
+						headers: { Authorization: "${TROUPE_MCP_API_AUTHORIZATION}" },
+					},
+					local: {
+						type: "stdio",
+						command: "local-mcp",
+						env: { TOKEN: "<redacted:env:SECRET_TOKEN>" },
+					},
+				},
+			});
+
+			expect(runBinary("src", "--show-prompt")).toEqual({
+				code: 0,
+				stderr: "",
+				stdout: envelope("claude", [
+					"claude",
+					"--system-prompt",
+					system,
+					"--mcp-config",
+					mcpJson,
+					"--",
+					"Audit src",
+				]),
+			});
+			expect(runBinary("src", "--show-prompt", "--backend", "codex")).toEqual({
+				code: 0,
+				stderr: "",
+				stdout: envelope("codex", [
+					"codex",
+					"-c",
+					'model_instructions_file="<temp:prompt-file>"',
+					"-c",
+					'mcp_servers.api={url = "https://api.example.test/mcp", env_http_headers = {Authorization = "TROUPE_MCP_API_AUTHORIZATION"}}',
+					"-c",
+					'mcp_servers.local={command = "local-mcp", env = {TOKEN = "<redacted:env:SECRET_TOKEN>"}}',
+					"--",
+					"Audit src",
+				]),
+			});
+
+			// Negative checks: no secret command ran, nothing was written, no temp
+			// resource was created, no secret or banner reached stdout.
+			expect(existsSync(marker)).toBe(false);
+			expect(readdirSync(workspace)).toEqual([]);
+			expect(readdirSync(tmp)).toEqual([]);
+
+			// A prepare failure exits 1 with stderr only, and nothing deferred leaks.
+			expect(runBinary("src", "--fail", "--show-prompt")).toEqual({
+				code: 1,
+				stdout: "",
+				stderr: "fixture:audit: prepare failed: prepare exploded\n",
+			});
+
+			// A failing request exits nonzero with stderr only, no partial envelope.
+			for (const argv of [
+				["--show-prompt", "--backend", "gemini"],
+				["--show-prompt", "--cwd", "/definitely/missing"],
+			]) {
+				const bad = runBinary(...argv);
+				expect(bad.code).not.toBe(0);
+				expect(bad.stdout).toBe("");
+				expect(bad.stderr).toStartWith("fixture:audit: ");
+			}
+		} finally {
+			rmSync(workspace, { recursive: true, force: true });
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	}, 60_000);
 });

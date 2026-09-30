@@ -201,6 +201,18 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: The user chose it at the human gate (2026-09-30) after independent-review finding 12 and the Risks entry. The evidence verifies literal header mapping only, so Step 2 carries one experiment that verifies both env-reference forms on the installed CLIs before the adapters rely on them; a failed experiment halts per "Backend drift".
   - Decided by: the user, 2026-09-30, human gate
 
+- **D-030 - Preview exits are diagnostics** *(Added 2026-09-30 after review)*
+  - Decision: In `--show-prompt`, an early exit from `prepare` is reported on stderr and the process exits 1 regardless of the declared code.
+  - Alternatives: Honor the early exit's named stream and code as Design §5 does for execution.
+  - Why: Preview output is for humans and CI and must never be mistaken for a run result.
+  - Decided by: Shepherd orchestrator
+
+- **D-031 - Preview shows one backend per run** *(Added 2026-09-30 after review)*
+  - Decision: `--show-prompt` prints the envelope for the resolved backend (explicit `--backend`, else the first declared); per-backend snapshots select each backend explicitly.
+  - Alternatives: One envelope per declared backend in a single run.
+  - Why: Matches Design §3's single `Backend:` line and lets `prepare` see one `ctx.backend`.
+  - Decided by: Shepherd orchestrator
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
