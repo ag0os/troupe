@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-009
 createdAt: '2026-09-30T17:41:11.138Z'
-updatedAt: '2026-09-30T17:41:11.138Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -28,4 +28,5 @@ Ratified constraints (stop-and-escalate): no binary reads `FORGE_BACKEND`; backe
 - [ ] #5 existing Webfetch tests are rewritten around the extension helpers and preserved cases
 - [ ] #6 D-015: importing the extension spawns no process and does not exit, and the same-stem pair builds as declaration+extension
 - [ ] #7 `bun run typecheck` and the project's test step pass
+- [ ] #8 B-007/D-005: Webfetch declares `backends: [claude]` and an explicit Codex backend fails clearly
 <!-- AC:END -->

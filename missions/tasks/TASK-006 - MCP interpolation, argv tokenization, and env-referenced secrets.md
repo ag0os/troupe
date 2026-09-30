@@ -10,7 +10,7 @@ labels:
 dependencies:
   - TASK-005
 createdAt: '2026-09-30T17:40:27.080Z'
-updatedAt: '2026-09-30T17:40:27.080Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -29,4 +29,5 @@ Ratified constraints (stop-and-escalate): D-029 — interpolated header values n
 - [ ] #5 B-005/D-029: the env-reference experiment for Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var` runs on both installed CLIs and is recorded in `evidence/backend-matrix.md` before the adapters rely on it; a failed experiment halts for human resolution under "Backend drift"
 - [ ] #6 B-005/D-029: negative checks prove interpolated header values never appear in argv, backend config files or process listings, and actual/display values stay paired for redaction
 - [ ] #7 `bun run typecheck` and the project's test step pass for interpolation and tokenization
+- [ ] #8 B-005: Claude emits inline MCP JSON carrying stdio `command`/`args`/`env`/`cwd` and HTTP `url`/`headers`; Codex emits `mcp_servers.<name>` config with stdio `command`/`args`/`env`/`cwd` and HTTP `url`/`http_headers` (interpolated values via `env_http_headers`/`bearer_token_env_var`); a negative/mutation check fails if any declared header (literal or env-referenced) or stdio field is missing from either adapter's argv
 <!-- AC:END -->

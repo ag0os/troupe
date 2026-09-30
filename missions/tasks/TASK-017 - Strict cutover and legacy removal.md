@@ -10,7 +10,7 @@ labels:
 dependencies:
   - TASK-016
 createdAt: '2026-09-30T17:41:20.404Z'
-updatedAt: '2026-09-30T17:41:20.404Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -28,4 +28,5 @@ Ratified constraints (stop-and-escalate): no binary reads `FORGE_BACKEND`; `agen
 - [ ] #4 D-021: `getBackend` and every `FORGE_BACKEND` read are removed with the legacy launchers — no FORGE_BACKEND is stop-and-escalate ratified ground
 - [ ] #5 D-020: test files remain worker-owned and are not listed in Files to Change
 - [ ] #6 D-011/D-023: publication remains the single-process temp-dir build then rename; `bun run typecheck`, `bun run check`, `bun test` and `bun run compile:all` pass with exactly 23 binaries after strict cutover
+- [ ] #7 before any deletion, `evidence/cutover-gate.md` shows all four smokes and the prose review passed, and strict-mode `compile:all` proves the exact 23-name roster with the legacy runtime still present; only then are the AC#2 paths removed
 <!-- AC:END -->

@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-001
 createdAt: '2026-09-30T17:40:18.329Z'
-updatedAt: '2026-09-30T17:40:18.329Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -27,4 +27,5 @@ Ratified constraints (stop-and-escalate): no generated binary reads `FORGE_BACKE
 - [ ] #4 B-002: `--help` is generated from the spec (description, default backend, mode, framework flags, agent flags/defaults/passthrough); parse, cwd and backend errors go to stderr nonzero without running prepare
 - [ ] #5 D-025: template validation accepts `{{args}}`, `{{cwd}}`, `{{flag.name}}` and one level of `if/else if/else` over boolean flags, enum equality and `args` truthiness; nesting, malformed and unknown/impossible references fail compile
 - [ ] #6 `bun run typecheck` and the project's static-analysis step pass, and `lib/agent-format/cli.ts` imports no adapter
+- [ ] #7 B-002/Design §3: framework `--model <id>` replaces the selected backend's declared model in the resolved invocation for any agent, whether or not the agent declares a model, emitting Claude `--model <id>` / Codex `-m <id>`, pinned by an `--model opus` preview on a declared-model agent and on an agent with no declared model; framework `--print` sets the effective mode to print, and that mode is what `ctx.mode` and the adapter receive, pinned by a preview whose argv shows print-mode argv (Claude `--print`, Codex `exec`)
 <!-- AC:END -->

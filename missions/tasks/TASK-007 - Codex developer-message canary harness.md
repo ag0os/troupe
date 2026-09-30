@@ -10,7 +10,7 @@ labels:
 dependencies:
   - TASK-005
 createdAt: '2026-09-30T17:40:28.232Z'
-updatedAt: '2026-09-30T17:40:28.232Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -26,4 +26,5 @@ Ratified constraint: prompt mode append maps to Codex `developer_instructions`, 
 - [ ] #2 B-010: when Codex is absent the canary test skips explicitly; when Codex is installed and the canary fails, the test fails rather than passing silently
 - [ ] #3 Quality Contract: the canary asserts the real developer-message channel rather than a substring of composed prompt text
 - [ ] #4 `bun test` passes with the canary included
+- [ ] #5 Quality Contract: fake Claude and Codex CLIs on PATH record argv/env for runner tests, and the fake Claude rejects `--print --output-format stream-json` without `--verbose`
 <!-- AC:END -->

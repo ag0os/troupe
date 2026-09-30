@@ -10,7 +10,7 @@ dependencies:
   - TASK-017
   - TASK-018
 createdAt: '2026-09-30T17:41:23.708Z'
-updatedAt: '2026-09-30T17:41:23.708Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -26,4 +26,5 @@ This task owns no B-### behavior and no ratified constraint. D-020: test files s
 - [ ] #4 one recorded real-CLI Claude stream-mode launch proves the `--print --output-format stream-json --verbose` argv
 - [ ] #5 Quality Contract: a recorded check states whether any `codex exec` flag avoids the project-trust write, and direct review covers the prompt prose
 - [ ] #6 D-020: test files remain worker-owned and outside Files to Change; this acceptance task owns no behavior or constraint
+- [ ] #7 canary, re-run smokes, real-CLI stream launch and project-trust check outcomes are written to `missions/plans/agent-format/evidence/acceptance.md`, with the interactive smokes performed by the sign-off maintainer
 <!-- AC:END -->

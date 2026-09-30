@@ -12,7 +12,7 @@ dependencies:
   - TASK-006
   - TASK-007
 createdAt: '2026-09-30T17:40:29.973Z'
-updatedAt: '2026-09-30T17:40:29.973Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -31,4 +31,5 @@ Ratified constraints (stop-and-escalate): publication is a single-process temp-d
 - [ ] #5 B-009/D-011: single compile accepts only roster names (a name outside the roster fails); `agents/local/` is never discovered and a present directory produces one warning line; the watcher serializes its queue, rebuilds all agents on change, and watches exactly `agents/` and `system-prompts/` — no agents/local and D-027 are stop-and-escalate ratified ground
 - [ ] #6 D-027: an include's realpath must fall under `agents/` or `system-prompts/` or compile fails naming file and field
 - [ ] #7 `bun run typecheck` and the project's test step pass for the shared compiler
+- [ ] #8 B-001/D-008: roster discovery and roster errors (a missing, extra or out-of-roster name) name the offending file and field and publish nothing; TASK-008 alone owns the tests for these
 <!-- AC:END -->

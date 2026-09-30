@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-001
 createdAt: '2026-09-30T17:40:20.598Z'
-updatedAt: '2026-09-30T17:40:20.598Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -28,4 +28,5 @@ Ratified constraints: prompt mode defaults to append and `base_instructions` is 
 - [ ] #5 B-004: Claude stream mode emits `--print --output-format stream-json --verbose`; Codex exec ignores stdin and adds `--skip-git-repo-check` only when the runner's `insideGitWorktree` input says the cwd is outside a worktree; adapter argv never uses exec `-a` or `base_instructions`
 - [ ] #6 B-004/D-006/D-013: forbidden lifecycle and prompt keys in authored `native` declarations are rejected, and adapters never synthesize or rewrite reserved post-`--` user tokens
 - [ ] #7 D-024: `lib/runtime/**`, `lib/flags.ts`, `lib/claude.ts` and `lib/index.ts`'s runtime re-export remain unchanged and typechecked; `bun run typecheck` passes
+- [ ] #8 Design §5: argv is composed as adapter-generated flags, then native args, then the verbatim post-`--` user tail, with the prompt placed last by the adapter (Claude interactive `claude [flags] -- prompt`, Codex interactive `codex [flags] prompt`); Claude native settings are merged with prepared rules exactly once, and empty settings or MCP objects emit no flag
 <!-- AC:END -->

@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-009
 createdAt: '2026-09-30T17:41:14.320Z'
-updatedAt: '2026-09-30T17:41:14.320Z'
+updatedAt: '2026-09-30T18:30:00.000Z'
 ---
 
 ## Description
@@ -26,4 +26,5 @@ Ratified constraints: dynamic rules return only on Claude so a Codex preview nev
 - [ ] #3 D-015: importing the extension spawns no process and does not exit, and the same-stem pair builds as declaration+extension
 - [ ] #4 D-028: Coach's `--resume`/`--permission-mode` follow `--`, and the Coach pack frontmatter stays a separate runtime content contract
 - [ ] #5 `bun run typecheck` and the project's test step pass with Coach snapshots
+- [ ] #6 D-028: Coach's `--cwd`/`--show-prompt` are framework flags, not Coach-parsed flags
 <!-- AC:END -->
