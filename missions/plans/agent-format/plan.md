@@ -384,12 +384,14 @@ type Finish = (result: RunResult, ctx: PrepareContext) => FinishResult | Promise
 | Concern | Claude | Codex |
 |---|---|---|
 | Append/replace | append/system flags | developer config/model-instructions temp file |
-| Interactive | `claude [flags] -- prompt`, inherited IO | `codex [flags] prompt`, inherited IO |
-| Print/stream | `--print`; stream `--print --output-format stream-json --verbose` | `codex exec`; stream `--json`; stdin ignored |
+| Interactive | `claude [flags] -- prompt`, inherited IO | `codex [flags] -- prompt`, inherited IO |
+| Print/stream | `--print`; stream `--print --output-format stream-json --verbose` | `codex exec [flags] -- prompt`; stream `--json`; stdin ignored |
 | Model/effort | `--model`/`--effort` | `-m`/reasoning config |
 | Access | plan/accept-edits/bypass | read-only/workspace-write/bypass |
 | MCP | inline Claude JSON; interpolated header values as `${VAR}` env references (D-029) | `mcp_servers` TOML; HTTP uses `url/http_headers`, interpolated values via `env_http_headers`/`bearer_token_env_var` (D-029) |
 | Config | inherit unless declared | inherit unless declared; skip Git check only outside worktree |
+
+The `--` keeps a prompt that matches a subcommand or starts with a dash from being parsed as one (verified on Codex 0.159). *(Added 2026-09-30 after review)*
 
 Claude rejects `--print --output-format stream-json` without `--verbose` (verified on Claude Code 2.1.285; `evidence/backend-matrix.md` row 10c omits it), so the Claude stream argv always carries `--verbose` and the fake Claude CLI rejects stream-json without it.
 
@@ -410,6 +412,7 @@ interface ResourceNeeds { promptFile?: string /* text to write */; tmpDir?: bool
 interface ResourcePaths { promptFile?: string; tmpDir?: string }  // real at launch, stable placeholders in preview
 interface CommandPlan {
   executable: string; argv: string[]; displayArgv: string[];
+  cwd: string;                                     // inv.cwd; the runner spawns here (Added 2026-09-30 after review)
   stdin: "inherit" | "ignore"; stdout: "inherit" | "pipe"; stderr: "inherit" | "pipe";
   env: Record<string,string>;                      // additions only, e.g. TMPDIR
 }
@@ -544,7 +547,7 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Private agents dropped (human gate):** `agents/local/` is no longer compiled, and pruning removes any `local:*` binary from `bin/`, which is on the user's PATH. No local agents exist today; the CLAUDE.md and AGENTS.md guidance that promises them is removed (D-011).
 - **`FORGE_BACKEND` dropped (D-021):** users who relied on the variable for Shepherd must pass `--backend` or define a shell alias; the SHEPHERD doc says so.
 - **Codex project trust:** `codex exec` in a git repo may mark it trusted in `~/.codex/config.toml`, after which that repo's `.codex/` loads natively. This is inherited Codex behavior under D-004, outside the §6 interpolation boundary, and the guide documents it.
-- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift").
+- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift"). Claude `${VAR}` expansion of literal header values, and Claude honoring `cwd` for stdio MCP servers, are verified in TASK-006 before adapters rely on them.
 - **Structural evidence limitation:** planning had no mechanical evidence; unexpected duplicate runtime/high complexity requires refactor.
 - **Scope:** new product behavior requires spec amendment; implementation complexity splits within fixed slices.
 

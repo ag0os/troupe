@@ -8,7 +8,7 @@ import {
 	parseDocument,
 } from "yaml";
 import { z } from "zod";
-import { scanInterpolations } from "./command-text";
+import { mcpSecretEnvName, scanInterpolations } from "./command-text";
 import { AgentSourceError, type SourceIssue } from "./errors";
 import { DEFAULT_INITIAL_PROMPT, validateTemplate } from "./template";
 import {
@@ -20,6 +20,7 @@ import {
 	type Backend,
 	type McpServer,
 	type NativeArg,
+	type NativeDeclarations,
 	PROMPT_MODES,
 } from "./types";
 
@@ -521,7 +522,33 @@ function checkMcp(
 		}
 		parsed[name] = result.data;
 	}
+	checkSecretEnvNames(parsed, report);
 	return parsed;
+}
+
+/** Interpolated header values must map to distinct D-029 variable names. */
+function checkSecretEnvNames(
+	servers: Record<string, McpServer>,
+	report: Report,
+) {
+	const owners = new Map<string, string>();
+	for (const [name, server] of Object.entries(servers)) {
+		if (!("url" in server)) continue;
+		for (const [header, value] of Object.entries(server.headers ?? {})) {
+			const scan = scanInterpolations(value);
+			if (!scan.ok || scan.references.length === 0) continue;
+			const variable = mcpSecretEnvName(name, header);
+			const owner = owners.get(variable);
+			if (owner) {
+				report(
+					["mcp", name, "headers", header],
+					`secret header variable ${variable} collides with ${owner}`,
+				);
+			} else {
+				owners.set(variable, `mcp.${name}.headers.${header}`);
+			}
+		}
+	}
 }
 
 function stringLeaves(value: unknown, path: Path): [Path, string][] {
@@ -539,6 +566,8 @@ function stringLeaves(value: unknown, path: Path): [Path, string][] {
 
 const LONG_FLAG = /^--[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
+/** A `-c` key path Codex splits on "." without TOML parsing. */
+export const BARE_CONFIG_PATH = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 const CONFIG_KEY = /^[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_-]+|"[^"]*"))*$/;
 
 const CLAUDE_PROMPT_FLAGS = new Set([
@@ -557,6 +586,20 @@ const CODEX_PROMPT_KEYS = new Set([
 	"instructions",
 	"experimental_instructions_file",
 ]);
+
+/**
+ * The D-013 guards on authored native declarations, as `field: message`
+ * lines. Adapters rerun them on specs that did not come through the parser.
+ */
+export function nativeDeclarationProblems(
+	native: NativeDeclarations,
+): string[] {
+	const problems: string[] = [];
+	checkNative(native, (path, message) =>
+		problems.push(`${formatPath(path)}: ${message}`),
+	);
+	return problems;
+}
 
 function checkNative(
 	native: NonNullable<SourceData["native"]>,
@@ -579,7 +622,9 @@ function checkNative(
 		}
 	}
 	for (const key of Object.keys(native.codex?.config ?? {})) {
-		const problem = codexKeyProblem(key);
+		const problem = BARE_CONFIG_PATH.test(key)
+			? codexKeyProblem(key)
+			: 'must be a bare dotted key ([A-Za-z0-9_-] segments joined by "."): Codex does not parse quoted -c keys';
 		if (problem) report(["native", "codex", "config", key], problem);
 	}
 }

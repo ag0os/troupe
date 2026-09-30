@@ -190,3 +190,14 @@ export function splitCommandText(text: string): SplitResult {
 		return fail(`runs the shell builtin "${first}"`);
 	return { ok: true, argv: [first, ...rest] };
 }
+
+/**
+ * The environment variable that carries an interpolated MCP header value to
+ * the backend (D-029): `TROUPE_MCP_<server>_<header>`, uppercased, with every
+ * character outside `[A-Z0-9_]` replaced by `_`.
+ */
+export function mcpSecretEnvName(server: string, header: string): string {
+	return `TROUPE_MCP_${server}_${header}`
+		.toUpperCase()
+		.replace(/[^A-Z0-9_]/g, "_");
+}
