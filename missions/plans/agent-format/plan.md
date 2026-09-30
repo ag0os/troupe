@@ -329,7 +329,7 @@ interface AgentSource {
 
 Templates allow `{{args}}`, `{{cwd}}`, `{{flag.name}}`, and one level of `if / else if / else` whose conditions are a boolean flag, an enum flag equal to a declared value, or `args` (true when positionals are non-empty) (D-025). Nesting is forbidden; malformed/unknown/impossible references fail compile. No expressions/IO/commands. Orient's template therefore renders quick, else each focus value, else full orientation, then `Additional context: {{args}}` only under `if args`.
 
-CLI splits on first standalone `--`; tail is untouched. Before it, strict long separate/equals forms, declared shorts, booleans, and positionals apply. Framework `--model` overrides selected declared model; `--print` sets print; show supersedes execution. Backend order is D-021; legacy environment values follow D-021. Help covers description/default backend/mode/framework and agent flags/defaults/passthrough. Preview is exactly:
+CLI splits on first standalone `--`; tail is untouched. Before it, strict long separate/equals forms, declared shorts, booleans, and positionals apply. Framework `--model` overrides selected declared model; `--print` sets print; show supersedes execution. Backend order is D-021 (`--backend`, then the first declared backend; no environment values). Help covers description/default backend/mode/framework and agent flags/defaults/passthrough. Preview is exactly:
 
 ```text
 Backend: <claude|codex>
