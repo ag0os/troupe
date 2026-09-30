@@ -2,7 +2,7 @@
 title: Declarative agent format
 status: active
 createdAt: '2026-09-29T17:31:56.878Z'
-updatedAt: '2026-09-29T21:00:00.000Z'
+updatedAt: '2026-09-30T00:10:00.000Z'
 ---
 
 ## Overview
@@ -153,17 +153,11 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Honor direct ground and canonical ownership as far as compatible. Addresses `review-1.md PR-012`–`PR-014`, `review-2.md PR-013`, `PR-014`.
   - Decided by: human, current request (legacy spec authority and Quality Contract); planner for traceability mechanics
 
-- **D-021 - Preserve backend environment compatibility**
-  - Decision: `FORGE_BACKEND` stays readable for compatibility; its precedence is set by D-022. The environment accepts `claude`/`codex` and the legacy aliases `claude-cli`/`codex-cli` with a deprecation note; the legacy `codex-sdk` value maps to `codex` with a deprecation note, and any other value is ignored with a one-line stderr note. CLI/schema expose only new names.
-  - Alternatives: Silently drop existing Shepherd behavior or preserve a third backend.
-  - Why: REQ-008 while Codex SDK stays out of scope. Addresses `review-1.md` Missing Coverage and independent-review finding 13 (`codex-sdk` outcome).
-  - Decided by: planner, revision from `review-1.md` Missing Coverage; precedence superseded by D-022
-
-- **D-022 - `FORGE_BACKEND` is a preference, not a selector** *(Added 2026-09-29 after review; spec amendment, human gate)*
-  - Decision: Backend resolution for every generated binary is: explicit `--backend`, then `FORGE_BACKEND` only when the agent declares that backend, then the first declared backend. When `FORGE_BACKEND` names a backend the agent does not declare, the first declared backend runs and one line on stderr says the preference was ignored. Only an explicit `--backend` naming an undeclared backend fails hard, with D-005's clear message.
-  - Alternatives: The earlier D-021 order, which made an exported `FORGE_BACKEND=codex` break all seven Claude-only agents; scoping the variable to Shepherd only; dropping it.
-  - Why: Keeps Shepherd's documented `FORGE_BACKEND` behavior (REQ-008) without stranding Claude-only agents such as `tools:webfetch`, which other sessions call with an inherited environment. It amends ratified decision 5 because an environment preference can change the default of a dual agent, so it needs human ratification. Addresses independent-review findings 1, 7 and 13.
-  - Decided by: Shepherd orchestrator, 2026-09-29 after review; human ratification pending
+- **D-021 - `FORGE_BACKEND` is dropped** *(Revised 2026-09-30 at the human gate)*
+  - Decision: No generated binary reads `FORGE_BACKEND`. Backend resolution is explicit `--backend`, then the first declared backend (ratified decision 5). An explicit `--backend` naming an undeclared backend fails hard with D-005's clear message. The env var, its legacy aliases (`claude-cli`, `codex-cli`, `codex-sdk`) and `getBackend` in `lib/flags.ts` are removed with the legacy launchers; the docs stop mentioning it. A shell alias (for example `alias shepherd-codex='shepherd --backend codex'`) is the user's way to avoid typing the flag.
+  - Alternatives: The planner's global env selector (broke the seven Claude-only agents under an exported value); an env preference honored only by agents that declare that backend (the orchestrator's earlier D-022); scoping the variable to Shepherd only.
+  - Why: The user decided at the human gate (2026-09-30) to drop the variable for now and reconsider later. It keeps ratified decision 5 intact and removes the ambient-environment failure mode entirely. Shepherd's documented `FORGE_BACKEND` behavior (REQ-008) is an intended change, recorded next to D-028. Addresses independent-review findings 1, 7 and 13.
+  - Decided by: the user, 2026-09-30, human gate
 
 - **D-023 - Crash-safe publication cut to spec scope** *(Added 2026-09-29 after review)*
   - Decision: Remove the cross-process lock under `.cache/troupe/compile.lock`, the `bin`/`previous`/`next`/quarantine protocol, restart recovery, the validated-bin predicate, and the removal of `--no-prune`. Publication is D-011's single-process build into a temporary directory followed by renames.
@@ -210,10 +204,10 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Outcome: valid Markdown becomes the path-derived binary with ordered embedded body/includes and actual extension; malformed/unknown/cross-field/include/roster errors name file and field and publish nothing partial. Includes outside `agents/` or `system-prompts/` (D-027), `${cmd:...}` text that needs a shell (D-026), and a paired extension with top-level side effects fail compile with file and line.
 
 ### B-002 - Generated binaries share one predictable CLI
-- Source: REQ-004, decision 5 as amended by D-022 (pending human ratification)
+- Source: REQ-004, decision 5 (D-021: no env selection)
 - Observer: terminal user
 - Entry point: any binary's framework/agent flags, positionals, environment compatibility, and `--`
-- Outcome: framework and declared bool/enum/string flags are consumed with defaults and both value forms; unknown pre-separator input fails, so backend flags go after `--` (D-028); tail tokens remain verbatim. Backend precedence follows D-022: an explicit `--backend` naming an undeclared backend fails; a `FORGE_BACKEND` value naming an undeclared backend falls back to the first declared backend with one stderr line (for example `tools:webfetch` with `FORGE_BACKEND=codex` runs on Claude).
+- Outcome: framework and declared bool/enum/string flags are consumed with defaults and both value forms; unknown pre-separator input fails, so backend flags go after `--` (D-028); tail tokens remain verbatim. Backend precedence follows D-021: explicit `--backend`, then the first declared backend; an explicit `--backend` naming an undeclared backend fails. No binary reads `FORGE_BACKEND`.
 
 ### B-003 - Real composed prompts are previewable
 - Source: REQ-002–REQ-004, ACC-002
@@ -267,7 +261,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Source: REQ-011
 - Observer: contributor
 - Entry point: guide linked from README/AGENTS/CLAUDE
-- Outcome: one guide covers schema, prompts/templates, flags and `--` passthrough, extension data/cancellation, MCP trust (including Codex project auto-trust), the backend mapping table (portable fields to Claude/Codex argv from Design §5 and D-014: append/replace, mode, model/effort, access, MCP, config inheritance) plus the `native.claude`/`native.codex` escape hatch, backend selection and `FORGE_BACKEND`, the strict compiler and publication, and examples; active docs contain no stale path, backend, CLI passthrough or private-agent guidance.
+- Outcome: one guide covers schema, prompts/templates, flags and `--` passthrough, extension data/cancellation, MCP trust (including Codex project auto-trust), the backend mapping table (portable fields to Claude/Codex argv from Design §5 and D-014: append/replace, mode, model/effort, access, MCP, config inheritance) plus the `native.claude`/`native.codex` escape hatch, backend selection (`--backend` only; no env selection), the strict compiler and publication, and examples; active docs contain no stale path, backend, CLI passthrough or private-agent guidance.
 
 ### B-012 - Interactive smoke works on both backends
 - Source: ACC-005
@@ -485,7 +479,7 @@ All except the seven specified restrictions declare `[claude,codex]`.
 | GitHub | Claude-only stream/replace with `--verbose` stream argv; prepare requires only args[0] and runs `op signin --raw` on execution only; strict declared HTTP MCP/tool list with `${cmd:op item get "Github CLI Token" --fields password --reveal}` tokenized per D-026; no SDK |
 | PR Review | Claude-only; comment flag; prepare PR/conditional prompt; rules |
 | Shepherd | dual; prepare persisted reconstruction, ordered fragments/cwd; on Claude only, the literal `Read(/<realpath of enclosing>/.shepherd/**)` rule plus the additional directory; rejects `ctx.mode === "print"` without a prompt; `--resume` and similar follow `--` |
-| Webfetch | Claude print; flags and framework model; prepare usage/task/max-turn normalization, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; runs on Claude under `FORGE_BACKEND=codex` (D-022) |
+| Webfetch | Claude print; flags and framework model; prepare usage/task/max-turn normalization, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021) |
 | Coach | dual; prepare init/list, persisted roster/student/integrations, prompt/cwd, dynamic rules returned only when `ctx.backend === "claude"`; a Codex preview is snapshotted |
 
 Flat one-agent prompts move into Markdown bodies. Shared/dynamic fragments remain `system-prompts/expectations.md`, `system-prompts/shepherd/**`, and `system-prompts/coach/**`. Shepherd declares core/built-ins as includes, then prepare appends inherited, charter, local, header. Coach pack frontmatter stays a separate runtime content contract.
@@ -498,7 +492,7 @@ Workers choose colocated tests; test files are not source ownership in Files to 
 
 Slice 1 declares `yaml` and `zod` (^4, matching the strict-schema API) in `package.json` and `bun.lock`; today `yaml` is absent and `zod@3` is only a transitive SDK dependency. Final cutover removes per-agent JSON, migrated flat prompts, assets, Claude helpers/types, the legacy `lib/runtime/**` with its colocated tests (`registry.test.ts`, `capability-checks.test.ts`, `integration.test.ts`), Codex SDK, legacy launchers/fallback, and the `@anthropic-ai/claude-agent-sdk` dependency. Biome excludes authored Markdown from unsupported-file checks while retaining TS checks.
 
-Add `docs/AGENT-FORMAT.md` with the §5 backend mapping table, remove obsolete runtime proposal, update feature docs and targeted README plus AGENTS/CLAUDE links. Preserve rename context and document `FORGE_BACKEND` as a preference (D-022) with its deprecated aliases. Rewrite the passthrough sentences in `docs/SHEPHERD.md` and `docs/COACH.md` to the `--` form, and remove or rewrite the CLAUDE.md "Private agents"/`agents/local/` rows and the AGENTS.md `agents/local/` bullet.
+Add `docs/AGENT-FORMAT.md` with the §5 backend mapping table, remove obsolete runtime proposal, update feature docs and targeted README plus AGENTS/CLAUDE links. Preserve rename context and state that `FORGE_BACKEND` is no longer read (D-021). Rewrite the passthrough sentences in `docs/SHEPHERD.md` and `docs/COACH.md` to the `--` form, and remove or rewrite the CLAUDE.md "Private agents"/`agents/local/` rows and the AGENTS.md `agents/local/` bullet.
 
 ## Files to Change
 
@@ -520,13 +514,13 @@ Add `docs/AGENT-FORMAT.md` with the §5 backend mapping table, remove obsolete r
 - `system-prompts/shepherd/core.md` — update stale source references, preserve Context tiers.
 - `docs/AGENT-FORMAT.md` — new single guide.
 - `docs/AGENT-RUNTIME.md` — remove.
-- `docs/SHEPHERD.md`, `docs/COACH.md`, `docs/WEBFETCH-SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `README.md` — targeted source/backend/authoring updates, including the `--` passthrough rewrite in SHEPHERD/COACH, `FORGE_BACKEND` as a preference, and removal of `agents/local/` guidance.
+- `docs/SHEPHERD.md`, `docs/COACH.md`, `docs/WEBFETCH-SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `README.md` — targeted source/backend/authoring updates, including the `--` passthrough rewrite in SHEPHERD/COACH, the removal of `FORGE_BACKEND` from SHEPHERD, and removal of `agents/local/` guidance.
 
 ## Quality Contract
 
 This human-required section declares no gate table or future binding state. Behavior ownership is: B-001–B-003 strict source/CLI/preview/snapshots; B-004–B-006 adapters/MCP/cancellable lifecycle/decoding; B-007–B-008 migration policies/prose/Shepherd; B-009 roster/build/prune/repository checks; B-010 canary; B-011 guide review; B-012 recorded smokes.
 
-Use red-green-refactor per slice and observable argv/output/files/exits, not helper calls. Prompt prose is reviewed for meaning; routing/order/interpolation are tested. Negative/mutation checks catch flag leakage, append/replace swap, adapter-generated forbidden keys, dropped HTTP headers, missing fragments, silent fallback on an explicit undeclared `--backend`, wrong stream channel/failure handling, orphan preparation children, lost Webfetch safety, missing Shepherd directory, single-slash `Read(/abs/**)` instead of `Read(//abs/**)`, Claude stream argv without `--verbose`, `FORGE_BACKEND` breaking a Claude-only agent, prepare output or filesystem writes during preview, an extension that launches on import, a quoted `${cmd:...}` argument split apart, resource leaks, and a failed build that touches `bin/`.
+Use red-green-refactor per slice and observable argv/output/files/exits, not helper calls. Prompt prose is reviewed for meaning; routing/order/interpolation are tested. Negative/mutation checks catch flag leakage, append/replace swap, adapter-generated forbidden keys, dropped HTTP headers, missing fragments, silent fallback on an explicit undeclared `--backend`, wrong stream channel/failure handling, orphan preparation children, lost Webfetch safety, missing Shepherd directory, single-slash `Read(/abs/**)` instead of `Read(//abs/**)`, Claude stream argv without `--verbose`, any binary reading `FORGE_BACKEND`, prepare output or filesystem writes during preview, an extension that launches on import, a quoted `${cmd:...}` argument split apart, resource leaks, and a failed build that touches `bin/`.
 
 Snapshots use temp workspaces/fake time. Planning-time structural investigation produced no mechanical evidence because no provider was available; sign-off resolves current capability bindings and records actual outcomes, while direct review covers any unavailable structural evidence.
 
@@ -542,7 +536,7 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Target variance:** handle monorepos, `.git` file/dir, non-git, spaces, symlinks/realpaths.
 - **Publication scope (cut 2026-09-29, D-023):** publication is a single-process temp-dir build then rename. Two concurrent `compile:all` runs, or a crash between renames, can leave a mixed `bin/` until the next successful run; crash-safe publication is a separately ratified follow-up, not this plan.
 - **Private agents dropped (human gate):** `agents/local/` is no longer compiled, and pruning removes any `local:*` binary from `bin/`, which is on the user's PATH. No local agents exist today; the CLAUDE.md and AGENTS.md guidance that promises them is removed (D-011).
-- **`FORGE_BACKEND` amendment (human gate):** D-022 lets an exported preference move dual agents to Codex while Claude-only agents fall back with a stderr note. If the human rejects the amendment, the fallback is D-021's aliases scoped to Shepherd only.
+- **`FORGE_BACKEND` dropped (D-021):** users who relied on the variable for Shepherd must pass `--backend` or define a shell alias; the SHEPHERD doc says so.
 - **Codex project trust:** `codex exec` in a git repo may mark it trusted in `~/.codex/config.toml`, after which that repo's `.codex/` loads natively. This is inherited Codex behavior under D-004, outside the §6 interpolation boundary, and the guide documents it.
 - **Secrets on argv:** interpolated MCP header values reach backend argv on both backends, as today, so they are visible in process listings. Env-referenced headers (Codex `bearer_token_env_var`/`env_http_headers`, Claude `${VAR}`) would avoid this, but the evidence verifies only literal header mapping; adopting them is an open human question, and if adopted B-005's "not persisted/printed" extends to process listings.
 - **Structural evidence limitation:** planning had no mechanical evidence; unexpected duplicate runtime/high complexity requires refactor.
@@ -557,6 +551,6 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 5. **Special extensions except Shepherd (B-006/B-007):** in same-stem pairs add Markdown and convert Comment Review, Audit, diagrams, Git Fix, GitHub, PR Review, Webfetch, Coach. Mixed compiler immediately builds the declaration+extension, never the hook as entry. Land it as separate same-stem commits, one per contract family (diagrams+audit; git-fix+pr-review+comment-review; webfetch; github; coach), each with its own snapshots, regressions and an import-has-no-side-effects check. Rewrite Webfetch tests.
 6. **Shepherd (B-008):** the baseline is `e18f56b`. Before converting, capture for each `~/shepherds/*` workspace the legacy system prompt and the `shepherdSettings(enclosing)` output (additional directory plus the `Read(//abs/**)` rule) as characterization fixtures, with the date normalized; the legacy `--show-prompt` omits settings. Then convert nearest parent, order, realpath dedupe, additional directory+Read, Context tiers, env compatibility, print-without-prompt guard, fixed previews; diff the new Claude preview's prompt and `--settings` argv against the fixtures, and snapshot a Codex preview of a nested workspace.
 7. **Strict cutover/cleanup/docs (B-009/B-011):** the entry gate is that all 23 work in mixed mode, meaning the ACC-005 smokes (Shepherd and `plan:riff` on Claude and Codex) and the prose review pass against the step-6 mixed build, with outcomes recorded and the prose compared against the still-present `system-prompts/*.md`. Then remove the 12 ordinary launchers, enable strict mode and prove the exact roster with no fallback, and only then remove prompts/settings/assets/helpers, the legacy `lib/runtime/**` with its tests, and the Agent SDK. No artifact references a deleted seam. The guide and doc updates (B-011) are a separate task from the cutover and deletions.
-8. **Whole-roster acceptance (B-003/B-007–B-012):** full snapshots, named regressions (including orient combinations and Webfetch under `FORGE_BACKEND=codex`), repository checks, exact binaries, canary, Shepherd workspaces against the `e18f56b` fixtures, the four smokes re-run after the SDK and helpers are gone, one real-CLI Claude stream-mode launch, a recorded check of whether any `codex exec` flag avoids the project-trust write, and prose review.
+8. **Whole-roster acceptance (B-003/B-007–B-012):** full snapshots, named regressions (including orient combinations and Webfetch ignoring an exported `FORGE_BACKEND=codex`), repository checks, exact binaries, canary, Shepherd workspaces against the `e18f56b` fixtures, the four smokes re-run after the SDK and helpers are gone, one real-CLI Claude stream-mode launch, a recorded check of whether any `codex exec` flag avoids the project-trust write, and prose review.
 
 Every slice leaves owned behavior demonstrable. After every step, `bun run typecheck` passes and `compile:all` builds all 23 names, legacy Shepherd and Webfetch included. Evidence contradiction, secret leak, safety downgrade, unrepresentable ratified behavior, or a failed build that alters `bin/` halts under the deviation protocol.
