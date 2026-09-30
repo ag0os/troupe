@@ -2,7 +2,7 @@
 title: Declarative agent format
 status: active
 createdAt: '2026-09-29T17:31:56.878Z'
-updatedAt: '2026-09-30T00:10:00.000Z'
+updatedAt: '2026-09-30T00:30:00.000Z'
 ---
 
 ## Overview
@@ -195,6 +195,12 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Spec REQ-004 is explicit; the docs that promise direct passthrough must change with it. Addresses independent-review finding 11.
   - Decided by: planner, 2026-09-29 after review, applying spec REQ-004
 
+- **D-029 - MCP header secrets travel by environment, not argv** *(Added 2026-09-30 at the human gate)*
+  - Decision: A header value produced by `${env:NAME}` or `${cmd:...}` interpolation is never placed literally in the backend argv or in a config file the backend reads. The runner exports each resolved secret into the child's environment under a generated variable name (`TROUPE_MCP_<server>_<header>`), and the adapter emits an env reference: Claude MCP JSON `${VAR}` in the header value, Codex `env_http_headers` (or `bearer_token_env_var` for a bare bearer token). Literal, non-interpolated header values still map literally. B-005's "not persisted/printed" extends to process listings.
+  - Alternatives: Literal header values on argv as today (visible in `ps` for the life of the process); a local credential proxy such as Executor (executor.sh), which holds credentials in its own sandbox and exposes one MCP endpoint to every agent, so no agent declaration carries a secret at all. Executor is recorded as a candidate follow-up for personas:github, not part of this plan.
+  - Why: The user chose it at the human gate (2026-09-30) after independent-review finding 12 and the Risks entry. The evidence verifies literal header mapping only, so Step 2 carries one experiment that verifies both env-reference forms on the installed CLIs before the adapters rely on them; a failed experiment halts per "Backend drift".
+  - Decided by: the user, 2026-09-30, human gate
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -225,7 +231,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Source: REQ-006, REQ-007
 - Observer: user of declared stdio/HTTP MCP
 - Entry point: actual launch
-- Outcome: both transports map correctly; env/command interpolation occurs only at launch; `${cmd:...}` becomes argv by quote-aware splitting with no shell, so GitHub's `op item get "Github CLI Token" --fields password --reveal` reaches the process with the item name as one argument; missing/failed/interrupted resolution stops before backend with cleanup; secrets are not persisted/printed; Chrome uses `chrome-devtools-mcp`.
+- Outcome: both transports map correctly; env/command interpolation occurs only at launch; `${cmd:...}` becomes argv by quote-aware splitting with no shell, so GitHub's `op item get "Github CLI Token" --fields password --reveal` reaches the process with the item name as one argument; missing/failed/interrupted resolution stops before backend with cleanup; secrets are not persisted/printed, and interpolated header values never appear in argv, backend config files or process listings (D-029: env reference, secret exported into the child's environment); Chrome uses `chrome-devtools-mcp`.
 
 ### B-006 - Extensions and modes have deterministic exits
 - Source: REQ-005, decision 6
@@ -382,7 +388,7 @@ type Finish = (result: RunResult, ctx: PrepareContext) => FinishResult | Promise
 | Print/stream | `--print`; stream `--print --output-format stream-json --verbose` | `codex exec`; stream `--json`; stdin ignored |
 | Model/effort | `--model`/`--effort` | `-m`/reasoning config |
 | Access | plan/accept-edits/bypass | read-only/workspace-write/bypass |
-| MCP | inline Claude JSON | `mcp_servers` TOML; HTTP uses `url/http_headers` |
+| MCP | inline Claude JSON; interpolated header values as `${VAR}` env references (D-029) | `mcp_servers` TOML; HTTP uses `url/http_headers`, interpolated values via `env_http_headers`/`bearer_token_env_var` (D-029) |
 | Config | inherit unless declared | inherit unless declared; skip Git check only outside worktree |
 
 Claude rejects `--print --output-format stream-json` without `--verbose` (verified on Claude Code 2.1.285; `evidence/backend-matrix.md` row 10c omits it), so the Claude stream argv always carries `--verbose` and the fake Claude CLI rejects stream-json without it.
@@ -538,14 +544,14 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Private agents dropped (human gate):** `agents/local/` is no longer compiled, and pruning removes any `local:*` binary from `bin/`, which is on the user's PATH. No local agents exist today; the CLAUDE.md and AGENTS.md guidance that promises them is removed (D-011).
 - **`FORGE_BACKEND` dropped (D-021):** users who relied on the variable for Shepherd must pass `--backend` or define a shell alias; the SHEPHERD doc says so.
 - **Codex project trust:** `codex exec` in a git repo may mark it trusted in `~/.codex/config.toml`, after which that repo's `.codex/` loads natively. This is inherited Codex behavior under D-004, outside the §6 interpolation boundary, and the guide documents it.
-- **Secrets on argv:** interpolated MCP header values reach backend argv on both backends, as today, so they are visible in process listings. Env-referenced headers (Codex `bearer_token_env_var`/`env_http_headers`, Claude `${VAR}`) would avoid this, but the evidence verifies only literal header mapping; adopting them is an open human question, and if adopted B-005's "not persisted/printed" extends to process listings.
+- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift").
 - **Structural evidence limitation:** planning had no mechanical evidence; unexpected duplicate runtime/high complexity requires refactor.
 - **Scope:** new product behavior requires spec amendment; implementation complexity splits within fixed slices.
 
 ## Implementation Order
 
 1. **Contract/preview vertical (B-001–B-004):** declare `yaml` and `zod` ^4; types, pure schema, template/CLI, both pure argv adapters under `lib/agent-format/adapters/` beside the untouched legacy runtime (D-024), `PrepareContext` with `mode`, `preview`, `signal` and a basic runner-owned `runCommand`, preparation/preview, static export and side-effect inspection, minimal single compiler; one fixture compiles/previews both backends. Preview uses the D-012 placeholder model for temp prompt paths and MCP display values; the pure adapters receive placeholder paths and create no files. No temporary runtime.
-2. **Execution lifecycle (B-005/B-006/B-010):** child tracking, abort/forwarding and cleanup for `runCommand`, MCP interpolation with D-026 tokenization and redaction, TMPDIR/temp prompt resources, worktree probe, process/signals, typed `finish` and print finish-on-failure, before/after-run messages, decoders and malformed/incomplete exits, fake CLIs/canary.
+2. **Execution lifecycle (B-005/B-006/B-010):** child tracking, abort/forwarding and cleanup for `runCommand`, MCP interpolation with D-026 tokenization and redaction, the D-029 env-reference experiment on both installed CLIs (recorded in `evidence/backend-matrix.md`) and the env-reference header mapping, TMPDIR/temp prompt resources, worktree probe, process/signals, typed `finish` and print finish-on-failure, before/after-run messages, decoders and malformed/incomplete exits, fake CLIs/canary.
 3. **Compiler migration/publication (B-009):** mixed and strict discovery, includes limited to watched roots, temp-dir build, rename, prune with `--dry-run`/`--no-prune`, roster-only single compile, `agents/local/` warning, watcher reuse. Switch package compile/watch to mixed mode now, before converting any agent.
 4. **Ordinary migration (part B-007):** add ordinary Markdown/policies/reminders/snapshots. In mixed mode each `.md` atomically shadows its still-present legacy sibling while unpaired agents remain functional legacy binaries.
 5. **Special extensions except Shepherd (B-006/B-007):** in same-stem pairs add Markdown and convert Comment Review, Audit, diagrams, Git Fix, GitHub, PR Review, Webfetch, Coach. Mixed compiler immediately builds the declaration+extension, never the hook as entry. Land it as separate same-stem commits, one per contract family (diagrams+audit; git-fix+pr-review+comment-review; webfetch; github; coach), each with its own snapshots, regressions and an import-has-no-side-effects check. Rewrite Webfetch tests.

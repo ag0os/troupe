@@ -39,7 +39,7 @@ strings, or docs). "Leaks" = picked up from the user's global state unless suppr
 | 9b | Non-git / untrusted | `-p` skips trust dialog **D**; interactive shows trust dialog **V** | `exec` refuses non-git untrusted dirs unless `--skip-git-repo-check` **V**; `-c projects.<p>.trust_level` does **not** count **V** |
 | 10a | Session id / name | `--session-id <uuid>` **V**, `-n/--name` **V** | No preset id or name flag. Read `thread_id` from `--json` **V**; resume accepts id or name **D** |
 | 10b | Resume | `-r <id>` / `-c`, `--fork-session` **V/D** | `codex exec resume <id> "<prompt>"` **V**; `codex resume`, `codex fork` **D** |
-| 10c | Output | `--output-format text|json|stream-json`, `--json-schema` **V** | `--json` (JSONL events) **V**, `-o <file>` **V**, `--output-schema <file>` **V** |
+| 10c | Output | `--output-format text|json|stream-json`, `--json-schema` **V**; `stream-json` with `--print` requires `--verbose` or the CLI exits with an error (**V** 2026-09-29, Claude Code 2.1.285, independent plan review) | `--json` (JSONL events) **V**, `-o <file>` **V**, `--output-schema <file>` **V** |
 | 10d | Limits | `--max-turns` (hidden from help) **V**, `--max-budget-usd` **D** | none |
 | 11 | Skills / subagents | `--agents '<json>'` **V**, `--agent`, `--plugin-dir`, `.claude/skills|commands|agents` **D** | `.codex/skills`, `.agents/skills` (project) **V**; `-c 'agents.<role>={description,config_file}'` **V**; plugins **D** |
 
