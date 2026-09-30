@@ -6,10 +6,11 @@ import { basename, dirname, relative, resolve } from "node:path";
  * - agents/foo.ts → foo
  * - agents/tasks/manager.ts → tasks:manager
  * - agents/design/diagram/all.ts → design:diagram:all
+ * - agents/design/diagram/all.md → design:diagram:all
  */
 export function toBinaryName(filePath: string, cwd = process.cwd()): string {
 	const agentsDir = resolve(cwd, "agents");
-	const base = basename(filePath).replace(/\.tsx?$/, "");
+	const base = basename(filePath).replace(/\.(tsx?|md)$/, "");
 
 	const relativePath = relative(agentsDir, filePath);
 	if (relativePath.startsWith("..") || relativePath === filePath) {

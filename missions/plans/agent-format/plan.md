@@ -345,7 +345,7 @@ Nothing else reaches stdout in preview: no prepare output, no before/after-run m
 
 ### 4. Extension and cancellation contract
 
-The compiler reads TypeScript syntax without importing it and generated entries import only reserved extension exports. Because an ES import still evaluates the whole module, static inspection also rejects a paired extension whose top level contains anything other than imports, exports, type/interface declarations, function/class declarations, and `const` declarations with side-effect-free initializers (literals, arrow/function expressions, object/array literals of those). Expression statements, top-level `await`, `if`/`try` blocks and call-expression initializers fail compile with file and line.
+The compiler reads TypeScript syntax without importing it and generated entries import only reserved extension exports. Because an ES import still evaluates the whole module, static inspection also rejects a paired extension whose top level contains anything other than imports, exports, type/interface declarations, function/class declarations, and `const` declarations with side-effect-free initializers (literals, arrow/function expressions, object/array literals of those). Value imports are limited to packages, builtins and the framework module; relative imports, side-effect imports and re-exports are rejected, because importing a module runs it. The inspection guards against accidental launches, not against a hostile author. Expression statements, top-level `await`, `if`/`try` blocks and call-expression initializers fail compile with file and line.
 
 ```ts
 interface CommandRequest { argv: [string, ...string[]]; cwd?: string; env?: Record<string,string> }

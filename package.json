@@ -25,6 +25,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.22"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.22",
+    "yaml": "^2",
+    "zod": "^4"
   }
 }
