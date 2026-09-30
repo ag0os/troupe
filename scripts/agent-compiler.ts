@@ -7,6 +7,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { AgentSourceError, type SourceIssue } from "../lib/agent-format/errors";
 import {
@@ -612,11 +613,18 @@ function isSideEffectFree(expression: ts.Expression): boolean {
 
 /**
  * Entry source for a compiled agent. It embeds the spec and imports only the
- * reserved extension exports. Until the runner lands it prints the embedded
- * definition as JSON.
+ * reserved extension exports. It parses its argv with the shared CLI (help
+ * and parse errors exit there); until the runner lands it then prints the
+ * embedded definition and the parsed invocation as JSON.
  */
 export function generateEntry(agent: LoadedAgent): string {
-	const lines: string[] = [];
+	const cli = fileURLToPath(
+		new URL("../lib/agent-format/cli.ts", import.meta.url),
+	);
+	const lines: string[] = [
+		'import { statSync } from "node:fs";',
+		`import { resolveCli } from ${JSON.stringify(cli)};`,
+	];
 	const names = agent.extension?.exports ?? [];
 	if (agent.extension && names.length > 0) {
 		lines.push(
@@ -626,7 +634,14 @@ export function generateEntry(agent: LoadedAgent): string {
 	lines.push(
 		`const spec = ${JSON.stringify(agent.spec, null, "\t")};`,
 		`const extension = { ${names.join(", ")} };`,
-		"process.stdout.write(`${JSON.stringify({ spec, extension: Object.keys(extension) })}\\n`);",
+		"const cli = resolveCli(spec, process.argv.slice(2), {",
+		"\tcwd: process.cwd(),",
+		"\tstdout: (text) => process.stdout.write(text),",
+		"\tstderr: (text) => process.stderr.write(text),",
+		'\tisDirectory: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? "missing",',
+		"});",
+		'if ("exitCode" in cli) process.exit(cli.exitCode);',
+		"process.stdout.write(`${JSON.stringify({ spec, extension: Object.keys(extension), invocation: cli.invocation })}\\n`);",
 		"",
 	);
 	return lines.join("\n");

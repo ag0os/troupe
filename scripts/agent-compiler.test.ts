@@ -425,6 +425,77 @@ describe("compileAgent", () => {
 		expect(existsSync(join(root, "bin"))).toBe(true);
 	}, 60_000);
 
+	test("the binary parses its CLI: help, strict errors, flags and passthrough (B-002)", async () => {
+		write(
+			"agents/fixture/flags.md",
+			`${header}model: { claude: sonnet }
+flags:
+  quick: { type: boolean, short: q, description: Quick }
+  focus: { type: enum, description: Focus, values: [tech, changes], default: changes }
+---
+Body
+`,
+		);
+		const outFile = join(root, "bin/fixture:flags");
+		await compileAgent({ root, file: "agents/fixture/flags.md", outFile });
+		const cwd = realpathSync(tmpdir());
+		const runBinary = (...argv: string[]) => {
+			const child = Bun.spawnSync([outFile, ...argv], {
+				cwd,
+				env: { ...process.env, FORGE_BACKEND: "codex" },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			return {
+				code: child.exitCode,
+				stdout: child.stdout.toString(),
+				stderr: child.stderr.toString(),
+			};
+		};
+
+		const help = runBinary("--help");
+		expect(help.code).toBe(0);
+		expect(help.stderr).toBe("");
+		expect(help.stdout).toContain("fixture:flags: Fixture");
+		expect(help.stdout).toContain("-q, --quick");
+		expect(help.stdout).toContain("--focus <tech|changes>");
+
+		for (const argv of [
+			["--resume", "x"],
+			["--backend", "gemini"],
+			["--cwd", "/definitely/missing"],
+		]) {
+			const bad = runBinary(...argv);
+			expect(bad.code).toBe(2);
+			expect(bad.stdout).toBe("");
+			expect(bad.stderr).toStartWith("fixture:flags: ");
+		}
+
+		const ok = runBinary(
+			"a",
+			"-q",
+			"--focus=tech",
+			"b",
+			"--model",
+			"opus",
+			"--print",
+			"--",
+			"--resume",
+			"x",
+		);
+		expect(ok.code).toBe(0);
+		expect(JSON.parse(ok.stdout).invocation).toEqual({
+			backend: "claude",
+			mode: "print",
+			model: "opus",
+			cwd,
+			flags: { quick: true, focus: "tech" },
+			args: ["a", "b"],
+			passthrough: ["--resume", "x"],
+			showPrompt: false,
+		});
+	}, 60_000);
+
 	test("an invalid declaration produces no binary and leaves no temp files", async () => {
 		write("agents/bad.md", `${header}unknown: 1\n---\n`);
 		const outFile = join(root, "bin/bad");

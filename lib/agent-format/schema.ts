@@ -18,21 +18,21 @@ import {
 	type AgentSpec,
 	BACKENDS,
 	type Backend,
+	FRAMEWORK_OPTIONS,
+	FRAMEWORK_SHORTS,
+	type FrameworkOption,
 	type McpServer,
 	type NativeArg,
 	PROMPT_MODES,
 } from "./types";
 
 /** Framework flags every binary owns; declarations may not reuse them. */
-export const FRAMEWORK_FLAGS = [
-	"backend",
-	"cwd",
-	"model",
-	"print",
-	"show-prompt",
-	"help",
-] as const;
-export const RESERVED_SHORTS = ["h"] as const;
+export const FRAMEWORK_FLAGS = Object.keys(
+	FRAMEWORK_OPTIONS,
+) as readonly FrameworkOption[];
+export const RESERVED_SHORTS = Object.keys(
+	FRAMEWORK_SHORTS,
+) as readonly string[];
 
 /** Stable separator between the body and each include. */
 export const PROMPT_SEPARATOR = "\n\n---\n\n";
@@ -436,6 +436,12 @@ function checkFlags(flags: NonNullable<SourceData["flags"]>, report: Report) {
 			} else {
 				shorts.set(spec.short, name);
 			}
+		}
+		if (spec.type === "boolean" && spec.default === true) {
+			report(
+				["flags", name, "default"],
+				"a boolean flag always defaults to false (there is no --no-<name> form); rename the flag so passing it turns the behavior on",
+			);
 		}
 		if (spec.type === "enum") {
 			spec.values.forEach((value, i) => {

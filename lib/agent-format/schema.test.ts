@@ -329,6 +329,25 @@ describe("cross-field validation", () => {
 		);
 	});
 
+	test("a boolean flag cannot default to true; false or no default is fine", () => {
+		expectIssue(
+			md(
+				`${minimal}\nflags:\n  verbose:\n    type: boolean\n    description: d\n    default: true`,
+			),
+			"flags.verbose.default",
+			/always defaults to false/,
+			8,
+		);
+		expect(() =>
+			parseAgentMarkdown(
+				FILE,
+				md(
+					`${minimal}\nflags:\n  a: { type: boolean, description: d, default: false }\n  b: { type: boolean, description: d }`,
+				),
+			),
+		).not.toThrow();
+	});
+
 	test("mixed MCP transports", () => {
 		expectIssue(
 			md(`${minimal}\nmcp:\n  both: { command: x, url: "https://x" }`),
@@ -379,6 +398,48 @@ describe("cross-field validation", () => {
 			md(`${minimal}\ninitialPrompt: "{{args"`),
 			"initialPrompt",
 			/unterminated/,
+		);
+	});
+
+	test("D-025 conditionals compile; nesting and impossible conditions fail", () => {
+		const withFlags = `${minimal}
+flags:
+  quick: { type: boolean, description: Quick }
+  focus: { type: enum, description: Focus, values: [tech, changes] }
+  task: { type: string, description: Task }`;
+		const orient = `initialPrompt: |
+  {{#if flag.quick}}
+  quick
+  {{else if flag.focus == "tech"}}
+  tech
+  {{else}}
+  full
+  {{/if}}
+  {{#if args}}Additional context: {{args}}{{/if}}`;
+		expect(() =>
+			parseAgentMarkdown(FILE, md(`${withFlags}\n${orient}`)),
+		).not.toThrow();
+		expectIssue(
+			md(
+				`${withFlags}\ninitialPrompt: "{{#if args}}{{#if flag.quick}}x{{/if}}{{/if}}"`,
+			),
+			"initialPrompt",
+			/nested/,
+		);
+		expectIssue(
+			md(`${withFlags}\ninitialPrompt: "{{#if flag.focus == 'ops'}}x{{/if}}"`),
+			"initialPrompt",
+			/not a declared value/,
+		);
+		expectIssue(
+			md(`${withFlags}\ninitialPrompt: "{{#if flag.task}}x{{/if}}"`),
+			"initialPrompt",
+			/cannot be a condition/,
+		);
+		expectIssue(
+			md(`${withFlags}\ninitialPrompt: "{{#if args}}x"`),
+			"initialPrompt",
+			/never closed/,
 		);
 	});
 

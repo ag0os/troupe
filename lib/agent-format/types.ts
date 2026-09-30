@@ -10,6 +10,23 @@ export type AgentMode = (typeof AGENT_MODES)[number];
 export const ACCESS_LEVELS = ["read-only", "workspace-write", "full"] as const;
 export type Access = (typeof ACCESS_LEVELS)[number];
 
+/** Framework flags every binary owns; declarations may not reuse them. */
+export const FRAMEWORK_OPTIONS = {
+	backend: { takesValue: true },
+	cwd: { takesValue: true },
+	model: { takesValue: true },
+	print: { takesValue: false },
+	"show-prompt": { takesValue: false },
+	help: { takesValue: false },
+} as const;
+export type FrameworkOption = keyof typeof FRAMEWORK_OPTIONS;
+
+/** Short framework flags; declarations may not reuse these letters. */
+export const FRAMEWORK_SHORTS = { h: "help" } as const satisfies Record<
+	string,
+	FrameworkOption
+>;
+
 export type NativeArg = string | { flag: string };
 
 export type FlagSpec =

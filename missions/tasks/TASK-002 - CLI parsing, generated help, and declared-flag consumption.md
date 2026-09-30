@@ -1,7 +1,7 @@
 ---
 id: TASK-002
 title: 'CLI parsing, generated help, and declared-flag consumption'
-status: To Do
+status: Done
 priority: high
 labels:
   - backend
@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-001
 createdAt: '2026-09-30T17:40:18.329Z'
-updatedAt: '2026-09-30T18:30:00.000Z'
+updatedAt: '2026-09-30T21:10:00.000Z'
 ---
 
 ## Description
@@ -21,11 +21,11 @@ Ground: D-005 backend restriction, D-013 declaration guards and verbatim user pa
 Ratified constraints (stop-and-escalate): no generated binary reads `FORGE_BACKEND` or legacy aliases; backend flags (`--resume`, `--permission-mode`, Claude `-p`) follow `--`; no unknown-flag forwarding or alias is added. Halt on any ratified-ground collision.
 
 <!-- AC:BEGIN -->
-- [ ] #1 B-002: every generated binary consumes framework and declared bool/enum/string flags with defaults and both `--flag value` and `--flag=value` forms before a standalone `--`, preserving positionals in order
-- [ ] #2 B-002/D-028: unknown pre-`--` input fails with a clear nonzero error so backend flags must follow `--`; tail tokens after `--` remain verbatim and are never inspected or rewritten (D-013)
-- [ ] #3 B-002/D-021: backend resolution is explicit `--backend` then the first declared backend, and an explicit `--backend` naming an undeclared backend fails hard (D-005); no binary reads `FORGE_BACKEND` or its legacy aliases (`claude-cli`, `codex-cli`, `codex-sdk`) — stop-and-escalate ratified ground
-- [ ] #4 B-002: `--help` is generated from the spec (description, default backend, mode, framework flags, agent flags/defaults/passthrough); parse, cwd and backend errors go to stderr nonzero without running prepare
-- [ ] #5 D-025: template validation accepts `{{args}}`, `{{cwd}}`, `{{flag.name}}` and one level of `if/else if/else` over boolean flags, enum equality and `args` truthiness; nesting, malformed and unknown/impossible references fail compile
-- [ ] #6 `bun run typecheck` and the project's static-analysis step pass, and `lib/agent-format/cli.ts` imports no adapter
-- [ ] #7 B-002/Design §3: framework `--model <id>` replaces the selected backend's declared model in the resolved invocation for any agent, whether or not the agent declares a model, emitting Claude `--model <id>` / Codex `-m <id>`, pinned by an `--model opus` preview on a declared-model agent and on an agent with no declared model; framework `--print` sets the effective mode to print, and that mode is what `ctx.mode` and the adapter receive, pinned by a preview whose argv shows print-mode argv (Claude `--print`, Codex `exec`)
+- [x] #1 B-002: every generated binary consumes framework and declared bool/enum/string flags with defaults and both `--flag value` and `--flag=value` forms before a standalone `--`, preserving positionals in order
+- [x] #2 B-002/D-028: unknown pre-`--` input fails with a clear nonzero error so backend flags must follow `--`; tail tokens after `--` remain verbatim and are never inspected or rewritten (D-013)
+- [x] #3 B-002/D-021: backend resolution is explicit `--backend` then the first declared backend, and an explicit `--backend` naming an undeclared backend fails hard (D-005); no binary reads `FORGE_BACKEND` or its legacy aliases (`claude-cli`, `codex-cli`, `codex-sdk`) — stop-and-escalate ratified ground
+- [x] #4 B-002: `--help` is generated from the spec (description, default backend, mode, framework flags, agent flags/defaults/passthrough); parse, cwd and backend errors go to stderr nonzero without running prepare
+- [x] #5 D-025: template validation accepts `{{args}}`, `{{cwd}}`, `{{flag.name}}` and one level of `if/else if/else` over boolean flags, enum equality and `args` truthiness; nesting, malformed and unknown/impossible references fail compile
+- [x] #6 `bun run typecheck` and the project's static-analysis step pass, and `lib/agent-format/cli.ts` imports no adapter
+- [x] #7 B-002/Design §3: framework `--model <id>` replaces the selected backend's declared model in the resolved (parsed) invocation for any agent, whether or not the agent declares a model, and framework `--print` sets the effective mode to print in that invocation; both are pinned by parsed-invocation tests. The argv and preview pins (Claude `--model <id>` / Codex `-m <id>`, print-mode argv) are owned by TASK-004 AC #7 (moved 2026-09-30 after review).
 <!-- AC:END -->
