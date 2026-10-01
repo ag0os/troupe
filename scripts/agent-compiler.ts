@@ -614,9 +614,8 @@ function isSideEffectFree(expression: ts.Expression): boolean {
 /**
  * Entry source for a compiled agent. It embeds the spec and imports only the
  * reserved extension exports. It parses its argv with the shared CLI (help
- * and parse errors exit there) and serves `--show-prompt` through the
- * runner's preview; until execution lands it otherwise prints the embedded
- * definition and the parsed invocation as JSON.
+ * and parse errors exit there), serves `--show-prompt` through the runner's
+ * preview and otherwise hands the invocation to the runner's lifecycle.
  */
 export function generateEntry(agent: LoadedAgent): string {
 	const cli = fileURLToPath(
@@ -628,7 +627,7 @@ export function generateEntry(agent: LoadedAgent): string {
 	const lines: string[] = [
 		'import { statSync } from "node:fs";',
 		`import { resolveCli } from ${JSON.stringify(cli)};`,
-		`import { previewAndExit } from ${JSON.stringify(run)};`,
+		`import { previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
 	];
 	const names = agent.extension?.exports ?? [];
 	if (agent.extension && names.length > 0) {
@@ -648,7 +647,7 @@ export function generateEntry(agent: LoadedAgent): string {
 		"const cli = resolveCli(spec, process.argv.slice(2), io);",
 		'if ("exitCode" in cli) process.exit(cli.exitCode);',
 		"if (cli.invocation.showPrompt) await previewAndExit(spec, extension, cli.invocation, io);",
-		"process.stdout.write(`${JSON.stringify({ spec, extension: Object.keys(extension), invocation: cli.invocation })}\\n`);",
+		"await runAndExit(spec, extension, cli.invocation, io);",
 		"",
 	);
 	return lines.join("\n");

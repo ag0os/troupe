@@ -12,6 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AgentSourceError, type SourceIssue } from "../lib/agent-format/errors";
+import {
+	installFakeClis,
+	isAlive,
+	readRecords,
+	waitForFile,
+} from "../lib/agent-format/fake-cli";
 import { PROMPT_SEPARATOR } from "../lib/agent-format/schema";
 import {
 	compileAgent,
@@ -31,6 +37,33 @@ beforeEach(() => {
 afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * Fake backends on PATH and a private TMPDIR, so a compiled binary launches
+ * the fake CLIs and its runner resources land where the test can see them.
+ */
+function fakeBackendEnv(scenario = "ok") {
+	const bin = join(root, "fake-backends");
+	const tmp = join(root, "binary-tmp");
+	mkdirSync(bin, { recursive: true });
+	mkdirSync(tmp, { recursive: true });
+	installFakeClis(bin);
+	const record = join(root, "records.jsonl");
+	const pid = join(root, "backend.pid");
+	return {
+		record,
+		pid,
+		tmp,
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH}`,
+			TMPDIR: tmp,
+			FAKE_RECORD: record,
+			FAKE_PID_FILE: pid,
+			FAKE_SCENARIO: scenario,
+		},
+	};
+}
 
 function write(path: string, text: string) {
 	const full = join(root, path);
@@ -399,7 +432,7 @@ describe("compileAgent", () => {
 		);
 		write(
 			"agents/fixture/hello.ts",
-			"export function prepare() { return {}; }\nexport function helper() {}\n",
+			'export function prepare() { return { systemPromptFragments: ["From prepare"] }; }\nexport function helper() {}\n',
 		);
 		const outFile = join(root, "bin/fixture:hello");
 		const agent = await compileAgent({
@@ -408,21 +441,29 @@ describe("compileAgent", () => {
 			outFile,
 		});
 		expect(agent.id).toBe("fixture:hello");
+		expect(agent.extension?.exports).toEqual(["prepare"]);
 
 		// The binary needs no checkout assets.
 		rmSync(join(root, "agents"), { recursive: true });
 		rmSync(join(root, "system-prompts"), { recursive: true });
-		const child = Bun.spawnSync([outFile], { cwd: tmpdir() });
-		expect(child.exitCode).toBe(0);
-		const output = JSON.parse(child.stdout.toString());
-		expect(output.extension).toEqual(["prepare"]);
-		expect(output.spec).toMatchObject({
-			id: "fixture:hello",
-			promptMode: "append",
-			mode: "interactive",
-			initialPrompt: "{{args}}",
-			systemPrompt: `Hello body${PROMPT_SEPARATOR}Shared fragment`,
+		const fake = fakeBackendEnv();
+		const cwd = realpathSync(tmpdir());
+		const child = Bun.spawnSync([outFile, "--print", "go"], {
+			cwd,
+			env: fake.env,
 		});
+		expect(child.exitCode).toBe(0);
+		expect(child.stdout.toString()).toBe("claude result\n");
+		const [record] = readRecords(fake.record);
+		expect(record?.cwd).toBe(cwd);
+		expect(record?.argv).toEqual([
+			"--print",
+			"--append-system-prompt",
+			`Hello body${PROMPT_SEPARATOR}Shared fragment${PROMPT_SEPARATOR}From prepare`,
+			"--",
+			"go",
+		]);
+		expect(readdirSync(fake.tmp)).toEqual([]);
 		expect(existsSync(join(root, "bin"))).toBe(true);
 	}, 60_000);
 
@@ -440,10 +481,11 @@ Body
 		const outFile = join(root, "bin/fixture:flags");
 		await compileAgent({ root, file: "agents/fixture/flags.md", outFile });
 		const cwd = realpathSync(tmpdir());
+		const fake = fakeBackendEnv();
 		const runBinary = (...argv: string[]) => {
 			const child = Bun.spawnSync([outFile, ...argv], {
 				cwd,
-				env: { ...process.env, FORGE_BACKEND: "codex" },
+				env: { ...fake.env, FORGE_BACKEND: "codex" },
 				stdout: "pipe",
 				stderr: "pipe",
 			});
@@ -471,6 +513,7 @@ Body
 			expect(bad.stdout).toBe("");
 			expect(bad.stderr).toStartWith("fixture:flags: ");
 		}
+		expect(readRecords(fake.record)).toEqual([]);
 
 		const ok = runBinary(
 			"a",
@@ -485,16 +528,61 @@ Body
 			"x",
 		);
 		expect(ok.code).toBe(0);
-		expect(JSON.parse(ok.stdout).invocation).toEqual({
-			backend: "claude",
-			mode: "print",
-			model: "opus",
+		expect(ok.stdout).toBe("claude result\n");
+		// FORGE_BACKEND is ignored; declared flags are consumed, the tail is verbatim.
+		const [record] = readRecords(fake.record);
+		expect(record?.name).toBe("claude");
+		expect(record?.argv).toEqual([
+			"--print",
+			"--append-system-prompt",
+			"Body",
+			"--model",
+			"opus",
+			"--resume",
+			"x",
+			"--",
+			"a b",
+		]);
+	}, 60_000);
+
+	test("the binary runs signals and cleanup end to end (B-006, D-018)", async () => {
+		write("agents/fixture/stream.md", `${header}mode: stream\n---\nBody\n`);
+		const outFile = join(root, "bin/fixture:stream");
+		await compileAgent({ root, file: "agents/fixture/stream.md", outFile });
+		const cwd = realpathSync(tmpdir());
+
+		const ok = fakeBackendEnv();
+		const decoded = Bun.spawnSync([outFile, "hi"], { cwd, env: ok.env });
+		expect(decoded.exitCode).toBe(0);
+		expect(decoded.stdout.toString()).toBe("hello from claude\n");
+		expect(readRecords(ok.record)[0]?.argv.slice(0, 4)).toEqual([
+			"--print",
+			"--output-format",
+			"stream-json",
+			"--verbose",
+		]);
+		expect(readdirSync(ok.tmp)).toEqual([]);
+
+		const hang = fakeBackendEnv("hang");
+		rmSync(hang.record, { force: true });
+		rmSync(hang.pid, { force: true });
+		const child = Bun.spawn([outFile, "hi"], {
 			cwd,
-			flags: { quick: true, focus: "tech" },
-			args: ["a", "b"],
-			passthrough: ["--resume", "x"],
-			showPrompt: false,
+			env: hang.env,
+			stdout: "pipe",
+			stderr: "pipe",
 		});
+		const pid = await waitForFile(hang.pid, {
+			diagnose: async () =>
+				child.exitCode === null
+					? "the binary is still running"
+					: `the binary exited ${child.exitCode}: ${await new Response(child.stderr).text()}`,
+		});
+		expect(readdirSync(hang.tmp)).toHaveLength(1);
+		child.kill("SIGTERM");
+		expect(await child.exited).toBe(143);
+		expect(isAlive(pid)).toBe(false);
+		expect(readdirSync(hang.tmp)).toEqual([]);
 	}, 60_000);
 
 	test("an invalid declaration produces no binary and leaves no temp files", async () => {

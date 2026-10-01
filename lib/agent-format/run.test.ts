@@ -638,13 +638,24 @@ describe("failing previews (B-003 AC #4)", () => {
 		expect(result.stderr).toBe("test:agent: prepare failed: boom\n");
 	});
 
-	test("an adapter failure writes a diagnostic and no envelope", async () => {
-		// Allow rules are Claude-only; a Codex preview that receives them fails closed.
+	test("Claude-only rules on a Codex preview fail closed with no envelope", async () => {
 		const result = await preview(fixtureSpec(), ["--backend", "codex"], {
 			prepare: () => ({ extraAllowRules: { rules: ["Read(//x/**)"] } }),
 		});
 		stderrOnly(result);
-		expect(result.stderr).toContain("allow rules are Claude-only");
+		expect(result.stderr).toContain("Claude-only");
+	});
+
+	test("an adapter failure writes a diagnostic and no envelope", async () => {
+		// Native permissions that are not an object cannot take prepared rules.
+		const agent = fixtureSpec({
+			native: { claude: { settings: { permissions: 5 } } },
+		});
+		const result = await preview(agent, [], {
+			prepare: () => ({ extraAllowRules: { rules: ["Read(//x/**)"] } }),
+		});
+		stderrOnly(result);
+		expect(result.stderr).toContain("permissions must be an object");
 	});
 
 	test("an early exit is reported on stderr with exit 1, never as an envelope (D-030)", async () => {
@@ -668,7 +679,7 @@ describe("failing previews (B-003 AC #4)", () => {
 		expect(zero.stdout).toBe("");
 	});
 
-	test("flagOverrides are refused until the runner revalidates them", async () => {
+	test("an override of an undeclared flag fails revalidation", async () => {
 		const result = await preview(fixtureSpec(), [], {
 			prepare: () => ({ flagOverrides: { x: "1" } }),
 		});
