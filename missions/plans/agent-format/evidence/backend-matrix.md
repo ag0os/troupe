@@ -90,6 +90,14 @@ model_instructions_file compact_prompt ... project_doc_max_bytes project_doc_fal
   The closest match to `--system-prompt` is `model_instructions_file`.
 - There is no `developer_instructions_file`, so developer text goes on argv. That is fine up to
   macOS ARG_MAX (about 1 MB).
+- User `developer_instructions` are replaced **V** (2026-10-01, codex-cli 0.159.3, TASK-007 review).
+  Method: `codex debug prompt-input` (local, no model call) with outbound network denied, `HOME` and
+  `CODEX_HOME` set to a temp dir whose `config.toml` holds only `developer_instructions = "<nonce>"`.
+  Without `-c`, the first developer part is the nonce. With `-c developer_instructions="<agent text>"`,
+  the first developer part is the agent text and the nonce appears nowhere in the input. So in append
+  mode a user's own `developer_instructions` (config or profile) is dropped, not combined. The D-003
+  mapping is unchanged; the decision is with the user. Pinned by `lib/agent-format/canary.test.ts`
+  › "known limitation: a user's config developer_instructions is replaced, not appended to".
 - No need for AGENTS.md in the cwd (the reverted 5abfa01 approach). It still works, but it collides
   with Claude reading AGENTS.md (see 2.8).
 

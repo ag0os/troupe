@@ -7,6 +7,9 @@
  * the fake Claude rejects `--print --output-format stream-json` without
  * `--verbose`, and the fake Codex rejects `exec` outside a Git worktree
  * without `--skip-git-repo-check`.
+ *
+ * The fake Codex also answers `debug prompt-input`, so the canary harness
+ * can be shown to fail when delivery is wrong (B-010).
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +28,11 @@ export type FakeScenario =
 	/** Stay alive until signalled. */
 	| "hang"
 	/** Stay alive and ignore SIGTERM; only SIGKILL ends it. */
-	| "ignore-term";
+	| "ignore-term"
+	/** `debug prompt-input`: developer instructions land in a user message. */
+	| "misdeliver"
+	/** `debug prompt-input`: developer instructions replace the base ones. */
+	| "replace-base";
 
 /** One launch as the fake saw it. */
 export interface FakeRecord {
@@ -74,6 +81,31 @@ const fail = async (message, code = 1) => {
 	process.exit(code);
 };
 const hang = () => setInterval(() => {}, 1000);
+
+// A stand-in for \`codex debug prompt-input\`: developer_instructions become
+// the first developer item, ahead of a fixed base, unless a scenario breaks it.
+if (name === "codex" && argv[0] === "debug" && argv[1] === "prompt-input") {
+	const scenario = env.FAKE_SCENARIO ?? "ok";
+	if (scenario === "fail") await fail("backend exploded", 3);
+	const config = configs.find((value) => value.startsWith("developer_instructions="));
+	const developer = config ? JSON.parse(config.slice("developer_instructions=".length)) : null;
+	const text = (value) => ({ type: "input_text", text: value });
+	const developerItems = scenario === "replace-base" && developer !== null
+		? []
+		: [text("<permissions instructions>fake base</permissions instructions>")];
+	const userItems = [text("<environment_context>fake</environment_context>")];
+	if (developer !== null) {
+		(scenario === "misdeliver" ? userItems : developerItems).unshift(text(developer));
+	}
+	const items = [
+		{ type: "message", role: "developer", content: developerItems },
+		{ type: "message", role: "user", content: userItems },
+	];
+	const separator = argv.indexOf("--");
+	if (separator !== -1) items.push({ type: "message", role: "user", content: [text(argv[separator + 1])] });
+	await out(JSON.stringify(items, null, 2) + "\\n");
+	process.exit(0);
+}
 
 const outputFormat = argv[argv.indexOf("--output-format") + 1];
 const stream = name === "claude"
