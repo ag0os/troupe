@@ -10,7 +10,7 @@ labels:
 dependencies:
   - TASK-005
 createdAt: '2026-09-30T17:40:27.080Z'
-updatedAt: '2026-09-30T18:30:00.000Z'
+updatedAt: '2026-10-01T22:40:00.000Z'
 ---
 
 ## Description
@@ -25,9 +25,9 @@ Ratified constraints (stop-and-escalate): D-029 — interpolated header values n
 - [ ] #1 B-005: stdio and HTTP MCP servers map correctly on both backends, and interpolation visits MCP string leaves only, resolving `${env:NAME}` from the launch environment and `${cmd:...}` through `runCommand` in the effective cwd at launch time only
 - [ ] #2 B-005/D-026: `${cmd:...}` text is split shell-style (single/double quotes, backslash escapes) into an argv array and run with no shell, so `op item get "Github CLI Token" --fields password --reveal` reaches the process with the item name as one argument; pipes, redirection, globbing, `;`/`&&` and variable expansion fail compile
 - [ ] #3 B-005/D-026: command resolution trims one trailing line ending and requires exit zero and nonempty output; missing, failed or interrupted resolution stops before the backend with cleanup
-- [ ] #4 B-005/D-029: an interpolated header value is never placed literally in backend argv or a backend-read config file; the runner exports each secret under a generated `TROUPE_MCP_<server>_<header>` variable and the adapters emit Claude `${VAR}` and Codex `env_http_headers`/`bearer_token_env_var` references, while literal non-interpolated values still map literally — stop-and-escalate ratified ground
+- [ ] #4 B-005/D-029: an interpolated header value is never placed literally in backend argv or a backend-read config file; the runner exports each secret under a generated `TROUPE_MCP_<server>_<header>` variable and the adapters emit Claude `${VAR}` and Codex `env_http_headers` references (D-034: no `bearer_token_env_var`), while literal non-interpolated values still map literally; D-033: compile rejects, with file and field, any MCP string leaf containing `${` outside `${env:NAME}`/`${cmd:...}` when `claude` is a declared backend — stop-and-escalate ratified ground
 - [ ] #5 B-005/D-029: the env-reference experiment for Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var` runs on both installed CLIs and is recorded in `evidence/backend-matrix.md` before the adapters rely on it; a failed experiment halts for human resolution under "Backend drift"
 - [ ] #6 B-005/D-029: negative checks prove interpolated header values never appear in argv, backend config files or process listings, and actual/display values stay paired for redaction
 - [ ] #7 `bun run typecheck` and the project's test step pass for interpolation and tokenization
-- [ ] #8 B-005: Claude emits inline MCP JSON carrying stdio `command`/`args`/`env`/`cwd` and HTTP `url`/`headers`; Codex emits `mcp_servers.<name>` config with stdio `command`/`args`/`env`/`cwd` and HTTP `url`/`http_headers` (interpolated values via `env_http_headers`/`bearer_token_env_var`); a negative/mutation check fails if any declared header (literal or env-referenced) or stdio field is missing from either adapter's argv
+- [ ] #8 B-005: Claude emits inline MCP JSON carrying stdio `command`/`args`/`env` and HTTP `url`/`headers`, never `cwd`; D-032: compile rejects, with file and field, a stdio `cwd` when `claude` is a declared backend, and a Codex-only agent may declare it; Codex emits `mcp_servers.<name>` config with stdio `command`/`args`/`env`/`cwd` and HTTP `url`/`http_headers` (interpolated values via `env_http_headers`); a negative/mutation check fails if any declared header (literal or env-referenced) or stdio field is missing from either adapter's argv
 <!-- AC:END -->

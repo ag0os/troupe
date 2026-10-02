@@ -213,6 +213,30 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Matches Design §3's single `Backend:` line and lets `prepare` see one `ctx.backend`.
   - Decided by: Shepherd orchestrator
 
+- **D-032 - A stdio MCP `cwd` is rejected when Claude is a declared backend** *(Added 2026-10-01 at the human gate)*
+  - Decision: Compile fails, naming file and field, when an agent whose declared backends include `claude` declares `cwd` on a stdio MCP server. An agent that declares only `codex` may use it, and the Codex adapter emits it. The Claude adapter never emits `cwd`.
+  - Alternatives: Wrap the server in a no-shell launcher that sets the directory (more machinery, no agent needs it today); document `cwd` as Codex-only without enforcing it (fails open).
+  - Why: The TASK-006 experiment (evidence row 5e, Claude Code 2.1.287) showed Claude accepts the field silently and starts the server in its own cwd. No roster agent declares a stdio `cwd`, so failing closed costs nothing today.
+  - Decided by: the user, 2026-10-01, human gate
+
+- **D-033 - Literal `${` in MCP strings is rejected when Claude is a declared backend** *(Added 2026-10-01 at the human gate)*
+  - Decision: Compile fails, naming file and field, when an agent whose declared backends include `claude` has an MCP string leaf that contains `${` outside Troupe's own `${env:NAME}` and `${cmd:...}` references. With that, D-029's "literal values map literally" holds by construction on both backends.
+  - Alternatives: Accept Claude's expansion and document it; route such values through the env-reference path (works for headers only).
+  - Why: The TASK-006 experiment (evidence row 5d) showed Claude expands `${VAR}` in every inline MCP string, and neither `$${X}` nor `\${X}` keeps it literal.
+  - Decided by: the user, 2026-10-01, human gate
+
+- **D-034 - Codex header secrets use `env_http_headers` only** *(Added 2026-10-01 at the human gate)*
+  - Decision: The Codex adapter emits `env_http_headers` for every interpolated header, as TASK-003 implemented. `bearer_token_env_var` is not emitted.
+  - Alternatives: `bearer_token_env_var` for bare bearer tokens (verified to work, evidence row 5c), which would make the runner split the scheme from the token.
+  - Why: One form covers every header; the second adds a special case for no gain.
+  - Decided by: the user, 2026-10-01, human gate
+
+- **D-035 - Codex append mode replaces a user's own `developer_instructions`** *(Added 2026-10-01 at the human gate)*
+  - Decision: Accepted as a known limitation. In append mode the agent's `-c developer_instructions` replaces a `developer_instructions` value from the user's Codex config or profile; Troupe does not read the user's config to combine them. The authoring guide documents it, and a canary test pins the behavior so a Codex change is noticed.
+  - Alternatives: Have the runner read the user's Codex config and concatenate (breaks D-004's stance of not reading or rewriting user config).
+  - Why: Found in the TASK-007 review and recorded in evidence §2.1 (codex-cli 0.159.3). The base developer items Codex itself adds are kept, which is what D-003 protects.
+  - Decided by: the user, 2026-10-01, human gate
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -400,7 +424,7 @@ type Finish = (result: RunResult, ctx: PrepareContext) => FinishResult | Promise
 | Print/stream | `--print`; stream `--print --output-format stream-json --verbose` | `codex exec [flags] -- prompt`; stream `--json`; stdin ignored |
 | Model/effort | `--model`/`--effort` | `-m`/reasoning config |
 | Access | plan/accept-edits/bypass | read-only/workspace-write/bypass |
-| MCP | inline Claude JSON; interpolated header values as `${VAR}` env references (D-029) | `mcp_servers` TOML; HTTP uses `url/http_headers`, interpolated values via `env_http_headers`/`bearer_token_env_var` (D-029) |
+| MCP | inline Claude JSON; interpolated header values as `${VAR}` env references (D-029); no stdio `cwd` (D-032) and no literal `${` (D-033), both rejected at compile | `mcp_servers` TOML; stdio `cwd` allowed for Codex-only agents; HTTP uses `url/http_headers`, interpolated values via `env_http_headers` (D-029, D-034) |
 | Config | inherit unless declared | inherit unless declared; skip Git check only outside worktree |
 
 The `--` keeps a prompt that matches a subcommand or starts with a dash from being parsed as one (verified on Codex 0.159). *(Added 2026-09-30 after review)*
@@ -559,7 +583,7 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Private agents dropped (human gate):** `agents/local/` is no longer compiled, and pruning removes any `local:*` binary from `bin/`, which is on the user's PATH. No local agents exist today; the CLAUDE.md and AGENTS.md guidance that promises them is removed (D-011).
 - **`FORGE_BACKEND` dropped (D-021):** users who relied on the variable for Shepherd must pass `--backend` or define a shell alias; the SHEPHERD doc says so.
 - **Codex project trust:** `codex exec` in a git repo may mark it trusted in `~/.codex/config.toml`, after which that repo's `.codex/` loads natively. This is inherited Codex behavior under D-004, outside the §6 interpolation boundary, and the guide documents it.
-- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift"). Claude `${VAR}` expansion of literal header values, and Claude honoring `cwd` for stdio MCP servers, are verified in TASK-006 before adapters rely on them.
+- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift"). Claude `${VAR}` expansion of literal header values, and Claude honoring `cwd` for stdio MCP servers, are verified in TASK-006 before adapters rely on them. Result (2026-10-01): the env-reference forms pass on both CLIs; Claude ignores stdio `cwd` and expands literal `${VAR}`, resolved by D-032 and D-033.
 - **Structural evidence limitation:** planning had no mechanical evidence; unexpected duplicate runtime/high complexity requires refactor.
 - **Scope:** new product behavior requires spec amendment; implementation complexity splits within fixed slices.
 
