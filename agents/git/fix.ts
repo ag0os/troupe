@@ -1,5 +1,3 @@
-#!/usr/bin/env -S bun run
-
 /**
  * FIX: Read PR review comments and fix the issues
  *
@@ -7,39 +5,39 @@
  * Designed to run after review:pr.
  *
  * Usage:
- *   bun run agents/git/fix.ts              # Auto-detect PR for current branch
- *   bun run agents/git/fix.ts 123          # Fix issues from PR #123
- *   git:fix                                # After compiling
+ *   git:fix                                # Auto-detect PR for current branch
+ *   git:fix 123                            # Fix issues from PR #123
  */
 
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../lib";
-import type { ClaudeFlags } from "../../lib/claude-flags.types";
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../lib/agent-format/types";
+
+/** Stands in for the detected PR under `--show-prompt`, which never calls `gh` (D-012). */
+export const PREVIEW_PR = "<detected:pr>";
+
+const USAGE = `No PR found for current branch.
+Usage: git:fix [PR_NUMBER]
+Examples:
+  git:fix           # Auto-detect PR for current branch
+  git:fix 123
+`;
 
 /**
  * Get the PR number for the current branch using gh CLI
  */
-async function getCurrentBranchPR(): Promise<string | null> {
-	const proc = Bun.spawn(
-		["gh", "pr", "view", "--json", "number", "-q", ".number"],
-		{
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-	);
-	const exitCode = await proc.exited;
-	if (exitCode !== 0) {
+async function getCurrentBranchPR(ctx: PrepareContext): Promise<string | null> {
+	const result = await ctx.runCommand({
+		argv: ["gh", "pr", "view", "--json", "number", "-q", ".number"],
+	});
+	if (result.exitCode !== 0) {
 		return null;
 	}
-	const output = await new Response(proc.stdout).text();
-	return output.trim() || null;
+	return result.stdout.trim() || null;
 }
 
-function buildFixPrompt(prRef: string): string {
+export function buildFixPrompt(prRef: string): string {
 	return `Fix issues from PR review comments on pull request #${prRef}.
 
 ## Instructions
@@ -63,37 +61,23 @@ function buildFixPrompt(prRef: string): string {
 Do NOT commit the changes - leave them staged for review.`;
 }
 
-async function main() {
-	const positionals = getPositionals();
-	let prRef = positionals[0];
+export async function prepare(ctx: PrepareContext): Promise<PrepareResult> {
+	const supplied = ctx.args[0];
+	if (supplied) return { initialPrompt: buildFixPrompt(supplied) };
+	if (ctx.preview) return { initialPrompt: buildFixPrompt(PREVIEW_PR) };
 
 	// Auto-detect PR for current branch if no argument provided
-	if (!prRef) {
-		const detectedPR = await getCurrentBranchPR();
-		if (!detectedPR) {
-			console.error("No PR found for current branch.");
-			console.error("Usage: git:fix [PR_NUMBER]");
-			console.error("Examples:");
-			console.error("  git:fix           # Auto-detect PR for current branch");
-			console.error("  git:fix 123");
-			process.exit(1);
-		}
-		console.log(`Detected PR #${detectedPR} for current branch`);
-		prRef = detectedPR;
+	const detectedPR = await getCurrentBranchPR(ctx);
+	if (!detectedPR) {
+		return { exit: { message: USAGE, code: 1, stream: "stderr" } };
 	}
-
-	const prompt = buildFixPrompt(prRef);
-
-	const flags = buildClaudeFlags({}, parsedArgs.values as ClaudeFlags);
-
-	const args = [...flags, prompt];
-
-	const exitCode = await spawnClaudeAndWait({
-		args,
-		env: { CLAUDE_PROJECT_DIR: process.cwd() },
-	});
-
-	process.exit(exitCode);
+	return {
+		initialPrompt: buildFixPrompt(detectedPR),
+		// Print mode keeps stdout for the payload, so the notice is dropped there.
+		...(ctx.mode === "print"
+			? {}
+			: {
+					beforeRunMessages: [`Detected PR #${detectedPR} for current branch`],
+				}),
+	};
 }
-
-await main();
