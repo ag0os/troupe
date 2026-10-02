@@ -1,15 +1,42 @@
 /**
- * Shared agent compiler: reads a Markdown declaration, resolves and reads its
- * includes, statically inspects a paired `.ts` extension, and builds one
- * binary. Roster discovery and publication are not here yet.
+ * Shared agent compiler used by `compile`, `compile:all` and the watcher:
+ * reads Markdown declarations, resolves and reads their includes, statically
+ * inspects paired `.ts` extensions, selects mixed or strict sources against
+ * the roster, and publishes binaries by temp-dir build then rename.
  */
 
-import { existsSync, realpathSync } from "node:fs";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+	existsSync,
+	lstatSync,
+	watch as nodeWatch,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rename,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { AgentSourceError, type SourceIssue } from "../lib/agent-format/errors";
+import {
+	AgentSourceError,
+	formatIssue,
+	type SourceIssue,
+} from "../lib/agent-format/errors";
 import {
 	type IncludeText,
 	materializeAgentSpec,
@@ -36,6 +63,12 @@ export interface ExtensionInspection {
 	 * fatal, so a hook is never silently dropped or left to a build failure.
 	 */
 	exportProblems: SourceIssue[];
+	/**
+	 * The subset of `exportProblems` that could hide a reserved export
+	 * (`export *`, or a shape tied to `prepare`/`finish`). `export default`
+	 * and `export =` cannot, so a legacy sibling using them is not a hook.
+	 */
+	hidingExportProblems: SourceIssue[];
 	/** Statements that would run code on import. Fatal for extensions. */
 	sideEffects: SourceIssue[];
 }
@@ -101,12 +134,18 @@ export async function loadAgentDefinition(
 				),
 		},
 	);
+	// A sibling without reserved exports is not an extension, unless an
+	// unresolvable export could be hiding one; mode handling for legacy
+	// siblings belongs to discovery.
+	if (inspection.exports.length === 0) {
+		if (inspection.hidingExportProblems.length > 0) {
+			throw new AgentSourceError(inspection.hidingExportProblems);
+		}
+		return { id, file: display, spec };
+	}
 	if (inspection.exportProblems.length > 0) {
 		throw new AgentSourceError(inspection.exportProblems);
 	}
-	// A sibling without reserved exports is not an extension; mode handling
-	// for legacy siblings belongs to discovery.
-	if (inspection.exports.length === 0) return { id, file: display, spec };
 	if (inspection.sideEffects.length > 0) {
 		throw new AgentSourceError(inspection.sideEffects);
 	}
@@ -231,11 +270,14 @@ export function inspectExtension(
 	const values = localValueNames(sourceFile);
 	const exported = new Set<string>();
 	const exportProblems: SourceIssue[] = [];
+	const hidingExportProblems: SourceIssue[] = [];
 	for (const statement of sourceFile.statements) {
 		const shape = exportShape(statement, values);
 		for (const name of shape.names) exported.add(name);
 		for (const problem of shape.problems) {
-			exportProblems.push(issueAt(problem.node, "exports", problem.message));
+			const issue = issueAt(problem.node, "exports", problem.message);
+			exportProblems.push(issue);
+			if (problem.mayHideReserved) hidingExportProblems.push(issue);
 		}
 		const problem = topLevelProblem(statement, isFrameworkImport);
 		if (problem) {
@@ -266,6 +308,7 @@ export function inspectExtension(
 	return {
 		exports: EXTENSION_EXPORTS.filter((name) => exported.has(name)),
 		exportProblems,
+		hidingExportProblems,
 		sideEffects,
 	};
 }
@@ -323,7 +366,7 @@ function bindingNames(name: ts.BindingName): string[] {
 
 interface ExportShape {
 	names: string[];
-	problems: { node: ts.Node; message: string }[];
+	problems: { node: ts.Node; message: string; mayHideReserved: boolean }[];
 }
 
 const BY_NAME = "export prepare/finish by name from a local declaration";
@@ -333,8 +376,12 @@ function exportShape(
 	values: ReadonlySet<string>,
 ): ExportShape {
 	const shape: ExportShape = { names: [], problems: [] };
-	const problem = (node: ts.Node, message: string) =>
-		shape.problems.push({ node, message: `${message}; ${BY_NAME}` });
+	const problem = (node: ts.Node, message: string, mayHideReserved = true) =>
+		shape.problems.push({
+			node,
+			message: `${message}; ${BY_NAME}`,
+			mayHideReserved,
+		});
 
 	if (ts.isExportDeclaration(statement)) {
 		const clause = statement.exportClause;
@@ -367,12 +414,13 @@ function exportShape(
 			statement.isExportEquals
 				? "export = is not supported"
 				: "export default is not supported",
+			false,
 		);
 		return shape;
 	}
 	if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) return shape;
 	if (hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
-		problem(statement, "export default is not supported");
+		problem(statement, "export default is not supported", false);
 		return shape;
 	}
 	const declared = hasModifier(statement, ts.SyntaxKind.DeclareKeyword);
@@ -670,22 +718,744 @@ export async function compileAgent(options: {
 		const entry = join(workDir, "entry.ts");
 		const built = join(workDir, "binary");
 		await writeFile(entry, generateEntry(agent));
-		const child = Bun.spawn(
-			[process.execPath, "build", "--compile", entry, "--outfile", built],
-			{ cwd: workDir, stdout: "pipe", stderr: "pipe" },
-		);
-		const [exitCode, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stderr).text(),
-		]);
-		if (exitCode !== 0) {
-			throw new Error(
-				`bun build failed for ${agent.file} (exit ${exitCode}):\n${stderr}`,
-			);
-		}
+		await bunBuild({ entry, outFile: built, cwd: workDir, label: agent.file });
 		await rename(built, outFile);
 		return agent;
 	} finally {
 		await rm(workDir, { recursive: true, force: true });
 	}
+}
+
+async function bunBuild(options: {
+	entry: string;
+	outFile: string;
+	cwd: string;
+	label: string;
+	signal?: AbortSignal;
+}): Promise<void> {
+	options.signal?.throwIfAborted();
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			"build",
+			"--compile",
+			options.entry,
+			"--outfile",
+			options.outFile,
+		],
+		{ cwd: options.cwd, stdout: "pipe", stderr: "pipe" },
+	);
+	const kill = () => child.kill("SIGTERM");
+	options.signal?.addEventListener("abort", kill, { once: true });
+	try {
+		const [exitCode, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stderr).text(),
+			new Response(child.stdout).text(),
+		]);
+		options.signal?.throwIfAborted();
+		if (exitCode !== 0) {
+			throw new Error(
+				`bun build failed for ${options.label} (exit ${exitCode}):\n${stderr}`,
+			);
+		}
+	} finally {
+		options.signal?.removeEventListener("abort", kill);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Roster discovery, mixed/strict source selection and publication (D-011,
+// D-017, D-023).
+
+/** The fixed 23-agent roster (D-008). */
+export const ROSTER = [
+	"analyze:orient",
+	"build:builder",
+	"build:comment-review",
+	"build:refactor",
+	"build:tdd",
+	"design:architect",
+	"design:audit",
+	"design:designer",
+	"design:diagram:all",
+	"design:diagram:consolidate",
+	"design:diagram:topic",
+	"git:fix",
+	"meta:prompt",
+	"modes:contain",
+	"personas:github",
+	"plan:planner",
+	"plan:riff",
+	"rails:backlog",
+	"resume:tailor",
+	"review:pr",
+	"shepherd",
+	"tools:webfetch",
+	"tutors:coach",
+] as const;
+
+/**
+ * `mixed` is the migration mode: Markdown and legacy TypeScript launchers
+ * side by side. `strict` is the final mode: Markdown declarations only.
+ */
+export const COMPILE_MODES = ["mixed", "strict"] as const;
+export type CompileMode = (typeof COMPILE_MODES)[number];
+
+/** The only directories the watcher watches and includes may resolve into. */
+export const WATCH_ROOTS = INCLUDE_ROOTS;
+
+export const LOCAL_AGENTS_WARNING =
+	"warning: agents/local/ is not compiled; private agents are not supported";
+
+export interface CompilerOptions {
+	root: string;
+	mode: CompileMode;
+	/** Output directory. Defaults to `<root>/bin`. */
+	outDir?: string;
+	/** Defaults to `ROSTER`. */
+	roster?: readonly string[];
+}
+
+export type BuildEntry =
+	| { kind: "declaration"; id: string; source: string; agent: LoadedAgent }
+	| { kind: "legacy"; id: string; source: string };
+
+export interface BuildPlan {
+	mode: CompileMode;
+	entries: BuildEntry[];
+	warnings: string[];
+}
+
+interface DiscoveredSources {
+	markdown: Map<string, string>;
+	typescript: Map<string, string>;
+	issues: SourceIssue[];
+	localPresent: boolean;
+}
+
+/**
+ * Every declaration and non-test TypeScript file under `agents/`, keyed by
+ * binary name. `agents/local/` is never read (D-011).
+ */
+function discoverSources(root: string): DiscoveredSources {
+	const agentsDir = join(root, "agents");
+	const found: DiscoveredSources = {
+		markdown: new Map(),
+		typescript: new Map(),
+		issues: [],
+		localPresent: existsSync(join(agentsDir, "local")),
+	};
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (dir === agentsDir && entry.name === "local") continue;
+				walk(full);
+				continue;
+			}
+			const kind = /\.md$/.test(entry.name)
+				? found.markdown
+				: /\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)
+					? found.typescript
+					: undefined;
+			if (!kind) continue;
+			const file = relative(root, full);
+			const id = toBinaryName(full, root);
+			const previous = kind.get(id);
+			if (previous) {
+				found.issues.push({
+					file,
+					field: "path",
+					message: `"${id}" is also defined by ${previous}`,
+				});
+				continue;
+			}
+			kind.set(id, file);
+		}
+	};
+	if (existsSync(agentsDir)) walk(agentsDir);
+	return found;
+}
+
+function expectedSource(id: string): string {
+	return `agents/${id.split(":").join("/")}.md`;
+}
+
+/**
+ * Resolve a single-compile argument, a roster name or a source path, to a
+ * binary name.
+ */
+export function resolveAgentName(
+	root: string,
+	argument: string,
+	cwd = process.cwd(),
+): string {
+	if (!/\.(md|tsx?)$/.test(argument) && !argument.includes("/")) {
+		return argument;
+	}
+	// A path outside agents/ is not an agent source: keep it as given so the
+	// roster check rejects it instead of mapping it to a same-named agent.
+	const path = resolve(cwd, argument);
+	if (!isInside(join(resolve(root), "agents"), path)) {
+		return relative(resolve(root), path);
+	}
+	return toBinaryName(path, resolve(root));
+}
+
+/**
+ * Discover and validate sources without building anything. With `only`, the
+ * plan covers that one roster name; otherwise it covers the exact roster.
+ * Throws `AgentSourceError` naming every offending file and field.
+ */
+export async function planBuild(
+	options: CompilerOptions & { only?: string },
+): Promise<BuildPlan> {
+	const root = resolve(options.root);
+	const roster = new Set(options.roster ?? ROSTER);
+	const found = discoverSources(root);
+	const issues = [...found.issues];
+	const strict = options.mode === "strict";
+
+	const ids = new Set(found.markdown.keys());
+	if (!strict) for (const id of found.typescript.keys()) ids.add(id);
+	const sourceOf = (id: string) =>
+		found.markdown.get(id) ?? found.typescript.get(id) ?? expectedSource(id);
+
+	if (strict && !options.only) {
+		for (const [id, file] of found.typescript) {
+			if (!found.markdown.has(id)) {
+				issues.push({
+					file,
+					field: "path",
+					message:
+						"strict mode builds Markdown declarations only; a .ts under agents/ must be the same-stem extension of a declaration",
+				});
+			}
+		}
+	}
+
+	let selected: string[];
+	if (options.only) {
+		const id = options.only;
+		if (!roster.has(id)) {
+			issues.push({
+				file: found.markdown.get(id) ?? found.typescript.get(id) ?? id,
+				field: "roster",
+				message: `"${id}" is not a roster agent`,
+			});
+		} else if (!ids.has(id)) {
+			issues.push(missingIssue(id, strict));
+		}
+		selected = ids.has(id) && roster.has(id) ? [id] : [];
+	} else {
+		for (const id of ids) {
+			if (!roster.has(id)) {
+				issues.push({
+					file: sourceOf(id),
+					field: "roster",
+					message: `"${id}" is not a roster agent`,
+				});
+			}
+		}
+		for (const id of roster) {
+			if (!ids.has(id)) issues.push(missingIssue(id, strict));
+		}
+		selected = [...ids].filter((id) => roster.has(id));
+	}
+
+	const entries: BuildEntry[] = [];
+	for (const id of selected.sort()) {
+		const markdown = found.markdown.get(id);
+		if (!markdown) {
+			entries.push({
+				kind: "legacy",
+				id,
+				source: found.typescript.get(id) as string,
+			});
+			continue;
+		}
+		try {
+			const agent = await loadAgentDefinition(root, markdown);
+			const sibling = found.typescript.get(id);
+			if (sibling?.endsWith(".tsx")) {
+				// Only a same-stem .ts is read as an extension; a .tsx hook would
+				// otherwise be dropped without a word.
+				issues.push({
+					file: sibling,
+					field: "path",
+					message:
+						"an extension must be a same-stem .ts file; a .tsx beside a declaration is not read",
+				});
+			} else if (strict && sibling && !agent.extension) {
+				issues.push({
+					file: sibling,
+					field: "exports",
+					message:
+						"strict mode requires a same-stem .ts to export prepare or finish",
+				});
+			}
+			entries.push({ kind: "declaration", id, source: markdown, agent });
+		} catch (error) {
+			if (!(error instanceof AgentSourceError)) throw error;
+			issues.push(...error.issues);
+		}
+	}
+
+	if (issues.length > 0) throw new AgentSourceError(issues);
+	return {
+		mode: options.mode,
+		entries,
+		warnings: found.localPresent ? [LOCAL_AGENTS_WARNING] : [],
+	};
+}
+
+function missingIssue(id: string, strict: boolean): SourceIssue {
+	const file = expectedSource(id);
+	return {
+		file,
+		field: "roster",
+		message: strict
+			? `roster agent "${id}" has no declaration`
+			: `roster agent "${id}" has no declaration or legacy launcher (${file.replace(/\.md$/, ".ts")})`,
+	};
+}
+
+/**
+ * Binaries owned by the other package `compile:*` scripts, found by their
+ * `--outfile`/`-o` value `bin/<name>` or `./bin/<name>`, quoted or not. They
+ * are never pruned.
+ */
+export function protectedBinaries(root: string): Set<string> {
+	const names = new Set<string>();
+	const manifest = join(root, "package.json");
+	if (!existsSync(manifest)) return names;
+	const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+	for (const [script, command] of Object.entries(pkg.scripts ?? {})) {
+		if (!script.startsWith("compile:")) continue;
+		const pattern =
+			/(?:^|\s)(?:--outfile|-o)(?:\s+|=)["']?(?:\.\/)?bin\/([^\s"'/]+)/g;
+		for (const match of String(command).matchAll(pattern)) {
+			if (match[1]) names.add(match[1]);
+		}
+	}
+	return names;
+}
+
+/** Every output entry outside the roster, except protected binaries. */
+function orphansIn(
+	outDir: string,
+	roster: ReadonlySet<string>,
+	keep: ReadonlySet<string>,
+): string[] {
+	if (!existsSync(outDir)) return [];
+	return readdirSync(outDir)
+		.filter((entry) => !roster.has(entry) && !keep.has(entry))
+		.sort();
+}
+
+export interface PublishOptions extends CompilerOptions {
+	/** Build only this roster name and skip pruning. */
+	only?: string;
+	/** Validate and report, write nothing. */
+	dryRun?: boolean;
+	/** Remove orphans after publishing. Defaults to true; ignored with `only`. */
+	prune?: boolean;
+	signal?: AbortSignal;
+	log?: (line: string) => void;
+	warn?: (line: string) => void;
+}
+
+export interface PublishResult {
+	built: string[];
+	pruned: string[];
+	dryRun: boolean;
+}
+
+/**
+ * The shared compile used by `compile`, `compile:all` and the watcher.
+ *
+ * Every source is validated first. Every binary is then built into one
+ * temporary directory beside the output directory (same filesystem); only
+ * after all builds succeed is each renamed into place, and then orphans are
+ * pruned. Builds run one at a time: concurrent `bun build --compile`
+ * children were seen to lose and corrupt outputs under load. A validation
+ * error, build failure, failed output check or abort removes the temporary
+ * directory and leaves the output directory untouched. An error after the
+ * first rename throws `PartialPublishError`; a prune error after every rename
+ * throws `PruneError`. There is no cross-process lock (D-023).
+ */
+export async function publish(options: PublishOptions): Promise<PublishResult> {
+	const root = resolve(options.root);
+	const outDir = resolve(options.outDir ?? join(root, "bin"));
+	const roster = new Set(options.roster ?? ROSTER);
+	const log = options.log ?? (() => {});
+	const warn = options.warn ?? log;
+	const prune = options.prune !== false && !options.only;
+
+	const plan = await planBuild({ ...options, root });
+	for (const warning of plan.warnings) warn(warning);
+	const orphans = prune
+		? orphansIn(outDir, roster, protectedBinaries(root))
+		: [];
+
+	if (options.dryRun) {
+		for (const entry of plan.entries) {
+			log(`would build ${entry.id} (${entry.kind}: ${entry.source})`);
+		}
+		for (const orphan of orphans) log(`would prune ${orphan}`);
+		return {
+			built: plan.entries.map((entry) => entry.id),
+			pruned: orphans,
+			dryRun: true,
+		};
+	}
+
+	options.signal?.throwIfAborted();
+	const workDir = await mkdtemp(join(dirname(outDir), ".troupe-build-"));
+	try {
+		if (existsSync(outDir) && statSync(outDir).dev !== statSync(workDir).dev) {
+			throw new Error(
+				`${workDir} is not on the same filesystem as ${outDir}; cannot publish by rename`,
+			);
+		}
+		const builtDir = join(workDir, "bin");
+		const entryDir = join(workDir, "entries");
+		await mkdir(builtDir);
+		await mkdir(entryDir);
+
+		const generateAssets = join(root, "scripts", "gen-assets.ts");
+		if (
+			plan.entries.some((entry) => entry.kind === "legacy") &&
+			existsSync(generateAssets)
+		) {
+			// Legacy launchers read their prompts through the generated asset map.
+			await bunRun([generateAssets], root, options.signal);
+		}
+
+		for (const entry of plan.entries) {
+			options.signal?.throwIfAborted();
+			const outFile = join(builtDir, entry.id);
+			if (entry.kind === "legacy") {
+				await bunBuild({
+					entry: entry.source,
+					outFile,
+					cwd: root,
+					label: entry.source,
+					signal: options.signal,
+				});
+			} else {
+				const file = join(entryDir, `${entry.id}.ts`);
+				await writeFile(file, generateEntry(entry.agent));
+				await bunBuild({
+					entry: file,
+					outFile,
+					cwd: entryDir,
+					label: entry.source,
+					signal: options.signal,
+				});
+			}
+			log(`built ${entry.id}`);
+		}
+
+		options.signal?.throwIfAborted();
+		preflightPublish(plan.entries, builtDir, outDir);
+		await mkdir(outDir, { recursive: true });
+		const label = `${basename(outDir)}/`;
+		let renamed = 0;
+		try {
+			for (const entry of plan.entries) {
+				await rename(join(builtDir, entry.id), join(outDir, entry.id));
+				renamed++;
+			}
+		} catch (error) {
+			if (renamed === 0) throw error;
+			throw new PartialPublishError(
+				label,
+				renamed,
+				plan.entries.length,
+				error as Error,
+			);
+		}
+		for (const orphan of orphans) {
+			try {
+				await rm(join(outDir, orphan), { recursive: true, force: true });
+			} catch (error) {
+				throw new PruneError(
+					label,
+					plan.entries.length,
+					orphan,
+					error as Error,
+				);
+			}
+			log(`pruned ${orphan}`);
+		}
+		return {
+			built: plan.entries.map((entry) => entry.id),
+			pruned: orphans,
+			dryRun: false,
+		};
+	} finally {
+		await rm(workDir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Checks made before the first rename, so a failure here still leaves the
+ * output directory untouched: every built output is a non-empty regular file
+ * and no target is a directory.
+ */
+export function preflightPublish(
+	entries: readonly BuildEntry[],
+	builtDir: string,
+	outDir: string,
+): void {
+	const problems: string[] = [];
+	for (const entry of entries) {
+		const built = statSync(join(builtDir, entry.id), { throwIfNoEntry: false });
+		if (!built?.isFile() || built.size === 0) {
+			problems.push(
+				`build of ${entry.id} reported success but produced ${built ? (built.isFile() ? "an empty file" : "no regular file") : "no file"}`,
+			);
+		}
+		const target = lstatSync(join(outDir, entry.id), {
+			throwIfNoEntry: false,
+		});
+		if (target?.isDirectory()) {
+			problems.push(
+				`${join(basename(outDir), entry.id)} is a directory; remove it and rerun`,
+			);
+		}
+	}
+	if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+/** Some binaries were renamed into place before an error. */
+export class PartialPublishError extends Error {
+	constructor(
+		label: string,
+		readonly renamed: number,
+		readonly total: number,
+		cause: Error,
+	) {
+		super(
+			`${label} partly updated (${renamed} of ${total}); rerun compile:all\n${cause.message}`,
+		);
+		this.name = "PartialPublishError";
+	}
+}
+
+/** Every binary was published, but removing an orphan failed. */
+export class PruneError extends Error {
+	constructor(label: string, total: number, orphan: string, cause: Error) {
+		super(
+			`${label} updated (${total} of ${total}), but pruning ${orphan} failed: ${cause.message}`,
+		);
+		this.name = "PruneError";
+	}
+}
+
+/**
+ * What a caller prints for a failed publish: the cause, and whether the
+ * output directory was left untouched.
+ */
+export function describePublishFailure(error: unknown, label = "bin/"): string {
+	if (error instanceof PartialPublishError || error instanceof PruneError) {
+		return error.message;
+	}
+	const cause =
+		error instanceof AgentSourceError
+			? error.issues.map(formatIssue).join("\n")
+			: String((error as Error)?.message ?? error);
+	return `${cause}\nNothing published; ${label} left untouched.`;
+}
+
+async function bunRun(
+	args: string[],
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	signal?.throwIfAborted();
+	const child = Bun.spawn([process.execPath, ...args], {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const kill = () => child.kill("SIGTERM");
+	signal?.addEventListener("abort", kill, { once: true });
+	try {
+		const [exitCode, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stderr).text(),
+			new Response(child.stdout).text(),
+		]);
+		signal?.throwIfAborted();
+		if (exitCode !== 0) {
+			throw new Error(
+				`bun ${args.join(" ")} failed (exit ${exitCode}):\n${stderr}`,
+			);
+		}
+	} finally {
+		signal?.removeEventListener("abort", kill);
+	}
+}
+
+/**
+ * Runs `task` one at a time. A request during a run is coalesced into one
+ * follow-up run, so a burst of changes never builds concurrently and the last
+ * change is always built.
+ */
+export function createSerialQueue(task: () => Promise<void>): {
+	request(): Promise<void>;
+	idle(): Promise<void>;
+} {
+	let running: Promise<void> | undefined;
+	let pending: Promise<void> | undefined;
+	const start = (): Promise<void> => {
+		running = task()
+			.catch(() => {})
+			.finally(() => {
+				running = undefined;
+			});
+		return running;
+	};
+	return {
+		request() {
+			if (pending) return pending;
+			if (!running) return start();
+			pending ??= running.then(() => {
+				pending = undefined;
+				return start();
+			});
+			return pending;
+		},
+		async idle() {
+			while (running || pending) await (pending ?? running);
+		},
+	};
+}
+
+type WatchFn = (
+	dir: string,
+	options: { recursive: boolean },
+	listener: (event: string, filename: string | null) => void,
+) => { close(): void };
+
+export interface WatcherOptions extends CompilerOptions {
+	watch?: WatchFn;
+	debounceMs?: number;
+	log?: (line: string) => void;
+	warn?: (line: string) => void;
+	/** Aborts a rebuild in progress. */
+	signal?: AbortSignal;
+	/** Runs one full rebuild. Defaults to `publish`. */
+	rebuild?: () => Promise<void>;
+}
+
+/**
+ * Watch exactly `agents/` and `system-prompts/` (D-027) and rebuild every
+ * agent through the shared compiler on any change, one rebuild at a time.
+ * Changes under `agents/local/` are ignored.
+ */
+export function startWatcher(options: WatcherOptions): {
+	close(): void;
+	queue: ReturnType<typeof createSerialQueue>;
+	roots: string[];
+} {
+	const root = resolve(options.root);
+	const log = options.log ?? (() => {});
+	const watch = options.watch ?? (nodeWatch as unknown as WatchFn);
+	const rebuild =
+		options.rebuild ??
+		(async () => {
+			try {
+				const result = await publish({ ...options, root });
+				log(`rebuilt ${result.built.length} agents`);
+			} catch (error) {
+				log(
+					`rebuild failed:\n${describePublishFailure(error, `${basename(resolve(options.outDir ?? join(root, "bin")))}/`)}`,
+				);
+			}
+		});
+	const queue = createSerialQueue(rebuild);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const schedule = () => {
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(() => {
+			timer = undefined;
+			void queue.request();
+		}, options.debounceMs ?? 100);
+	};
+
+	const roots = WATCH_ROOTS.map((name) => join(root, name)).filter((dir) =>
+		existsSync(dir),
+	);
+	const watchers = roots.map((dir) =>
+		watch(dir, { recursive: true }, (_event, filename) => {
+			const name = filename?.toString() ?? "";
+			if (
+				dir === join(root, "agents") &&
+				(name === "local" || name.startsWith("local/"))
+			) {
+				return;
+			}
+			log(`change: ${relative(root, join(dir, name))}`);
+			schedule();
+		}),
+	);
+	return {
+		queue,
+		roots,
+		close() {
+			if (timer) clearTimeout(timer);
+			for (const watcher of watchers) watcher.close();
+		},
+	};
+}
+
+/** Parse `--mode=<mixed|strict>` (or `--mode <value>`); the rest is returned. */
+export function takeModeArg(argv: readonly string[]): {
+	mode?: CompileMode;
+	rest: string[];
+	error?: string;
+} {
+	const rest: string[] = [];
+	let mode: string | undefined;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i] as string;
+		if (arg === "--mode") {
+			mode = argv[++i];
+		} else if (arg.startsWith("--mode=")) {
+			mode = arg.slice("--mode=".length);
+		} else {
+			rest.push(arg);
+		}
+	}
+	if (mode === undefined) {
+		return { rest, error: "--mode=mixed or --mode=strict is required" };
+	}
+	if (!(COMPILE_MODES as readonly string[]).includes(mode)) {
+		return { rest, error: `unknown --mode "${mode}" (mixed or strict)` };
+	}
+	return { mode: mode as CompileMode, rest };
+}
+
+/**
+ * Abort on SIGINT, SIGTERM or SIGHUP so a build in progress cleans up its temp
+ * directory. The handlers stay installed, so a repeated signal cannot end the
+ * process before that cleanup runs.
+ */
+export function abortOnSignals(): { signal: AbortSignal; exitCode(): number } {
+	const controller = new AbortController();
+	let code = 1;
+	const on = (name: NodeJS.Signals, exit: number) =>
+		process.on(name, () => {
+			if (controller.signal.aborted) return;
+			code = exit;
+			controller.abort(new Error(`interrupted by ${name}`));
+		});
+	on("SIGINT", 130);
+	on("SIGTERM", 143);
+	on("SIGHUP", 129);
+	return { signal: controller.signal, exitCode: () => code };
 }

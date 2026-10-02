@@ -5,6 +5,8 @@ node_modules
 out
 dist
 bin
+# publication temp dirs left by a killed compile (scripts/agent-compiler.ts)
+.troupe-build-*/
 *.tgz
 
 # code coverage
