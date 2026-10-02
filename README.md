@@ -150,7 +150,6 @@ Each agent is a specialized Claude instance with custom configurations:
 ### Analysis & Research Agents
 - **orient** - Generates orientation maps for concepts, features, or files
 - **design-audit** - Comprehensive design system/site styling audit
-- **github-examples** - Search GitHub for real-world examples and patterns
 
 ### Diagram Agents
 - **diagram-all** - Project-wide, exhaustive event flow diagram generator
@@ -284,11 +283,6 @@ This repo ships multiple focused agents wired to well-structured prompts. The pr
   - Orientation analysis with `<orientation>` output: overview, structure, tech, commands, workflow, recent, next.
   - Use when onboarding to a repo or scoping a change area.
 
-- `github-examples` (prompts/github-examples.md)
-  - Searches GitHub for real-world examples and writes `ai/github-examples/<slug>.md`.
-  - Emits `<github_examples>` block with examples, comparisons, and path.
-  - Use to discover patterns, validate approaches, or gather inspiration.
-
 - `chain`
   - Runs `planner` to generate a plan and then launches `contain` with that plan preloaded.
   - Use to move from planning → constrained execution in one command.
@@ -315,10 +309,6 @@ This repo ships multiple focused agents wired to well-structured prompts. The pr
 - `prompt-improver` (system-prompts/prompt-improver-prompt.md)
   - Turns a provided prompt/spec into three structured Markdown variations with winner rationale.
   - Use to iterate on and improve prompts before use.
-
-### Credentials & Tools
-- Some agents fetch secrets via 1Password CLI (`op`)—ensure you’re signed in.
-- GitHub MCP usage requires a valid token (see agents/github-examples.ts notes).
 
 ### Runtime Consistency
 - All CLI agents use a Bun shebang and handle SIGINT/SIGTERM to cleanly stop child processes.

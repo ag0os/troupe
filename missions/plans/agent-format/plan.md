@@ -7,12 +7,12 @@ updatedAt: '2026-09-30T00:30:00.000Z'
 
 ## Overview
 
-Replace 23 hand-written Claude launchers with strict Markdown declarations compiled to the same colon-named binaries. Each binary embeds one validated backend-neutral `AgentSpec`, imports an optional sibling `prepare`/`finish` extension, and selects a Claude Code or Codex argv adapter at launch.
+Replace 22 hand-written Claude launchers with strict Markdown declarations compiled to the same colon-named binaries. Each binary embeds one validated backend-neutral `AgentSpec`, imports an optional sibling `prepare`/`finish` extension, and selects a Claude Code or Codex argv adapter at launch. The 23rd launcher, `personas:github`, is removed rather than migrated (D-036). *(Amended 2026-10-02, D-036)*
 
 `spec.md` is authoritative. The current human instruction to honor that unchanged legacy spec exactly is an explicit waiver of the newer canonical `Intent`/`INV-###`/`AC-###` shape for this plan; it does not authorize edits to the spec or invented invariants. Its Outcome, eight Ratified decisions, Requirements, Acceptance, and Out of scope are human ground. The following aliases are traceability indexes only:
 
 - `REQ-001` Schema; `REQ-002` Prompt composition; `REQ-003` Initial prompt; `REQ-004` Flags; `REQ-005` Code hooks; `REQ-006` MCP; `REQ-007` Codex adapter; `REQ-008` Migration; `REQ-009` Shepherd 2026-09-25 behavior; `REQ-010` Removal; `REQ-011` Docs.
-- `ACC-001` repository checks/exactly 23 binaries; `ACC-002` agent × declared-backend previews; `ACC-003` Codex developer-message canary; `ACC-004` named regressions; `ACC-005` four interactive smokes; `ACC-006` per-workspace Shepherd previews.
+- `ACC-001` repository checks/exactly 22 binaries *(Amended 2026-10-02, D-036)*; `ACC-002` agent × declared-backend previews; `ACC-003` Codex developer-message canary; `ACC-004` named regressions; `ACC-005` four interactive smokes; `ACC-006` per-workspace Shepherd previews.
 
 No implementer may rank conflicting ratified ground; such a collision halts for human resolution. Derived design yields to the spec. Backend mappings come from `evidence/agent-usage.md` and `evidence/backend-matrix.md` (Claude Code 2.1.282, Codex 0.156.1).
 
@@ -76,7 +76,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Decided by: human, ratified in `spec.md`
 
 - **D-008 - The hub holds agents only**
-  - Decision: **The hub holds agents only.** No utilities. The 23-agent roster is fixed (see agent-usage.md).
+  - Decision: **The hub holds agents only.** No utilities. The 22-agent roster is fixed (see agent-usage.md; `personas:github` removed by D-036). *(Amended 2026-10-02, D-036)*
   - Alternatives: Discover every executable source.
   - Why: Ratified roster.
   - Decided by: human, ratified in `spec.md`
@@ -94,7 +94,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Decided by: planner, revision from `review-1.md PR-005`
 
 - **D-011 - One shared compiler, single-process build then rename** *(Revised 2026-09-29 after review)*
-  - Decision: `compile`, `compile:all` and the watcher use one shared compiler. `compile:all` builds all 23 binaries in one process into a temporary directory on the same filesystem as `bin/`. Only when every build succeeds does it rename each binary into `bin/` and then prune orphans. A failed build removes the temporary directory and leaves `bin/` untouched. The existing `--dry-run` (report, build nothing) and `--no-prune` (rebuild, leave orphans) flags keep their meaning. The compiler owns `bin/` for the fixed roster: private agents under `agents/local/` are no longer supported, because the hub holds exactly the 23 (D-008). Single compile accepts only roster names, and pruning removes every `bin/` entry outside the roster except binaries owned by other package `compile:*` scripts (the existing protection rule; none exist today). There is no cross-process lock, no `previous`/`next`/quarantine protocol and no manifest validation (D-023).
+  - Decision: `compile`, `compile:all` and the watcher use one shared compiler. `compile:all` builds all 22 binaries in one process into a temporary directory on the same filesystem as `bin/`. Only when every build succeeds does it rename each binary into `bin/` and then prune orphans. A failed build removes the temporary directory and leaves `bin/` untouched. The existing `--dry-run` (report, build nothing) and `--no-prune` (rebuild, leave orphans) flags keep their meaning. The compiler owns `bin/` for the fixed roster: private agents under `agents/local/` are no longer supported, because the hub holds exactly the 22 (D-008). Single compile accepts only roster names, and pruning removes every `bin/` entry outside the roster except binaries owned by other package `compile:*` scripts (the existing protection rule; none exist today). There is no cross-process lock, no `previous`/`next`/quarantine protocol and no manifest validation (D-023). *(Amended 2026-10-02, D-036)*
   - Alternatives: One-by-one overwrite in place; the earlier revision's cross-process lock with `bin → previous`/`next → bin` recovery (cut, D-023); keeping `agents/local/` outside the exact-23 count.
   - Why: The spec asks for a shared compiler, watcher reuse and exactly 23 binaries (REQ-010, ACC-001), nothing more. Addresses `review-1.md PR-011` and `review-2.md PR-011` within spec scope; applies the Shepherd orchestrator's decision on independent-review findings 2, 16 and 17.
   - Decided by: Shepherd orchestrator, 2026-09-29 after review; dropping `agents/local/` support goes to the human gate
@@ -237,6 +237,12 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Found in the TASK-007 review and recorded in evidence §2.1 (codex-cli 0.159.3). The base developer items Codex itself adds are kept, which is what D-003 protects.
   - Decided by: the user, 2026-10-01, human gate
 
+- **D-036 - personas:github is removed from the hub** *(Added 2026-10-02)*
+  - Decision: `personas:github` is deleted: its legacy launcher, its private prompt `system-prompts/github-examples.md`, its roster entry and its binary. The roster is 22 agents and strict mode requires exactly those 22. The six remaining Claude-only agents (rails:backlog, tdd, builder, review:pr, webfetch, contain) are unchanged. The `@anthropic-ai/claude-agent-sdk` dependency, which only this launcher imported, goes with it. The MCP secret-interpolation mechanism (`${env:...}`, `${cmd:...}`, D-026, D-029, D-032 to D-034) stays in the format with no current user.
+  - Alternatives: Migrate it as planned (Design §8's former GitHub row); keep it as a legacy launcher outside the format.
+  - Why: The user, 2026-10-02: "the github agent is providing a complexity that we don't need by now and I haven't used it in ages and still coupled with things like one password let's just remove that one I don't care about it". The TASK-013 review also left three majors unresolved: the run was no longer isolated from user config (no `--strict-mcp-config` or `--setting-sources ""`), its seven tools had no permission grant in stream mode, and the token's environment variable is readable by a same-user `ps eww`.
+  - Decided by: the user, 2026-10-02
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -267,7 +273,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Source: REQ-006, REQ-007
 - Observer: user of declared stdio/HTTP MCP
 - Entry point: actual launch
-- Outcome: both transports map correctly; env/command interpolation occurs only at launch; `${cmd:...}` becomes argv by quote-aware splitting with no shell, so GitHub's `op item get "Github CLI Token" --fields password --reveal` reaches the process with the item name as one argument; missing/failed/interrupted resolution stops before backend with cleanup; secrets are not persisted/printed, and interpolated header values never appear in argv, backend config files or process listings (D-029: env reference, secret exported into the child's environment); Chrome uses `chrome-devtools-mcp`.
+- Outcome: both transports map correctly; env/command interpolation occurs only at launch; `${cmd:...}` becomes argv by quote-aware splitting with no shell, so a quoted argument (for example the item name in `op item get "Github CLI Token" --fields password --reveal`) reaches the process as one argument; missing/failed/interrupted resolution stops before backend with cleanup; secrets are not persisted/printed, and interpolated header values never appear in argv, backend config files or process listings (D-029: env reference, secret exported into the child's environment); Chrome uses `chrome-devtools-mcp`. No roster agent declares `${cmd:...}` after D-036; the mechanism stays tested with fixtures. *(Amended 2026-10-02, D-036)*
 
 ### B-006 - Extensions and modes have deterministic exits
 - Source: REQ-005, decision 6
@@ -275,11 +281,11 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Entry point: generated binary plus optional extension
 - Outcome: preparation sees the effective mode and preview flag, returns validated invocation data or an early exit on a named stream, and uses cancellable runner commands; before-run messages print after preparation and before spawn; interactive inherits IO, print finishes success/operational failures through the typed `finish`, stream uses adapter decoder, after-run messages follow successful decoding; hook/child/adapter/decoder/finish/signal failures have specified output/code/cleanup. Importing a converted extension spawns no process and does not exit.
 
-### B-007 - All 23 agents preserve intended behavior and remove named defects
+### B-007 - All 22 agents preserve intended behavior and remove named defects
 - Source: REQ-008, REQ-010, ACC-004
 - Observer: existing binary users
-- Entry point: migrated 23 names
-- Outcome: meaningful prompt/permission/MCP/mode/CLI/output behavior remains; dead settings/empty MCP/default mode/wrong project env/assets/lifecycle echoes are dropped or moved; named regressions are fixed; seven specified agents are Claude-only and all others declare Claude then Codex. The one intended CLI change is that backend flags follow `--` (D-028). Orient keeps quick-over-focus and the argument-only context suffix, pinned by `orient`, `orient --quick --focus tech` and `orient foo`.
+- Entry point: migrated 22 names *(Amended 2026-10-02, D-036)*
+- Outcome: meaningful prompt/permission/MCP/mode/CLI/output behavior remains; dead settings/empty MCP/default mode/wrong project env/assets/lifecycle echoes are dropped or moved; named regressions are fixed; six specified agents are Claude-only and all others declare Claude then Codex *(Amended 2026-10-02, D-036)*. The one intended CLI change is that backend flags follow `--` (D-028). Orient keeps quick-over-focus and the argument-only context suffix, pinned by `orient`, `orient --quick --focus tech` and `orient foo`.
 
 ### B-008 - Shepherd preserves enclosing workspace and context tiers
 - Source: REQ-009, ACC-006
@@ -287,11 +293,11 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Entry point: preview/launch on either backend
 - Outcome: nearest parent modules are sorted after built-ins/before charter, duplicate-realpath locals skipped, local follows charter; Claude receives both the additional directory and the literal rule `Read(/<realpath of enclosing>/.shepherd/**)`, which renders as `Read(//abs/...)` exactly like `agents/shepherd.ts:81`; prepare returns rules only when `ctx.backend === "claude"`, so a Codex preview of a nested workspace shows the inherited fragments with no rule error; `shepherd --print` without a prompt still fails before spawn; Context tiers/flock module/directory remain observable and match the `e18f56b` baseline.
 
-### B-009 - Build publishes the 23-binary roster
+### B-009 - Build publishes the 22-binary roster
 - Source: REQ-010, ACC-001
 - Observer: maintainer
 - Entry point: repository type/style/test workflows, `compile`, `compile:all` (with `--dry-run` and `--no-prune`) and `bun watch`
-- Outcome: checks pass with exactly 23 binaries; compile, compile-all and the watcher share one compiler; a failed build leaves `bin/` untouched; orphans outside the roster are pruned unless `--no-prune`; `--dry-run` reports without writing; single compile rejects names outside the roster; `agents/local/` is not compiled; obsolete paths are removed.
+- Outcome: checks pass with exactly 22 binaries (D-036); compile, compile-all and the watcher share one compiler; a failed build leaves `bin/` untouched; orphans outside the roster are pruned unless `--no-prune`; `--dry-run` reports without writing; single compile rejects names outside the roster; `agents/local/` is not compiled; obsolete paths are removed. *(Amended 2026-10-02, D-036)*
 
 ### B-010 - Codex receives a developer message
 - Source: ACC-003
@@ -484,7 +490,7 @@ Thus Webfetch maps operational failures to `ERROR:` stdout while invalid CLI/exp
 
 Interpolation visits MCP string leaves only. `${env:NAME}` reads launch env; `${cmd:...}` text is split shell-style (single/double quotes, backslash escapes) into argv and run with no shell via the same cancellable runner command facility in effective cwd; it trims one trailing line ending and requires exit zero and nonempty output (D-026). Shell operators, globbing and variable expansion fail compile. Expansion is single-pass. Actual/display values travel together for redaction.
 
-Only compiled Troupe declarations can declare commands; target-project files/runtime fragments cannot. Compile/help/preview never execute them; explicit agent launch is consent. Values remain uncached process data. The guide documents this boundary and GitHub's 1Password header. GitHub's `prepare` runs `op signin --raw` through `runCommand` on execution only (not in preview) before interpolation, preserving today's sign-in order; its output is discarded as today.
+Only compiled Troupe declarations can declare commands; target-project files/runtime fragments cannot. Compile/help/preview never execute them; explicit agent launch is consent. Values remain uncached process data. The guide documents this boundary and how a header secret is declared with `${cmd:...}` or `${env:...}`. An extension that needs a pre-step before interpolation (for example a credential sign-in) runs it in `prepare` through `runCommand` on execution only (not in preview); interpolation follows preparation. *(Amended 2026-10-02, D-036)*
 
 This boundary covers Troupe's own interpolation only. Under D-004 Codex loads its own config: `codex exec` in a git repo may write `[projects."<repo>"] trust_level = "trusted"` to `~/.codex/config.toml`, after which that repo's `.codex/` (MCP servers, hooks, rules, developer instructions) is honored natively (`evidence/backend-matrix.md` §2.9, §4). First-run Codex TUI popups can also swallow the auto-submitted interactive prompt (§2.2). The guide documents both as inherited backend behavior.
 
@@ -493,7 +499,7 @@ This boundary covers Troupe's own interpolation only. Under D-004 Codex loads it
 The shared compiler has two explicit modes. Neither discovers `agents/local/`; a present `agents/local/` directory produces one warning line that private agents are not compiled (D-011).
 
 - **Migration mode:** discover union of Markdown and legacy non-test TypeScript names. Markdown wins a same-stem collision. Its paired TS is extension-only if static syntax exports `prepare`/`finish` and passes the top-level side-effect check (§4); otherwise it is ignored as a legacy sibling. An unpaired TS remains directly built as its legacy launcher. Compile/watch switch to this mode before any agent conversion, so every binary is always either a working old launcher or a working new declaration.
-- **Strict mode:** discover Markdown only, require exact 23-name roster, reject any non-test `.ts` under `agents/` that is not a same-stem sibling statically exporting `prepare`/`finish` (so paired leftovers fail as well as unpaired ones), and build generated entries only. Final cutover removes the 12 ordinary launchers first, then enables this mode, so the strict check itself proves the removal.
+- **Strict mode:** discover Markdown only, require exact 22-name roster (D-036), reject any non-test `.ts` under `agents/` that is not a same-stem sibling statically exporting `prepare`/`finish` (so paired leftovers fail as well as unpaired ones), and build generated entries only. Final cutover removes the 12 ordinary launchers first, then enables this mode, so the strict check itself proves the removal. *(Amended 2026-10-02, D-036)*
 - **Clarifications** *(Added 2026-10-01 after the TASK-008 reviews)*: every `.md` under `agents/` is a declaration, so include fragments live in `system-prompts/`. Builds run one at a time: concurrent `bun build --compile` jobs lost and corrupted outputs under load (bun 1.2.22). Before the first rename the compiler verifies every built output and every target; a failure after the first rename is reported as a partial update, never as untouched. A same-stem sibling without hooks is ignored in migration mode unless its export shape could hide `prepare`/`finish`. The watcher covers `agents/` and `system-prompts/` only (D-027), so a change under `settings/` needs a manual `compile:all` while legacy launchers still embed it.
 
 Both modes use one compiler, shared by `compile`, `compile:all` and the watcher (D-011). Publication is single-process:
@@ -507,7 +513,7 @@ Both modes use one compiler, shared by `compile`, `compile:all` and the watcher 
 
 ### 8. Agent migration matrix
 
-All except the seven specified restrictions declare `[claude,codex]`.
+All except the six specified restrictions declare `[claude,codex]`. *(Amended 2026-10-02, D-036)*
 
 | Agent(s) | Ownership |
 |---|---|
@@ -522,7 +528,6 @@ All except the seven specified restrictions declare `[claude,codex]`.
 | Git Fix | prepare uses the supplied PR, else detects it with `gh` through `runCommand`; in preview it uses the supplied PR or a stable placeholder and never calls `gh`; no PR is a stderr early exit |
 | Meta Prompt, Planner, Riff | declarative body; empty config dropped |
 | Contain | Claude-only container MCP/allow/deny; remove deepwiki/default; reminder body; Claude flags such as `-p` now follow `--` (D-028) |
-| GitHub | Claude-only stream/replace with `--verbose` stream argv; prepare requires only args[0] and runs `op signin --raw` on execution only; strict declared HTTP MCP/tool list with `${cmd:op item get "Github CLI Token" --fields password --reveal}` tokenized per D-026; no SDK |
 | PR Review | Claude-only; comment flag; prepare PR/conditional prompt; rules |
 | Shepherd | dual; prepare persisted reconstruction, ordered fragments/cwd; on Claude only, the literal `Read(/<realpath of enclosing>/.shepherd/**)` rule plus the additional directory; rejects `ctx.mode === "print"` without a prompt; `--resume` and similar follow `--` |
 | Webfetch | Claude print; flags and framework model; prepare usage/task/max-turn normalization, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021) |
@@ -536,13 +541,13 @@ The one intended CLI change across the roster is D-028: backend flags that used 
 
 Workers choose colocated tests; test files are not source ownership in Files to Change. Slice 1 owns schema/include/template/CLI/help/argv/preview. Slice 2 owns fake CLIs (the fake Claude rejects stream-json without `--verbose`), cancellable preparation, interpolation and tokenization, decoding/failures/cleanup/canary. Slice 3 owns mixed/strict discovery, extension side-effect inspection, temp-dir build/rename/prune, `--dry-run`/`--no-prune`, watcher roots and roster. Each migration adds snapshots/regressions before deletion. Existing Webfetch tests are rewritten around extension helpers and preserved cases. Prompt prose is reviewed, not sentence-asserted.
 
-Slice 1 declares `yaml` and `zod` (^4, matching the strict-schema API) in `package.json` and `bun.lock`; today `yaml` is absent and `zod@3` is only a transitive SDK dependency. Final cutover removes per-agent JSON, migrated flat prompts, assets, Claude helpers/types, the legacy `lib/runtime/**` with its colocated tests (`registry.test.ts`, `capability-checks.test.ts`, `integration.test.ts`), Codex SDK, legacy launchers/fallback, and the `@anthropic-ai/claude-agent-sdk` dependency. Biome excludes authored Markdown from unsupported-file checks while retaining TS checks.
+Slice 1 declares `yaml` and `zod` (^4, matching the strict-schema API) in `package.json` and `bun.lock`; today `yaml` is absent and `zod@3` is only a transitive SDK dependency. Final cutover removes per-agent JSON, migrated flat prompts, assets, Claude helpers/types, the legacy `lib/runtime/**` with its colocated tests (`registry.test.ts`, `capability-checks.test.ts`, `integration.test.ts`), Codex SDK and legacy launchers/fallback; the `@anthropic-ai/claude-agent-sdk` dependency was already removed with `personas:github` (D-036) *(Amended 2026-10-02, D-036)*. Biome excludes authored Markdown from unsupported-file checks while retaining TS checks.
 
 Add `docs/AGENT-FORMAT.md` with the §5 backend mapping table, remove obsolete runtime proposal, update feature docs and targeted README plus AGENTS/CLAUDE links. Preserve rename context and state that `FORGE_BACKEND` is no longer read (D-021). Rewrite the passthrough sentences in `docs/SHEPHERD.md` and `docs/COACH.md` to the `--` form, and remove or rewrite the CLAUDE.md "Private agents"/`agents/local/` rows and the AGENTS.md `agents/local/` bullet.
 
 ## Files to Change
 
-- `package.json`, `bun.lock` — step 1 adds `yaml` and `zod` ^4; step 7 removes `@anthropic-ai/claude-agent-sdk`; scripts.
+- `package.json`, `bun.lock` — step 1 adds `yaml` and `zod` ^4; the D-036 removal drops `@anthropic-ai/claude-agent-sdk`; scripts. *(Amended 2026-10-02, D-036)*
 - `biome.json` — check scope.
 - `lib/agent-format/types.ts`, `schema.ts`, `template.ts`, `cli.ts`, `run.ts` — new format core/composition.
 - `lib/agent-format/adapters/types.ts`, `claude.ts`, `codex.ts`, `index.ts` — new adapter boundary, added in steps 1-2 beside the legacy runtime (D-024).
@@ -552,11 +557,11 @@ Add `docs/AGENT-FORMAT.md` with the §5 backend mapping table, remove obsolete r
 - `scripts/agent-compiler.ts` — mixed/strict discovery, includes/extensions and side-effect inspection, temp-dir build/rename/prune (new).
 - `scripts/binary-name.ts`, `scripts/compile.ts`, `scripts/compile-all.ts`, `scripts/watch-agents.ts` — delegate shared compiler/modes.
 - `scripts/gen-assets.ts` — remove.
-- `agents/analyze/orient.md`, `agents/build/{builder,comment-review,refactor,tdd}.md`, `agents/design/{architect,audit,designer}.md`, `agents/design/diagram/{all,consolidate,topic}.md`, `agents/git/fix.md`, `agents/meta/prompt.md`, `agents/modes/contain.md`, `agents/personas/github.md`, `agents/plan/{planner,riff}.md`, `agents/rails/backlog.md`, `agents/resume/tailor.md`, `agents/review/pr.md`, `agents/shepherd.md`, `agents/tools/webfetch.md`, `agents/tutors/coach.md` — 23 declarations (new).
-- `agents/build/comment-review.ts`, `agents/design/audit.ts`, `agents/design/diagram/{all,consolidate,topic}.ts`, `agents/git/fix.ts`, `agents/personas/github.ts`, `agents/review/pr.ts`, `agents/shepherd.ts`, `agents/tools/webfetch.ts`, `agents/tutors/coach.ts` — convert to extensions.
+- `agents/analyze/orient.md`, `agents/build/{builder,comment-review,refactor,tdd}.md`, `agents/design/{architect,audit,designer}.md`, `agents/design/diagram/{all,consolidate,topic}.md`, `agents/git/fix.md`, `agents/meta/prompt.md`, `agents/modes/contain.md`, `agents/plan/{planner,riff}.md`, `agents/rails/backlog.md`, `agents/resume/tailor.md`, `agents/review/pr.md`, `agents/shepherd.md`, `agents/tools/webfetch.md`, `agents/tutors/coach.md` — 22 declarations (new). *(Amended 2026-10-02, D-036)*
+- `agents/build/comment-review.ts`, `agents/design/audit.ts`, `agents/design/diagram/{all,consolidate,topic}.ts`, `agents/git/fix.ts`, `agents/review/pr.ts`, `agents/shepherd.ts`, `agents/tools/webfetch.ts`, `agents/tutors/coach.ts` — convert to extensions. `agents/personas/github.ts` and `system-prompts/github-examples.md` are deleted (D-036). *(Amended 2026-10-02, D-036)*
 - `agents/analyze/orient.ts`, `agents/build/{builder,refactor,tdd}.ts`, `agents/design/{architect,designer}.ts`, `agents/meta/prompt.ts`, `agents/modes/contain.ts`, `agents/plan/{planner,riff}.ts`, `agents/rails/backlog.ts`, `agents/resume/tailor.ts` — remove at strict cutover.
 - `settings/*.json` — remove after live data migration.
-- `system-prompts/{builder-prompt,comment-review-prompt,design-architect,design-audit-prompt,designer-prompt,diagram-all-prompt,diagram-consolidate-prompt,diagram-topic-prompt,github-examples,orient-prompt,planner-prompt,pr-review-prompt,prompt-improver-prompt,rails-backlog-coordinator-prompt,refactor-prompt,resume-tailor,riff-prompt,tdd-coordinator-prompt,webfetch-prompt}.md` — remove after body migration.
+- `system-prompts/{builder-prompt,comment-review-prompt,design-architect,design-audit-prompt,designer-prompt,diagram-all-prompt,diagram-consolidate-prompt,diagram-topic-prompt,orient-prompt,planner-prompt,pr-review-prompt,prompt-improver-prompt,rails-backlog-coordinator-prompt,refactor-prompt,resume-tailor,riff-prompt,tdd-coordinator-prompt,webfetch-prompt}.md` — remove after body migration. *(Amended 2026-10-02, D-036)*
 - `system-prompts/shepherd/core.md` — update stale source references, preserve Context tiers.
 - `docs/AGENT-FORMAT.md` — new single guide.
 - `docs/AGENT-RUNTIME.md` — remove.
@@ -584,7 +589,7 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Private agents dropped (human gate):** `agents/local/` is no longer compiled, and pruning removes any `local:*` binary from `bin/`, which is on the user's PATH. No local agents exist today; the CLAUDE.md and AGENTS.md guidance that promises them is removed (D-011).
 - **`FORGE_BACKEND` dropped (D-021):** users who relied on the variable for Shepherd must pass `--backend` or define a shell alias; the SHEPHERD doc says so.
 - **Codex project trust:** `codex exec` in a git repo may mark it trusted in `~/.codex/config.toml`, after which that repo's `.codex/` loads natively. This is inherited Codex behavior under D-004, outside the §6 interpolation boundary, and the guide documents it.
-- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift"). Claude `${VAR}` expansion of literal header values, and Claude honoring `cwd` for stdio MCP servers, are verified in TASK-006 before adapters rely on them. Result (2026-10-01): the env-reference forms pass on both CLIs; Claude ignores stdio `cwd` and expands literal `${VAR}`, resolved by D-032 and D-033.
+- **Env-referenced MCP headers unverified:** D-029 relies on Claude `${VAR}` header expansion and Codex `env_http_headers`/`bearer_token_env_var`, which `evidence/backend-matrix.md` does not cover. Step 2 runs the verifying experiment on the installed CLIs first and records the result in the evidence file; if either form fails, halt for human resolution ("Backend drift"). Claude `${VAR}` expansion of literal header values, and Claude honoring `cwd` for stdio MCP servers, are verified in TASK-006 before adapters rely on them. Result (2026-10-01): the env-reference forms pass on both CLIs; Claude ignores stdio `cwd` and expands literal `${VAR}`, resolved by D-032 and D-033. On macOS a same-user `ps eww` shows a child's environment, so an env-referenced secret is hidden from argv and from default listings, not from that command (found in the TASK-013 review, 2026-10-02). *(Amended 2026-10-02, D-036)*
 - **Structural evidence limitation:** planning had no mechanical evidence; unexpected duplicate runtime/high complexity requires refactor.
 - **Scope:** new product behavior requires spec amendment; implementation complexity splits within fixed slices.
 
@@ -594,9 +599,9 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 2. **Execution lifecycle (B-005/B-006/B-010):** child tracking, abort/forwarding and cleanup for `runCommand`, MCP interpolation with D-026 tokenization and redaction, the D-029 env-reference experiment on both installed CLIs (recorded in `evidence/backend-matrix.md`) and the env-reference header mapping, TMPDIR/temp prompt resources, worktree probe, process/signals, typed `finish` and print finish-on-failure, before/after-run messages, decoders and malformed/incomplete exits, fake CLIs/canary.
 3. **Compiler migration/publication (B-009):** mixed and strict discovery, includes limited to watched roots, temp-dir build, rename, prune with `--dry-run`/`--no-prune`, roster-only single compile, `agents/local/` warning, watcher reuse. Switch package compile/watch to mixed mode now, before converting any agent.
 4. **Ordinary migration (part B-007):** add ordinary Markdown/policies/reminders/snapshots. In mixed mode each `.md` atomically shadows its still-present legacy sibling while unpaired agents remain functional legacy binaries.
-5. **Special extensions except Shepherd (B-006/B-007):** in same-stem pairs add Markdown and convert Comment Review, Audit, diagrams, Git Fix, GitHub, PR Review, Webfetch, Coach. Mixed compiler immediately builds the declaration+extension, never the hook as entry. Land it as separate same-stem commits, one per contract family (diagrams+audit; git-fix+pr-review+comment-review; webfetch; github; coach), each with its own snapshots, regressions and an import-has-no-side-effects check. Rewrite Webfetch tests.
+5. **Special extensions except Shepherd (B-006/B-007):** in same-stem pairs add Markdown and convert Comment Review, Audit, diagrams, Git Fix, PR Review, Webfetch, Coach. Mixed compiler immediately builds the declaration+extension, never the hook as entry. Land it as separate same-stem commits, one per contract family (diagrams+audit; git-fix+pr-review+comment-review; webfetch; coach), each with its own snapshots, regressions and an import-has-no-side-effects check. Rewrite Webfetch tests. `personas:github` is removed instead (D-036). *(Amended 2026-10-02, D-036)*
 6. **Shepherd (B-008):** the baseline is `e18f56b`. Before converting, capture for each `~/shepherds/*` workspace the legacy system prompt and the `shepherdSettings(enclosing)` output (additional directory plus the `Read(//abs/**)` rule) as characterization fixtures, with the date normalized; the legacy `--show-prompt` omits settings. Then convert nearest parent, order, realpath dedupe, additional directory+Read, Context tiers, env compatibility, print-without-prompt guard, fixed previews; diff the new Claude preview's prompt and `--settings` argv against the fixtures, and snapshot a Codex preview of a nested workspace.
-7. **Strict cutover/cleanup/docs (B-009/B-011):** the entry gate is that all 23 work in mixed mode, meaning the ACC-005 smokes (Shepherd and `plan:riff` on Claude and Codex) and the prose review pass against the step-6 mixed build, with outcomes recorded and the prose compared against the still-present `system-prompts/*.md`. Then remove the 12 ordinary launchers, enable strict mode and prove the exact roster with no fallback, and only then remove prompts/settings/assets/helpers, the legacy `lib/runtime/**` with its tests, and the Agent SDK. No artifact references a deleted seam. The guide and doc updates (B-011) are a separate task from the cutover and deletions.
-8. **Whole-roster acceptance (B-003/B-007–B-012):** full snapshots, named regressions (including orient combinations and Webfetch ignoring an exported `FORGE_BACKEND=codex`), repository checks, exact binaries, canary, Shepherd workspaces against the `e18f56b` fixtures, the four smokes re-run after the SDK and helpers are gone, one real-CLI Claude stream-mode launch, a recorded check of whether any `codex exec` flag avoids the project-trust write, and prose review.
+7. **Strict cutover/cleanup/docs (B-009/B-011):** the entry gate is that all 22 work in mixed mode, meaning the ACC-005 smokes (Shepherd and `plan:riff` on Claude and Codex) and the prose review pass against the step-6 mixed build, with outcomes recorded and the prose compared against the still-present `system-prompts/*.md`. Then remove the 12 ordinary launchers, enable strict mode and prove the exact roster with no fallback, and only then remove prompts/settings/assets/helpers, and the legacy `lib/runtime/**` with its tests (the Agent SDK is already gone, D-036). No artifact references a deleted seam. The guide and doc updates (B-011) are a separate task from the cutover and deletions. *(Amended 2026-10-02, D-036)*
+8. **Whole-roster acceptance (B-003/B-007–B-012):** full snapshots, named regressions (including orient combinations and Webfetch ignoring an exported `FORGE_BACKEND=codex`), repository checks, exact binaries, canary, Shepherd workspaces against the `e18f56b` fixtures, the four smokes re-run after the helpers are gone, one real-CLI Claude stream-mode launch, a recorded check of whether any `codex exec` flag avoids the project-trust write, and prose review. *(Amended 2026-10-02, D-036)*
 
-Every slice leaves owned behavior demonstrable. After every step, `bun run typecheck` passes and `compile:all` builds all 23 names, legacy Shepherd and Webfetch included. Evidence contradiction, secret leak, safety downgrade, unrepresentable ratified behavior, or a failed build that alters `bin/` halts under the deviation protocol.
+Every slice leaves owned behavior demonstrable. After every step, `bun run typecheck` passes and `compile:all` builds all 22 names, legacy Shepherd and Webfetch included. *(Amended 2026-10-02, D-036)* Evidence contradiction, secret leak, safety downgrade, unrepresentable ratified behavior, or a failed build that alters `bin/` halts under the deviation protocol.

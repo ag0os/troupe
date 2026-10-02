@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Troupe is a Bun + strict TypeScript repository for CLI agent launchers and shared runtime utilities. It was recently renamed from `claude-forge`; preserve rename context when updating older docs or generated artifacts. Agent integrations currently use `@anthropic-ai/claude-agent-sdk`.
+Troupe is a Bun + strict TypeScript repository for CLI agent launchers and shared runtime utilities. It was recently renamed from `claude-forge`; preserve rename context when updating older docs or generated artifacts.
 
 ## Project Structure & Module Organization
 

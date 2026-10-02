@@ -9,7 +9,7 @@ passthrough (D2), forge flags leaking to claude (D3), the `assetsFor` misses (D1
 system prompt. Evidence: `agent-usage.md` and `backend-matrix.md` (attached with the plan).
 
 ## Outcome
-Every one of the 23 agents is defined by a Markdown file (frontmatter spec plus system prompt body),
+Every one of the 22 agents (amended 2026-10-02, D-036) is defined by a Markdown file (frontmatter spec plus system prompt body),
 optionally with a sibling `.ts` code hook. `bun run compile:all` builds each one into
 `bin/<namespace:name>`. Every agent runs on each backend it declares, with its prompt delivered
 correctly, and the old Claude-only launch plumbing is gone.
@@ -35,7 +35,7 @@ correctly, and the old Claude-only launch plumbing is gone.
    non-translatable settings go in `native.claude` / `native.codex` as raw passthrough. On Codex, a
    Claude-only rule is not emulated.
 7. **No hooks in the format for now.** The 6 existing echo hooks become prompt text.
-8. **The hub holds agents only.** No utilities. The 23-agent roster is fixed (see agent-usage.md).
+8. **The hub holds agents only.** No utilities. The 22-agent roster is fixed (see agent-usage.md; personas:github was removed, amended 2026-10-02, D-036).
 
 ## Requirements
 - **Schema:** validated at compile time (zod or similar). Unknown keys are an error, so no more
@@ -53,14 +53,14 @@ correctly, and the old Claude-only launch plumbing is gone.
   overrides (system prompt fragments, initial prompt, extra allow rules, cwd), or an early exit with
   a message and code. `finish(result)` post-processes print-mode output (webfetch).
 - **MCP:** stdio `{command,args,env,cwd}` and http `{url,headers}` on both backends, with
-  `${env:NAME}` and `${cmd:...}` interpolation resolved at launch (personas:github's 1Password token).
+  `${env:NAME}` and `${cmd:...}` interpolation resolved at launch (for example a header token read from a password manager; amended 2026-10-02, D-036).
 - **Codex adapter:** interactive `codex [flags] "<prompt>"`, and `codex exec` for print (stdin
   ignored, `--skip-git-repo-check` outside git repos, never `-a`). HTTP MCP maps to `url`/`http_headers`.
-- **Migration:** all 23 agents move to the format with behavior preserved, minus the defects. The
+- **Migration:** all 22 agents (amended 2026-10-02, D-036) move to the format with behavior preserved, minus the defects. The
   chrome-devtools MCP uses the real package (`chrome-devtools-mcp`). Dead settings keys, empty
   `mcpServers`, `defaultMode:"default"` and `CLAUDE_PROJECT_DIR` are dropped. The Claude-only agents
-  (rails:backlog, tdd, builder, review:pr, webfetch, contain, github) declare `backends: [claude]`.
-  personas:github moves off the Agent SDK to a prompt plus http MCP in stream mode. shepherd and
+  (rails:backlog, tdd, builder, review:pr, webfetch, contain) declare `backends: [claude]`.
+  personas:github is removed instead of migrated (amended 2026-10-02, D-036). shepherd and
   coach keep their runtime composition via `prepare`, and their `--cwd`/`--show-prompt` become
   framework flags.
 - **Shepherd must keep its 2026-09-25 behavior** (commits `1b0208e` and `e18f56b`, which postdate the
@@ -77,7 +77,7 @@ correctly, and the old Claude-only launch plumbing is gone.
   AGENTS.md and README point to it. No full README rewrite (that comes with the rename).
 
 ## Acceptance
-- `bun run typecheck`, `bun run check`, `bun test` and `bun run compile:all` pass, with exactly 23 binaries.
+- `bun run typecheck`, `bun run check`, `bun test` and `bun run compile:all` pass, with exactly 22 binaries (amended 2026-10-02, D-036).
 - For each agent and each declared backend, a snapshot test pins the `--show-prompt` output (prompt
   plus argv).
 - The Codex prompt is verified by `codex debug prompt-input` in a test (skipped when codex is absent):

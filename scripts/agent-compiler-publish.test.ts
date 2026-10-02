@@ -129,9 +129,11 @@ function tempLeftovers(): string[] {
 }
 
 describe("roster", () => {
-	test("is the fixed 23 names and matches today's agents/ sources", () => {
-		expect(ROSTER.length).toBe(23);
-		expect(new Set(ROSTER).size).toBe(23);
+	test("is the fixed 22 names and matches today's agents/ sources", () => {
+		expect(ROSTER.length).toBe(22);
+		expect(new Set(ROSTER).size).toBe(22);
+		// D-036: personas:github was removed from the hub.
+		expect(ROSTER as readonly string[]).not.toContain("personas:github");
 		const repo = resolve(import.meta.dir, "..");
 		return planBuild({ root: repo, mode: "mixed" }).then((plan) => {
 			expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
@@ -146,6 +148,29 @@ describe("roster", () => {
 				]);
 			}
 		});
+	});
+});
+
+describe("strict mode over the real roster (D-036)", () => {
+	const sourceOf = (id: string) => `agents/${id.split(":").join("/")}.md`;
+
+	test("the 22 roster declarations satisfy strict mode", async () => {
+		for (const id of ROSTER) write(sourceOf(id), `${header}---\n${id}\n`);
+		const plan = await planBuild({ root, mode: "strict" });
+		expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
+	});
+
+	test("a personas:github declaration is refused, and a missing one is not required", async () => {
+		for (const id of ROSTER) write(sourceOf(id), `${header}---\n${id}\n`);
+		write("agents/personas/github.md", `${header}---\nGitHub\n`);
+		const issues = await issuesOf(planBuild({ root, mode: "strict" }));
+		expect(issues).toEqual([
+			expect.objectContaining({
+				file: "agents/personas/github.md",
+				field: "roster",
+				message: '"personas:github" is not a roster agent',
+			}),
+		]);
 	});
 });
 
@@ -711,7 +736,7 @@ describe("package scripts", () => {
 		const result = cli("compile-all.ts", ["--mode=mixed", "--dry-run"]);
 		expect(result.code).toBe(0);
 		expect(result.stderr).toBe(`${LOCAL_AGENTS_WARNING}\n`);
-		expect(result.stdout).toContain("23 would be built, 3 would be pruned.");
+		expect(result.stdout).toContain("22 would be built, 3 would be pruned.");
 		expect(snapshot(root)).toEqual(before);
 	});
 
@@ -831,8 +856,11 @@ describe("fix round 1: paired siblings (D-017)", () => {
 });
 
 describe("fix round 1: publication safety (D-011, D-023)", () => {
-	test("sequential builds: 23 trivial launchers, published three times, each binary prints its own name", async () => {
-		const roster = Array.from({ length: 23 }, (_, i) => `ns:agent-${i}`);
+	test("sequential builds: a roster-sized set of trivial launchers, published three times, each binary prints its own name", async () => {
+		const roster = Array.from(
+			{ length: ROSTER.length },
+			(_, i) => `ns:agent-${i}`,
+		);
 		for (const id of roster) legacy(`agents/ns/${id.slice(3)}.ts`, id);
 		for (let round = 0; round < 3; round++) {
 			const result = await publish(opts({ roster }));
@@ -894,11 +922,11 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 	test("failure messages say whether bin/ was touched", () => {
 		const cause = new Error("EISDIR");
 		expect(
-			describePublishFailure(new PartialPublishError("bin/", 3, 23, cause)),
-		).toBe("bin/ partly updated (3 of 23); rerun compile:all\nEISDIR");
+			describePublishFailure(new PartialPublishError("bin/", 3, 22, cause)),
+		).toBe("bin/ partly updated (3 of 22); rerun compile:all\nEISDIR");
 		expect(
-			describePublishFailure(new PruneError("bin/", 23, "old", cause)),
-		).toBe("bin/ updated (23 of 23), but pruning old failed: EISDIR");
+			describePublishFailure(new PruneError("bin/", 22, "old", cause)),
+		).toBe("bin/ updated (22 of 22), but pruning old failed: EISDIR");
 		expect(describePublishFailure(new Error("bun build failed"))).toBe(
 			"bun build failed\nNothing published; bin/ left untouched.",
 		);
