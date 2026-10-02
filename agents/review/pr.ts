@@ -1,5 +1,3 @@
-#!/usr/bin/env -S bun run
-
 /**
  * PR-REVIEW: Code review a pull request for bugs and guideline compliance
  *
@@ -9,50 +7,46 @@
  * - Project guideline compliance (CLAUDE.md, CONTRIBUTING.md, etc.)
  *
  * Usage:
- *   bun run agents/review/pr.ts              # Auto-detect PR for current branch
- *   bun run agents/review/pr.ts <PR_URL_OR_NUMBER>
- *   bun run agents/review/pr.ts 123
- *   bun run agents/review/pr.ts https://github.com/owner/repo/pull/123
- *   bun run agents/review/pr.ts --comment    # Post summary if no issues found
+ *   review:pr              # Auto-detect PR for current branch
+ *   review:pr <PR_URL_OR_NUMBER>
+ *   review:pr 123
+ *   review:pr https://github.com/owner/repo/pull/123
+ *   review:pr --comment    # Post summary if no issues found
  */
 
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../lib";
-import type { ClaudeFlags } from "../../lib/claude-flags.types";
-import prReviewSettings from "../../settings/pr-review.settings.json" with {
-	type: "json",
-};
-import prReviewSystemPrompt from "../../system-prompts/pr-review-prompt.md" with {
-	type: "text",
-};
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../lib/agent-format/types";
+
+/** Stands in for the detected PR under `--show-prompt`, which never calls `gh` (D-012). */
+export const PREVIEW_PR = "<detected:pr>";
 
 // Claude-specific guideline files
 const GUIDELINE_FILES = ["CLAUDE.md", "AGENTS.md"];
 
+const USAGE = `No PR found for current branch.
+Usage: review:pr [PR_URL_OR_NUMBER]
+Examples:
+  review:pr           # Auto-detect PR for current branch
+  review:pr 123
+  review:pr https://github.com/owner/repo/pull/123
+`;
+
 /**
  * Get the PR number for the current branch using gh CLI
  */
-async function getCurrentBranchPR(): Promise<string | null> {
-	const proc = Bun.spawn(
-		["gh", "pr", "view", "--json", "number", "-q", ".number"],
-		{
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-	);
-	const exitCode = await proc.exited;
-	if (exitCode !== 0) {
+async function getCurrentBranchPR(ctx: PrepareContext): Promise<string | null> {
+	const result = await ctx.runCommand({
+		argv: ["gh", "pr", "view", "--json", "number", "-q", ".number"],
+	});
+	if (result.exitCode !== 0) {
 		return null;
 	}
-	const output = await new Response(proc.stdout).text();
-	return output.trim() || null;
+	return result.stdout.trim() || null;
 }
 
-function buildReviewPrompt(prRef: string, postComment: boolean): string {
+export function buildReviewPrompt(prRef: string, postComment: boolean): string {
 	const guidelineFilesStr = GUIDELINE_FILES.map((f) => `- ${f}`).join("\n");
 
 	return `Provide a code review for pull request: ${prRef}
@@ -185,49 +179,27 @@ Do NOT flag these (they are false positives):
 - Issues silenced via lint ignore comments`;
 }
 
-async function main() {
-	const positionals = getPositionals();
-	let prRef = positionals[0];
-
-	// Auto-detect PR for current branch if no argument provided
-	if (!prRef) {
-		const detectedPR = await getCurrentBranchPR();
-		if (!detectedPR) {
-			console.error("No PR found for current branch.");
-			console.error("Usage: review:pr [PR_URL_OR_NUMBER]");
-			console.error("Examples:");
-			console.error(
-				"  review:pr           # Auto-detect PR for current branch",
-			);
-			console.error("  review:pr 123");
-			console.error("  review:pr https://github.com/owner/repo/pull/123");
-			process.exit(1);
-		}
-		console.log(`Detected PR #${detectedPR} for current branch`);
-		prRef = detectedPR;
+export async function prepare(ctx: PrepareContext): Promise<PrepareResult> {
+	const postComment = ctx.flags.comment === true;
+	const supplied = ctx.args[0];
+	if (supplied)
+		return { initialPrompt: buildReviewPrompt(supplied, postComment) };
+	if (ctx.preview) {
+		return { initialPrompt: buildReviewPrompt(PREVIEW_PR, postComment) };
 	}
 
-	// Check for --comment flag
-	const postComment = parsedArgs.values.comment === true;
-
-	const prompt = buildReviewPrompt(prRef, postComment);
-
-	const flags = buildClaudeFlags(
-		{
-			"append-system-prompt": prReviewSystemPrompt,
-			settings: JSON.stringify(prReviewSettings),
-		},
-		parsedArgs.values as ClaudeFlags,
-	);
-
-	const args = [...flags, prompt];
-
-	const exitCode = await spawnClaudeAndWait({
-		args,
-		env: { CLAUDE_PROJECT_DIR: process.cwd() },
-	});
-
-	process.exit(exitCode);
+	// Auto-detect PR for current branch if no argument provided
+	const detectedPR = await getCurrentBranchPR(ctx);
+	if (!detectedPR) {
+		return { exit: { message: USAGE, code: 1, stream: "stderr" } };
+	}
+	return {
+		initialPrompt: buildReviewPrompt(detectedPR, postComment),
+		// Print mode keeps stdout for the payload, so the notice is dropped there.
+		...(ctx.mode === "print"
+			? {}
+			: {
+					beforeRunMessages: [`Detected PR #${detectedPR} for current branch`],
+				}),
+	};
 }
-
-await main();
