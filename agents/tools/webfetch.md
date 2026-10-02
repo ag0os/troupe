@@ -23,6 +23,7 @@ native:
     args:
       - "--max-turns=3"
       - "--allowedTools=WebFetch"
+      - "--setting-sources=user"
     settings:
       permissions:
         allow: [WebFetch]

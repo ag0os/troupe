@@ -43,7 +43,7 @@ Call WebFetch on this URL and emit a concise factual summary of the page's main 
 
 URL: https://example.com
 --- Argv ---
-["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--","<initial prompt, as above>"]
+["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--setting-sources=user","--","<initial prompt, as above>"]
 "
 `;
 
@@ -93,7 +93,7 @@ URL: https://example.com
 Caller request:
 extract the pricing tiers
 --- Argv ---
-["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--","<initial prompt, as above>"]
+["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--setting-sources=user","--","<initial prompt, as above>"]
 "
 `;
 
@@ -143,7 +143,7 @@ URL: https://example.com
 Caller request:
 list the CLI flags
 --- Argv ---
-["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--","<initial prompt, as above>"]
+["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--setting-sources=user","--","<initial prompt, as above>"]
 "
 `;
 
@@ -190,7 +190,7 @@ Call WebFetch on this URL and return the closest available raw page text with no
 
 URL: https://example.com
 --- Argv ---
-["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--","<initial prompt, as above>"]
+["claude","--print","--append-system-prompt","<system prompt, as above>","--model","haiku","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--setting-sources=user","--","<initial prompt, as above>"]
 "
 `;
 
@@ -237,6 +237,6 @@ Call WebFetch on this URL and emit a concise factual summary of the page's main 
 
 URL: https://example.com
 --- Argv ---
-["claude","--print","--append-system-prompt","<system prompt, as above>","--model","sonnet","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--","<initial prompt, as above>"]
+["claude","--print","--append-system-prompt","<system prompt, as above>","--model","sonnet","--settings","{\\"permissions\\":{\\"allow\\":[\\"WebFetch\\"],\\"deny\\":[\\"Bash\\",\\"Edit\\",\\"Write\\",\\"Read\\",\\"Glob\\",\\"Grep\\",\\"Task\\",\\"WebSearch\\"]}}","--max-turns=3","--allowedTools=WebFetch","--setting-sources=user","--","<initial prompt, as above>"]
 "
 `;

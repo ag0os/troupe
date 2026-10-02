@@ -261,6 +261,12 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Webfetch is called by other agents, and a caller allowed only `tools:webfetch` could otherwise start a Claude session with shell and file access by overriding `--settings` and `--max-turns` after `--`. The legacy launcher had no such route (its parser made those tokens positionals). The mirror would not stop added MCP servers or bypass flags.
   - Decided by: the user, 2026-10-02
 
+- **D-040 - Webfetch loads user settings only** *(Added 2026-10-02)*
+  - Decision: Webfetch declares the native Claude arg `--setting-sources=user`, so the inner Claude loads the user's settings and no project or local settings, whatever directory the framework `--cwd` selects. One real-CLI check of the flag form is part of the TASK-016 smokes.
+  - Alternatives: Make `passthrough: false` also refuse `--cwd` (a framework change that amends D-039); accept it and document that the caller chooses the project context.
+  - Why: The framework `--cwd` lets a caller allowed only `tools:webfetch` pick the directory whose `.claude/settings*.json` hooks, `.mcp.json` servers and `CLAUDE.md` the inner Claude would load; hooks are not tools, so the allow and deny lists do not stop them. The legacy launcher had no `--cwd`.
+  - Decided by: the user, 2026-10-02
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -551,7 +557,7 @@ All except the six specified restrictions declare `[claude,codex]`. *(Amended 20
 | Contain | Claude-only container MCP/allow/deny; remove deepwiki/default; reminder body; Claude flags such as `-p` now follow `--` (D-028) |
 | PR Review | Claude-only; comment flag; prepare PR/conditional prompt; rules |
 | Shepherd | dual; prepare persisted reconstruction, ordered fragments/cwd; on Claude only, the literal `Read(/<realpath of enclosing>/.shepherd/**)` rule plus the additional directory; rejects `ctx.mode === "print"` without a prompt; `--resume` and similar follow `--` |
-| Webfetch | Claude print; flags and framework model; prepare usage/task normalization, max turns fixed at 3 as the native Claude arg `--max-turns=3` with no declared flag *(Amended 2026-10-02, D-037)*, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021); declares `passthrough: false`, so tokens after `--` are its positionals and never reach Claude (D-039) *(Amended 2026-10-02, D-039)* |
+| Webfetch | Claude print; flags and framework model; prepare usage/task normalization, max turns fixed at 3 as the native Claude arg `--max-turns=3` with no declared flag *(Amended 2026-10-02, D-037)*, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021); declares `passthrough: false`, so tokens after `--` are its positionals and never reach Claude (D-039) *(Amended 2026-10-02, D-039)*; declares the native `--setting-sources=user` (D-040) *(Amended 2026-10-02, D-040)* |
 | Coach | dual; prepare init/list, persisted roster/student/integrations, prompt/cwd, dynamic rules returned only when `ctx.backend === "claude"`; a Codex preview is snapshotted |
 
 Flat one-agent prompts move into Markdown bodies. Shared/dynamic fragments remain `system-prompts/expectations.md`, `system-prompts/shepherd/**`, and `system-prompts/coach/**`. Shepherd declares core/built-ins as includes, then prepare appends inherited, charter, local, header. Coach pack frontmatter stays a separate runtime content contract.

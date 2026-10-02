@@ -217,6 +217,9 @@ function expectSealedArgv(argv: readonly string[], words: string) {
 	expect(options.filter((arg) => arg.includes("allowedTools"))).toEqual([
 		"--allowedTools=WebFetch",
 	]);
+	expect(options.filter((arg) => arg.includes("setting-sources"))).toEqual([
+		"--setting-sources=user",
+	]);
 	expect(options).not.toContain("--dangerously-skip-permissions");
 	expect(options).not.toContain("{}");
 	expect(options).not.toContain("Bash");
@@ -577,6 +580,11 @@ describe("--show-prompt envelopes (B-003)", () => {
 		expect(argv.filter((arg) => arg.startsWith("--allowedTools"))).toEqual([
 			"--allowedTools=WebFetch",
 		]);
+		// D-040: only user settings load, so a caller's --cwd cannot bring in
+		// that directory's project hooks, MCP servers or CLAUDE.md.
+		expect(argv.filter((arg) => arg.startsWith("--setting-sources"))).toEqual([
+			"--setting-sources=user",
+		]);
 		expect(argv).not.toContain("--permission-mode");
 	});
 
@@ -608,9 +616,10 @@ describe("--show-prompt envelopes (B-003)", () => {
 			raw: false,
 		});
 		expect(envelope.initialPrompt).toBe(prompt);
-		expect(envelope.argv.slice(-4)).toEqual([
+		expect(envelope.argv.slice(-5)).toEqual([
 			"--max-turns=3",
 			"--allowedTools=WebFetch",
+			"--setting-sources=user",
 			"--",
 			prompt,
 		]);
