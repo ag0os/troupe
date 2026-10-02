@@ -146,6 +146,7 @@ const sourceSchema = z.strictObject({
 		})
 		.partial()
 		.optional(),
+	passthrough: z.boolean().optional(),
 });
 
 /**
@@ -300,6 +301,7 @@ export function materializeAgentSpec(
 	if (source.access) spec.access = source.access;
 	if (source.mcp) spec.mcp = source.mcp;
 	if (source.native) spec.native = source.native;
+	if (source.passthrough !== undefined) spec.passthrough = source.passthrough;
 	return spec;
 }
 

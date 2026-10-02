@@ -754,3 +754,28 @@ describe("fix round 1: MCP keys never carry ${", () => {
 		});
 	}
 });
+
+describe("passthrough opt-out (D-039)", () => {
+	const specOf = (frontmatter: string) =>
+		materializeAgentSpec(parseAgentMarkdown(FILE, md(frontmatter)), {
+			id: "ns:sample",
+			includes: [],
+		});
+
+	test("true and false are accepted and carried on the spec; absent leaves it unset", () => {
+		expect(specOf(`${minimal}\npassthrough: false`).passthrough).toBe(false);
+		expect(specOf(`${minimal}\npassthrough: true`).passthrough).toBe(true);
+		expect("passthrough" in specOf(minimal)).toBe(false);
+	});
+
+	test("any other value is rejected with file, line and field", () => {
+		for (const value of ['"false"', "no-thanks", "0", "[false]", "null"]) {
+			expectIssue(
+				md(`${minimal}\npassthrough: ${value}`),
+				"passthrough",
+				/boolean/,
+				4,
+			);
+		}
+	});
+});

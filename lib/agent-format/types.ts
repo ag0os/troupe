@@ -73,6 +73,11 @@ export interface AgentSource {
 	access?: Access;
 	mcp?: Record<string, McpServer>;
 	native?: NativeDeclarations;
+	/**
+	 * `false` makes tokens after a standalone `--` positional arguments, so
+	 * nothing reaches the backend CLI (D-039). Defaults to `true`.
+	 */
+	passthrough?: boolean;
 }
 
 /** The compiled, backend-neutral spec embedded in each binary. */
@@ -90,6 +95,13 @@ export interface AgentSpec {
 	access?: Access;
 	mcp?: Record<string, McpServer>;
 	native?: NativeDeclarations;
+	/** Present only when declared; absent means `true` (D-039). */
+	passthrough?: boolean;
+}
+
+/** Whether tokens after `--` go to the backend CLI (D-039). */
+export function forwardsPassthrough(spec: Readonly<AgentSpec>): boolean {
+	return spec.passthrough !== false;
 }
 
 export interface CommandRequest {

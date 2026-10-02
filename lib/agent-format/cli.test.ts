@@ -391,3 +391,73 @@ describe("Design §3 framework --model and --print (AC #7)", () => {
 		}
 	});
 });
+
+describe("D-039 a declaration may opt out of backend passthrough", () => {
+	const sealed: AgentSpec = {
+		...claudeOnly,
+		flags: { prompt: { type: "string", description: "Prompt" } },
+		passthrough: false,
+	};
+
+	test("tokens after -- become positionals in order and the tail stays empty", () => {
+		const invocation = run(["--", "a", "-b", "--c"], sealed);
+		expect(invocation.args).toEqual(["a", "-b", "--c"]);
+		expect(invocation.passthrough).toEqual([]);
+		const mixed = run(["x", "--", "y"], sealed);
+		expect(mixed.args).toEqual(["x", "y"]);
+		expect(mixed.passthrough).toEqual([]);
+		expect(run(["x", "--", "--", "-p"], sealed).args).toEqual([
+			"x",
+			"--",
+			"-p",
+		]);
+	});
+
+	test("after --, declared and framework flags are positionals too", () => {
+		const invocation = run(["--", "--prompt", "p", "--help", "--backend"], sealed);
+		expect(invocation.args).toEqual(["--prompt", "p", "--help", "--backend"]);
+		expect(invocation.flags).toEqual({});
+		expect(invocation.backend).toBe("claude");
+	});
+
+	test("tokens before -- are parsed as today: an unknown flag is still an error", () => {
+		expect(failure(["--bogus", "--", "x"], sealed)).toBe(
+			'tools:webfetch: unknown option "--bogus"; this agent passes nothing to the backend CLI, see --help',
+		);
+		expect(run(["--prompt", "p", "--", "x"], sealed).flags).toEqual({
+			prompt: "p",
+		});
+	});
+
+	test("passthrough: true and the default keep the verbatim tail", () => {
+		for (const spec of [orient, { ...orient, passthrough: true }]) {
+			const invocation = run(["x", "--", "-p", "--resume", "id"], spec);
+			expect(invocation.args).toEqual(["x"]);
+			expect(invocation.passthrough).toEqual(["-p", "--resume", "id"]);
+		}
+		expect(failure(["-p"], { ...orient, passthrough: true })).toContain(
+			"Backend flags go after a standalone --",
+		);
+	});
+
+	test("help offers no backend passthrough for an opted-out agent", () => {
+		const outcome = parseCli(sealed, ["--help"], { cwd: root });
+		if (outcome.kind !== "help") throw new Error("expected help");
+		expect(outcome.text).toContain(
+			"Usage: tools:webfetch [options] [args...] [-- args...]\n",
+		);
+		expect(outcome.text).toEndWith(
+			"Passthrough:\n  None. This agent passes nothing to the backend CLI: arguments after\n  a standalone -- are taken as positional arguments.\n",
+		);
+		expect(outcome.text).not.toContain("backend-args");
+		expect(outcome.text).not.toContain("--resume");
+		const open = parseCli({ ...sealed, passthrough: true }, ["--help"], {
+			cwd: root,
+		});
+		if (open.kind !== "help") throw new Error("expected help");
+		expect(open.text).toContain("[-- backend-args...]");
+		expect(open.text).toContain(
+			"Everything after a standalone -- goes to the backend CLI verbatim",
+		);
+	});
+});

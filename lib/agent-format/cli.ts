@@ -7,6 +7,7 @@ import {
 	FRAMEWORK_OPTIONS,
 	FRAMEWORK_SHORTS,
 	type FrameworkOption,
+	forwardsPassthrough,
 } from "./types";
 
 /**
@@ -25,9 +26,9 @@ export interface ParsedInvocation {
 	cwd: string;
 	/** Declared agent flags with defaults applied; booleans default to false. */
 	flags: Record<string, string | boolean>;
-	/** Pre-separator positionals, in order. */
+	/** Positionals in order, plus every post-`--` token when the spec opts out (D-039). */
 	args: string[];
-	/** Every token after the first standalone `--`, verbatim. */
+	/** Every token after the first standalone `--`, verbatim; always empty when the spec opts out (D-039). */
 	passthrough: string[];
 	showPrompt: boolean;
 }
@@ -69,7 +70,9 @@ const HELP_TOKENS = new Set([
 /**
  * Parse a binary's argv (without the executable and script) against its
  * spec. Everything after the first standalone `--` is passthrough and is
- * never inspected (D-013, D-028). Before it, only framework flags, declared
+ * never inspected (D-013, D-028), unless the spec opts out with
+ * `passthrough: false`: then those tokens are positional arguments, appended
+ * to `args` in order, and the tail stays empty (D-039). Before it, only framework flags, declared
  * agent flags and positionals are accepted. `--help`/`-h` anywhere before
  * the separator wins over every other input. The backend is `--backend`,
  * else the first declared backend; the environment is never read (D-021).
@@ -82,7 +85,9 @@ export function parseCli(
 ): CliOutcome {
 	const separator = argv.indexOf("--");
 	const before = separator === -1 ? argv : argv.slice(0, separator);
-	const passthrough = separator === -1 ? [] : argv.slice(separator + 1);
+	const tail = separator === -1 ? [] : argv.slice(separator + 1);
+	const forwards = forwardsPassthrough(spec);
+	const passthrough = forwards ? tail : [];
 
 	if (before.some((token) => HELP_TOKENS.has(token))) {
 		return { kind: "help", text: formatHelp(spec) };
@@ -103,7 +108,9 @@ export function parseCli(
 		const option = lookupOption(spec, written);
 		if (!option) {
 			throw new CliError(
-				`${spec.id}: unknown option "${written}". Backend flags go after a standalone -- (for example: ${spec.id} -- ${written}); see --help`,
+				forwards
+					? `${spec.id}: unknown option "${written}". Backend flags go after a standalone -- (for example: ${spec.id} -- ${written}); see --help`
+					: `${spec.id}: unknown option "${written}"; this agent passes nothing to the backend CLI, see --help`,
 			);
 		}
 		let value: string | true = true;
@@ -141,6 +148,7 @@ export function parseCli(
 		}
 		given[option.name] = value;
 	}
+	if (!forwards) args.push(...tail);
 
 	const backend = resolveBackend(spec, framework.backend);
 	const cwd =
@@ -311,7 +319,9 @@ export function formatHelp(spec: Readonly<AgentSpec>): string {
 	return [
 		`${spec.id}: ${spec.description}`,
 		"",
-		`Usage: ${spec.id} [options] [args...] [-- backend-args...]`,
+		forwardsPassthrough(spec)
+			? `Usage: ${spec.id} [options] [args...] [-- backend-args...]`
+			: `Usage: ${spec.id} [options] [args...] [-- args...]`,
 		"",
 		`Backends: ${[`${first} (default)`, ...rest].join(", ")}`,
 		`Mode: ${spec.mode}`,
@@ -323,8 +333,15 @@ export function formatHelp(spec: Readonly<AgentSpec>): string {
 		...(agent.length > 0 ? table(agent) : ["  (none)"]),
 		"",
 		"Passthrough:",
-		"  Everything after a standalone -- goes to the backend CLI verbatim,",
-		`  for example: ${spec.id} -- --resume <session-id>`,
+		...(forwardsPassthrough(spec)
+			? [
+					"  Everything after a standalone -- goes to the backend CLI verbatim,",
+					`  for example: ${spec.id} -- --resume <session-id>`,
+				]
+			: [
+					"  None. This agent passes nothing to the backend CLI: arguments after",
+					"  a standalone -- are taken as positional arguments.",
+				]),
 		"",
 	].join("\n");
 }

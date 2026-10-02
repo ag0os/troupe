@@ -989,3 +989,45 @@ describe("fix round 1", () => {
 		}
 	});
 });
+
+describe("passthrough opt-out fails closed (D-039)", () => {
+	const sealed = spec({ passthrough: false });
+
+	test("both adapters refuse a nonempty tail for a passthrough: false spec", () => {
+		for (const adapter of [claudeAdapter, codexAdapter]) {
+			for (const mode of ["interactive", "print", "stream"] as const) {
+				expect(() =>
+					adapter.build(
+						invocation(adapter.id, {
+							spec: sealed,
+							mode,
+							passthrough: ["--dangerously-skip-permissions"],
+						}),
+						PATHS,
+					),
+				).toThrow(
+					"test:agent declares passthrough: false, but the invocation carries 1 backend argument(s)",
+				);
+			}
+		}
+	});
+
+	test("an empty tail builds, and the default and passthrough: true still forward it", () => {
+		expect(claude({ spec: sealed, initialPrompt: "go" }).slice(-2)).toEqual([
+			"--",
+			"go",
+		]);
+		expect(codex({ spec: sealed, initialPrompt: "go" }).slice(-2)).toEqual([
+			"--",
+			"go",
+		]);
+		for (const agent of [spec(), spec({ passthrough: true })]) {
+			expect(
+				claude({ spec: agent, passthrough: ["-p"], initialPrompt: "go" }),
+			).toContain("-p");
+			expect(
+				codex({ spec: agent, passthrough: ["--x"], initialPrompt: "go" }),
+			).toContain("--x");
+		}
+	});
+});

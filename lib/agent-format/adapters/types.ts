@@ -56,7 +56,7 @@ export interface Invocation {
 	flags: Readonly<Record<string, string | boolean>>;
 	extraAllowRules?: ExtraAllowRules;
 	mcp: Record<string, ResolvedMcpServer>;
-	/** Verbatim tail after the user's `--`. */
+	/** Verbatim tail after the user's `--`; always empty when the spec opts out (D-039). */
 	passthrough: readonly string[];
 	/** Probed by the runner in `cwd`; Codex exec skips the Git check only when false. */
 	insideGitWorktree: boolean;

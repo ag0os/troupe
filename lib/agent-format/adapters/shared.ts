@@ -59,6 +59,12 @@ export function assertInvocation(inv: Invocation, id: Backend): void {
 			`${inv.spec.id} does not declare the ${id} backend (declared: ${inv.spec.backends.join(", ")})`,
 		);
 	}
+	// D-039: an agent that opts out of passthrough never forwards a tail.
+	if (inv.spec.passthrough === false && inv.passthrough.length > 0) {
+		throw new Error(
+			`${inv.spec.id} declares passthrough: false, but the invocation carries ${inv.passthrough.length} backend argument(s)`,
+		);
+	}
 	const problems = nativeDeclarationProblems(inv.spec.native ?? {});
 	if (problems.length > 0) {
 		throw new Error(

@@ -106,7 +106,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Decided by: planner-proposed; preview flag and side-effect rule revised 2026-09-29 after review
 
 - **D-013 - Declaration guards preserve verbatim user passthrough**
-  - Decision: Reject reserved prompt transport, lifecycle hooks, and `base_instructions` in authored native declarations; structurally validate long equals/two-token and `-c` keys. Never inspect/rewrite post-`--` user tokens. Adapters themselves never synthesize Codex exec `-a` or `base_instructions`.
+  - Decision: Reject reserved prompt transport, lifecycle hooks, and `base_instructions` in authored native declarations; structurally validate long equals/two-token and `-c` keys. Never inspect/rewrite post-`--` user tokens, unless the declaration opts out with `passthrough: false`, in which case they are positional arguments and none reach the backend (D-039) *(Amended 2026-10-02, D-039)*. Adapters themselves never synthesize Codex exec `-a` or `base_instructions`.
   - Alternatives: Filter user escape tokens or substring-scan payloads.
   - Why: Preserve both halves of REQ-004. Addresses `review-1.md` Missing Coverage.
   - Decided by: planner, revision from `review-1.md` Missing Coverage
@@ -190,7 +190,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Decided by: planner, 2026-09-29 after review
 
 - **D-028 - Backend flags now follow `--`** *(Added 2026-09-29 after review)*
-  - Decision: Strict pre-`--` parsing (REQ-004) means backend flags such as `--resume`, `--permission-mode` and Claude's `-p` must follow `--` (for example `shepherd -- --resume <id>`). This is an intended user-visible change from the spec's D2/D3 fixes, not a regression. No unknown-flag forwarding or `-p` alias is added.
+  - Decision: Strict pre-`--` parsing (REQ-004) means backend flags such as `--resume`, `--permission-mode` and Claude's `-p` must follow `--` (for example `shepherd -- --resume <id>`). This is an intended user-visible change from the spec's D2/D3 fixes, not a regression. No unknown-flag forwarding or `-p` alias is added. An agent that declares `passthrough: false` forwards nothing after `--`; those tokens are its positional arguments (D-039) *(Amended 2026-10-02, D-039)*.
   - Alternatives: Forward unknown flags for Contain, Shepherd and Coach, which re-opens D3.
   - Why: Spec REQ-004 is explicit; the docs that promise direct passthrough must change with it. Addresses independent-review finding 11.
   - Decided by: planner, 2026-09-29 after review, applying spec REQ-004
@@ -255,6 +255,12 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: Coach's `prepare` composes its prompt from built-in texts (core, coordinator, student scaffold, seed packs) in an order that starts with the dynamic student profile, which static includes cannot produce, and `--init` writes the seed packs verbatim. Importing text runs no code, so the Design §4 guard against launches on import still holds; an independent review of the rule found no form that executes. Inlining would duplicate `system-prompts/coach/**`, which Design §8 keeps as the source.
   - Decided by: the Shepherd (forge-1002) during implementation, 2026-10-02, reported to the user; re-openable
 
+- **D-039 - A declaration may opt out of backend passthrough** *(Added 2026-10-02)*
+  - Decision: A declaration may set `passthrough: false` (optional boolean, default `true`, strict like every other field, carried on `AgentSpec`). For such an agent a standalone `--` ends option parsing and every token after it is a positional argument, appended to `args` in order; nothing after `--` reaches the backend, so `Invocation.passthrough` is always empty, and both adapters fail closed on a nonempty tail. Tokens before `--` are parsed as today. The generated help does not offer backend passthrough and says arguments after `--` are positional, and the unknown-option error does not suggest `--` *(Amended 2026-10-02, D-039)*. With the default, nothing changes. Webfetch declares `passthrough: false`.
+  - Alternatives: Accept, and document that Webfetch restricts the inner model, not the caller; mirror the deny list with a native `--disallowedTools`.
+  - Why: Webfetch is called by other agents, and a caller allowed only `tools:webfetch` could otherwise start a Claude session with shell and file access by overriding `--settings` and `--max-turns` after `--`. The legacy launcher had no such route (its parser made those tokens positionals). The mirror would not stop added MCP servers or bypass flags.
+  - Decided by: the user, 2026-10-02
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -267,7 +273,7 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
 - Source: REQ-004, decision 5 (D-021: no env selection)
 - Observer: terminal user
 - Entry point: any binary's framework/agent flags, positionals, environment compatibility, and `--`
-- Outcome: framework and declared bool/enum/string flags are consumed with defaults and both value forms; unknown pre-separator input fails, so backend flags go after `--` (D-028); tail tokens remain verbatim. Backend precedence follows D-021: explicit `--backend`, then the first declared backend; an explicit `--backend` naming an undeclared backend fails. No binary reads `FORGE_BACKEND`.
+- Outcome: framework and declared bool/enum/string flags are consumed with defaults and both value forms; unknown pre-separator input fails, so backend flags go after `--` (D-028); tail tokens remain verbatim, unless the declaration opts out with `passthrough: false`, which makes them positional arguments (D-039) *(Amended 2026-10-02, D-039)*. Backend precedence follows D-021: explicit `--backend`, then the first declared backend; an explicit `--backend` naming an undeclared backend fails. No binary reads `FORGE_BACKEND`.
 
 ### B-003 - Real composed prompts are previewable
 - Source: REQ-002–REQ-004, ACC-002
@@ -374,8 +380,11 @@ interface AgentSource {
     claude?: { args?: NativeArg[]; settings?: Record<string,unknown> };
     codex?: { args?: NativeArg[]; config?: Record<string,unknown> };
   };
+  passthrough?: boolean;   // default true; false: tokens after -- are positional (D-039)
 }
 ```
+
+`passthrough` is optional and defaults to `true`; `false` keeps every token after `--` away from the backend (D-039) *(Amended 2026-10-02, D-039)*.
 
 `AgentSpec` adds path-derived `id` and resolved/defaulted prompt/mode fields and removes `includes`. Defaults: append, interactive, `{{args}}`. Empty body emits no prompt flag. Unknown keys error recursively except opaque native payloads, which are still checked for forbidden lifecycle/prompt keys. Duplicate/reserved flags/shorts/backends, enum-default mismatch, mixed MCP transports, undeclared native backend, bad references, and includes whose realpath is outside `agents/` or `system-prompts/` (D-027) error with file/field. Body precedes stable-separated includes; binaries require no checkout assets.
 
@@ -383,7 +392,7 @@ interface AgentSource {
 
 Templates allow `{{args}}`, `{{cwd}}`, `{{flag.name}}`, and one level of `if / else if / else` whose conditions are a boolean flag, an enum flag equal to a declared value, or `args` (true when positionals are non-empty) (D-025). Nesting is forbidden; malformed/unknown/impossible references fail compile. No expressions/IO/commands. Orient's template therefore renders quick, else each focus value, else full orientation, then `Additional context: {{args}}` only under `if args`.
 
-CLI splits on first standalone `--`; tail is untouched. Before it, strict long separate/equals forms, declared shorts, booleans, and positionals apply. Framework `--model` overrides selected declared model; `--print` sets print; show supersedes execution. Backend order is D-021 (`--backend`, then the first declared backend; no environment values). Help covers description/default backend/mode/framework and agent flags/defaults/passthrough. Preview is exactly:
+CLI splits on first standalone `--`; tail is untouched, except that for a declaration with `passthrough: false` the tokens after it are positional arguments appended to `args` and the tail is empty (D-039) *(Amended 2026-10-02, D-039)*. Before it, strict long separate/equals forms, declared shorts, booleans, and positionals apply. Framework `--model` overrides selected declared model; `--print` sets print; show supersedes execution. Backend order is D-021 (`--backend`, then the first declared backend; no environment values). Help covers description/default backend/mode/framework and agent flags/defaults/passthrough. Preview is exactly:
 
 ```text
 Backend: <claude|codex>
@@ -459,7 +468,7 @@ interface Invocation {
   flags: Readonly<Record<string,string|boolean>>;
   extraAllowRules?: { rules: string[]; additionalDirectories?: string[] };
   mcp: Record<string, ResolvedMcpServer>;         // McpServer with every string leaf a ResolvedValue (placeholders in preview)
-  passthrough: readonly string[];                  // verbatim tail after --
+  passthrough: readonly string[];                  // verbatim tail after --; always empty for passthrough: false (D-039) *(Amended 2026-10-02, D-039)*
   insideGitWorktree: boolean;                      // probed by run.ts, input to Codex exec argv
 }
 interface ResourceNeeds { promptFile?: string /* text to write */; tmpDir?: boolean }
@@ -482,7 +491,7 @@ interface BackendAdapter {
 
 `run.ts` asks the adapter for `resources`, creates them (owner-only prompt file, clean TMPDIR) or substitutes placeholders in preview, then calls `build`. It probes `git rev-parse --is-inside-work-tree` in the effective cwd through the runner command facility before building a Codex print/stream plan, so the adapter stays pure. A new backend adds one adapter module and one id; agent files do not change (D-002).
 
-Claude native settings and prepared rules merge once; empty settings/MCP are omitted. Native args precede verbatim user tail; adapter owns final prompt placement. Codex append text is JSON-stringified; replace temp files are owner-only. Claude launches retain unique clean `TMPDIR`. Both are runner-owned resources cleaned on every exit.
+Claude native settings and prepared rules merge once; empty settings/MCP are omitted. Native args precede verbatim user tail (always empty for a `passthrough: false` declaration, and refused by both adapters if not, D-039 *(Amended 2026-10-02, D-039)*); adapter owns final prompt placement. Codex append text is JSON-stringified; replace temp files are owner-only. Claude launches retain unique clean `TMPDIR`. Both are runner-owned resources cleaned on every exit.
 
 `StreamDecoder` maps complete JSON lines to ordered stdout/stderr emissions. Claude assistant text goes stdout and non-assistant canonical JSON stderr; Codex completed agent-message text goes stdout and other canonical JSON stderr. Malformed JSON, decoder throw, or incomplete non-decodable final line produces a stderr diagnostic/code 1, terminates/awaits the backend when needed, cleans resources/listeners, and suppresses after-run completion messages. Already-emitted output cannot be retracted.
 
@@ -542,7 +551,7 @@ All except the six specified restrictions declare `[claude,codex]`. *(Amended 20
 | Contain | Claude-only container MCP/allow/deny; remove deepwiki/default; reminder body; Claude flags such as `-p` now follow `--` (D-028) |
 | PR Review | Claude-only; comment flag; prepare PR/conditional prompt; rules |
 | Shepherd | dual; prepare persisted reconstruction, ordered fragments/cwd; on Claude only, the literal `Read(/<realpath of enclosing>/.shepherd/**)` rule plus the additional directory; rejects `ctx.mode === "print"` without a prompt; `--resume` and similar follow `--` |
-| Webfetch | Claude print; flags and framework model; prepare usage/task normalization, max turns fixed at 3 as the native Claude arg `--max-turns=3` with no declared flag *(Amended 2026-10-02, D-037)*, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021) |
+| Webfetch | Claude print; flags and framework model; prepare usage/task normalization, max turns fixed at 3 as the native Claude arg `--max-turns=3` with no declared flag *(Amended 2026-10-02, D-037)*, missing URL as a stdout `ERROR:` early exit with code 64; native WebFetch allow and Bash/Edit/Write/Read/Glob/Grep/Task/WebSearch deny; typed `finish` payload/ERROR; ignores an exported `FORGE_BACKEND` (D-021); declares `passthrough: false`, so tokens after `--` are its positionals and never reach Claude (D-039) *(Amended 2026-10-02, D-039)* |
 | Coach | dual; prepare init/list, persisted roster/student/integrations, prompt/cwd, dynamic rules returned only when `ctx.backend === "claude"`; a Codex preview is snapshotted |
 
 Flat one-agent prompts move into Markdown bodies. Shared/dynamic fragments remain `system-prompts/expectations.md`, `system-prompts/shepherd/**`, and `system-prompts/coach/**`. Shepherd declares core/built-ins as includes, then prepare appends inherited, charter, local, header. Coach pack frontmatter stays a separate runtime content contract.
@@ -592,7 +601,7 @@ Snapshots use temp workspaces/fake time. Planning-time structural investigation 
 - **Legacy spec waiver:** current human direction authorizes use as-is, not new intent. Ratified collision still halts (`review-2.md PR-013`).
 - **Backend drift:** repeat relevant experiment; ratified mapping conflicts halt.
 - **Mixed-mode leakage:** strict cutover must prove no non-extension TS (paired or unpaired) or fallback remains; otherwise B-009 fails.
-- **Native/user escape:** authored data guarded, user tail raw; repeated prepared needs trigger core reconsideration.
+- **Native/user escape:** authored data guarded, user tail raw unless the declaration opts out with `passthrough: false` (D-039) *(Amended 2026-10-02, D-039)*; repeated prepared needs trigger core reconsideration.
 - **Secrets/trust:** inability to prevent preview/error/debug disclosure aborts interpolation.
 - **Extension creep:** direct child/backend spawn or framework parsing snaps back.
 - **Permission asymmetry:** safety-dependent Claude rules require restriction/escalation, never Codex prose emulation.

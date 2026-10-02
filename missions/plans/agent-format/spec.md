@@ -47,7 +47,8 @@ correctly, and the old Claude-only launch plumbing is gone.
 - **Flags:** framework flags `--backend`, `--cwd`, `--model`, `--print`, `--show-prompt` (prints
   the resolved prompt and the argv per backend, then exits) and `--help` (generated from the spec).
   Declared agent flags (bool, enum, string, with defaults) are consumed and never forwarded. Anything
-  after `--` passes through to the backend CLI verbatim. `--flag value` and `--flag=value` both
+  after `--` passes through to the backend CLI verbatim, unless the agent declares
+  `passthrough: false`, which makes those tokens positional arguments (amended 2026-10-02, D-039). `--flag value` and `--flag=value` both
   work (fixes D2 and D3).
 - **Code hooks:** `prepare(ctx)` receives the parsed flags, args, cwd, backend and spec. It returns
   overrides (system prompt fragments, initial prompt, extra allow rules, cwd), or an early exit with
