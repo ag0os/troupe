@@ -30,6 +30,9 @@ strings, or docs). "Leaks" = picked up from the user's global state unless suppr
 | 4d | Skip all | `--dangerously-skip-permissions` **D** | `--dangerously-bypass-approvals-and-sandbox` **D** (probe blocked by my own safety classifier) |
 | 5a | MCP stdio, per run | `--mcp-config '<json>'` (+ `--strict-mcp-config`) **V** | `-c 'mcp_servers.<n>={command=...,args=[...],env={...}}'` **V** (tools are deferred behind `tool_search`) |
 | 5b | MCP http, per run | `{"type":"http","url":...,"headers":{...}}` **V** | `-c 'mcp_servers.<n>={url="...",http_headers={...}}'` **V** |
+| 5c | MCP http header from env (D-029) | `"headers":{"X":"${VAR}"}` in inline `--mcp-config` expands from the launch env **V** (2026-10-01, Claude Code 2.1.287) | `env_http_headers={X="VAR"}` sends the value of `VAR` **V**; `bearer_token_env_var="VAR"` sends `Authorization: Bearer <value>` **V** (2026-10-01, Codex 0.159.3) |
+| 5d | Literal `${X}` in a non-secret MCP value | **Expanded too** **V**: `lit-${X}` arrives as `lit-<value of X>`; `${X:-d}` gives the default; an unset `${X}` stays literal; `$${X}` gives `$<value>` and `\${X}` gives `\<value>`, so no escape keeps it literal (2026-10-01, 2.1.287) | n/a: `http_headers` values are sent verbatim **V** |
+| 5e | stdio MCP `cwd` | **Not honored** **V**: `"cwd":"<dir>"` is accepted silently and the server starts in Claude's own cwd; `claude mcp add` has no cwd option (2026-10-01, 2.1.287) | `cwd="<dir>"` honored: the server starts in `<dir>` **V** (2026-10-01, 0.159.3) |
 | 6 | Hooks, per run | `--settings '{"hooks":{...}}'` **V** | `-c 'hooks.<Event>=[...]'` **plus** `--dangerously-bypass-hook-trust` **V** (silently skipped without it **V**) |
 | 7a | Settings overlay | `--settings <file-or-json>` **V**; `--setting-sources` **V** | `-c key=value` (any key) **V**; `-p/--profile <name>` = `$CODEX_HOME/<name>.config.toml` only **V** |
 | 7b | Isolation | `--setting-sources ""` **V**, `--strict-mcp-config` **V**, `--bare` (API key only **V**), `--safe-mode` **D** | `exec --ignore-user-config` **V** (exec only **V**); `CODEX_HOME=<dir>` **V** (loses auth) |
@@ -203,6 +206,23 @@ to the conversation on resume **D** (help text).
 - Runtime gap: `buildMcpArgs` in `codex-cli.ts` only translates `command/args/env`. HTTP servers
   (`type/url/headers`) are dropped. Map them to `url` + `http_headers` (also **D**:
   `bearer_token_env_var`, `startup_timeout_sec`, `enabled`, `enabled_tools`, `disabled_tools`, `cwd`).
+
+### 2.5a D-029 env-reference experiment (2026-10-01, TASK-006)
+
+Versions: Claude Code 2.1.287, Codex 0.159.3. Scratch: the TASK-006 session scratchpad `d029/` (probe sources below are reproduced here so the run can be repeated).
+
+Method. A Bun HTTP server on `127.0.0.1:8799` answers MCP JSON-RPC (`initialize`, `tools/list`, notifications) on any path and logs each request's path, method and headers. A Bun stdio server appends `{server, cwd: process.cwd()}` to a log at start and answers `initialize`/`tools/list`. Every CLI ran from a directory `run/`, with the stdio server's declared `cwd` set to a different directory `cwdprobe/`.
+
+- Claude, run 1: `TROUPE_MCP_PROBE_X_SECRET=secret-from-env-123 TROUPE_LITERAL_PROBE=expanded-literal claude -p --model haiku --strict-mcp-config --mcp-config '{"mcpServers":{"probe":{"type":"http","url":"http://127.0.0.1:8799/mcp","headers":{"X-Secret":"${TROUPE_MCP_PROBE_X_SECRET}","X-Literal":"lit-${TROUPE_LITERAL_PROBE}","X-Plain":"plain-value"}},"stdioprobe":{"type":"stdio","command":"<bun>","args":["<stdio-mcp.ts>"],"env":{...},"cwd":"<cwdprobe>"}}}' -- "Reply with the single word OK." </dev/null`.
+  Exit 0. Every request (`server/discover`, `initialize`, `notifications/initialized`, ...) carried `x-secret: secret-from-env-123`, `x-literal: lit-expanded-literal`, `x-plain: plain-value`. The stdio log read `{"server":"claude","cwd":"<run>"}`, not `<cwdprobe>`.
+- Claude, run 2 (escapes): headers `X-Unset: ${TROUPE_UNSET_PROBE}`, `X-Dollar2: $${TROUPE_LITERAL_PROBE}`, `X-Backslash: \${TROUPE_LITERAL_PROBE}`, `X-Default: ${TROUPE_UNSET_PROBE:-fallback}`. Received: `${TROUPE_UNSET_PROBE}`, `$expanded-literal`, `\expanded-literal`, `fallback`.
+- Codex: `TROUPE_MCP_PROBE_X_SECRET=secret-from-env-123 TROUPE_MCP_BEARER_AUTHORIZATION=bearer-tok-456 codex exec --skip-git-repo-check --ephemeral -c 'mcp_servers.probe={url="http://127.0.0.1:8799/mcp", http_headers={X-Plain="plain-value"}, env_http_headers={X-Secret="TROUPE_MCP_PROBE_X_SECRET"}}' -c 'mcp_servers.bearer={url="http://127.0.0.1:8799/bearer", bearer_token_env_var="TROUPE_MCP_BEARER_AUTHORIZATION"}' -c 'mcp_servers.stdioprobe={command="<bun>", args=["<stdio-mcp.ts>"], env={...}, cwd="<cwdprobe>"}' -- "Reply with the single word OK." </dev/null`.
+  The model call failed on the account's usage limit (exit 1), but MCP startup happens first: `/mcp` received `initialize`, `notifications/initialized`, `tools/list` with `x-plain: plain-value` and `x-secret: secret-from-env-123`; `/bearer` received the same with `authorization: Bearer bearer-tok-456`. The stdio log read `{"server":"codex","cwd":"<cwdprobe>"}`.
+
+Result.
+- **Pass:** Claude `${VAR}` header expansion; Codex `env_http_headers`; Codex `bearer_token_env_var`; Codex stdio `cwd`.
+- **Fail (Backend drift, halts TASK-006):** Claude ignores stdio `cwd` silently, so the Claude adapter's `cwd` field has no effect.
+- **Conflict (halts TASK-006):** Claude also expands `${VAR}` in literal, non-interpolated MCP strings, and no tested escape keeps them literal. A literal value containing `${NAME}` of a set variable therefore does not "map literally" on Claude as D-029 requires.
 
 ### 2.6 Hooks
 
