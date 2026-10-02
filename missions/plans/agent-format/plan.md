@@ -243,6 +243,12 @@ The rename, third backends, backend lifecycle hooks, Codex emulation of Claude r
   - Why: The user, 2026-10-02: "the github agent is providing a complexity that we don't need by now and I haven't used it in ages and still coupled with things like one password let's just remove that one I don't care about it". The TASK-013 review also left three majors unresolved: the run was no longer isolated from user config (no `--strict-mcp-config` or `--setting-sources ""`), its seven tools had no permission grant in stream mode, and the token's environment variable is readable by a same-user `ps eww`.
   - Decided by: the user, 2026-10-02
 
+- **D-038 - Extensions may import text from `system-prompts/`** *(Added 2026-10-02 during TASK-014)*
+  - Decision: A paired extension may import a file as text in exactly one form: a single default import with attributes exactly `with { type: "text" }` and a relative specifier ending in `.md` that resolves, by realpath, to a regular file under the repository's `system-prompts/`. Imports are resolved from the extension's real path. Every other import that carries attributes is rejected, package specifiers included. The compiled binary embeds the text.
+  - Alternatives: Let `prepare` replace the compiled prompt; inline the texts as string constants in the extension; read `system-prompts/` from disk at run time.
+  - Why: Coach's `prepare` composes its prompt from built-in texts (core, coordinator, student scaffold, seed packs) in an order that starts with the dynamic student profile, which static includes cannot produce, and `--init` writes the seed packs verbatim. Importing text runs no code, so the Design §4 guard against launches on import still holds; an independent review of the rule found no form that executes. Inlining would duplicate `system-prompts/coach/**`, which Design §8 keeps as the source.
+  - Decided by: the Shepherd (forge-1002) during implementation, 2026-10-02, reported to the user; re-openable
+
 ## Behaviors
 
 ### B-001 - Definitions compile strictly
@@ -387,7 +393,7 @@ Nothing else reaches stdout in preview: no prepare output, no before/after-run m
 
 ### 4. Extension and cancellation contract
 
-The compiler reads TypeScript syntax without importing it and generated entries import only reserved extension exports. Because an ES import still evaluates the whole module, static inspection also rejects a paired extension whose top level contains anything other than imports, exports, type/interface declarations, function/class declarations, and `const` declarations with side-effect-free initializers (literals, arrow/function expressions, object/array literals of those). Value imports are limited to packages, builtins and the framework module; relative imports, side-effect imports and re-exports are rejected, because importing a module runs it. The inspection guards against accidental launches, not against a hostile author. Expression statements, top-level `await`, `if`/`try` blocks and call-expression initializers fail compile with file and line.
+The compiler reads TypeScript syntax without importing it and generated entries import only reserved extension exports. Because an ES import still evaluates the whole module, static inspection also rejects a paired extension whose top level contains anything other than imports, exports, type/interface declarations, function/class declarations, and `const` declarations with side-effect-free initializers (literals, arrow/function expressions, object/array literals of those). Value imports are limited to packages, builtins and the framework module; relative imports, side-effect imports and re-exports are rejected, because importing a module runs it. The one exception is a text import of a `.md` file under `system-prompts/` (D-038), which runs no code *(Amended 2026-10-02, D-038)*. The inspection guards against accidental launches, not against a hostile author. Expression statements, top-level `await`, `if`/`try` blocks and call-expression initializers fail compile with file and line.
 
 ```ts
 interface CommandRequest { argv: [string, ...string[]]; cwd?: string; env?: Record<string,string> }

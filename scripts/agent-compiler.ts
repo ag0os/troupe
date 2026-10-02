@@ -129,6 +129,9 @@ export async function loadAgentDefinition(
 	if (!existsSync(sibling)) return { id, file: display, spec };
 
 	const siblingDisplay = relative(repoRoot, sibling);
+	// Bun resolves an extension's imports from its real location, so the
+	// checks do too; a symlinked extension is judged where it really lives.
+	const importBase = dirname(realpathSync(sibling));
 	const frameworkDir = join(repoRoot, FRAMEWORK_DIR);
 	const inspection = inspectExtension(
 		siblingDisplay,
@@ -136,13 +139,13 @@ export async function loadAgentDefinition(
 		{
 			isFrameworkImport: (specifier) =>
 				existsSync(frameworkDir) &&
-				moduleCandidates(resolve(dirname(sibling), specifier)).some(
+				moduleCandidates(resolve(importBase, specifier)).some(
 					(candidate) =>
 						existsSync(candidate) &&
 						isInside(realpathSync(frameworkDir), realpathSync(candidate)),
 				),
 			textImportProblem: (specifier) =>
-				textImportProblem(repoRoot, sibling, specifier),
+				textImportProblem(repoRoot, importBase, specifier),
 		},
 	);
 	// A sibling without reserved exports is not an extension, unless an
@@ -212,20 +215,26 @@ async function readIncludes(
 }
 
 /**
- * A text import must name a relative path to an existing file whose realpath
- * is under `system-prompts/`, the same root the watcher covers (D-027).
+ * A text import must name a relative path, from the extension's real
+ * directory, to an existing regular file whose realpath is under
+ * `system-prompts/`, the same root the watcher covers (D-027). A directory
+ * is refused: Bun would apply module resolution (`index.*`, `package.json`)
+ * to it and embed whatever that finds.
  */
 function textImportProblem(
 	repoRoot: string,
-	extension: string,
+	importBase: string,
 	specifier: string,
 ): string | undefined {
 	if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
 		return `text import "${specifier}" must be a relative path into ${TEXT_IMPORT_DIR}/`;
 	}
-	const target = resolve(dirname(extension), specifier);
+	const target = resolve(importBase, specifier);
 	if (!existsSync(target)) {
 		return `text import "${specifier}" does not exist`;
+	}
+	if (!statSync(target).isFile()) {
+		return `text import "${specifier}" is not a file`;
 	}
 	const textRoot = join(repoRoot, TEXT_IMPORT_DIR);
 	if (
@@ -257,7 +266,7 @@ function isInside(dir: string, path: string): boolean {
  * that does work on import; it is not a sandbox against a hostile author.
  * Allowed at the top level: `import type`, value imports from packages,
  * builtins and the framework module, default imports carrying exactly
- * `with { type: "text" }` of a non-script file under `system-prompts/`
+ * `with { type: "text" }` of a `.md` file under `system-prompts/`
  * (importing text runs no code), local exports, type/interface
  * declarations, function declarations, classes extending a plain identifier,
  * enums with literal initializers, and `const` declarations with
@@ -524,8 +533,8 @@ function isBareSpecifier(specifier: string): boolean {
 
 type ImportRules = Required<InspectOptions>;
 
-/** File types a text import may not name: their text is code. */
-const SCRIPT_EXTENSION = /\.(?:[cm]?[jt]sx?|json)$/i;
+/** The only file type a text import may name: prompt Markdown. */
+const TEXT_EXTENSION = ".md";
 
 function importProblem(
 	statement: ts.Statement,
@@ -554,8 +563,8 @@ function importProblem(
 
 /**
  * The one import form that carries attributes: `import name from "<file>"
- * with { type: "text" }`, nothing more, of a non-script file the repository
- * rules accept. Any other attribute use is rejected, packages included.
+ * with { type: "text" }`, nothing more, of a `.md` file the repository rules
+ * accept. Any other attribute use is rejected, packages included.
  */
 function textImportShapeProblem(
 	statement: ts.ImportDeclaration,
@@ -580,8 +589,8 @@ function textImportShapeProblem(
 	if (!clause.name || clause.namedBindings) {
 		return `text import "${specifier}" must be a single default import`;
 	}
-	if (SCRIPT_EXTENSION.test(specifier)) {
-		return `text import "${specifier}" names a script; only prompt text may be imported as text`;
+	if (!specifier.endsWith(TEXT_EXTENSION)) {
+		return `text import "${specifier}" must name a ${TEXT_EXTENSION} file under ${TEXT_IMPORT_DIR}/`;
 	}
 	return rules.textImportProblem(specifier);
 }

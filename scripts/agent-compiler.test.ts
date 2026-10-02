@@ -314,6 +314,11 @@ describe("extension text imports", () => {
 		["under agents/", "agents/doc.md", "../agents/doc.md"],
 		["under lib/", "lib/doc.md", "../lib/doc.md"],
 		["at the repository root", "doc.md", "../doc.md"],
+		[
+			"in a sibling directory that shares the prefix",
+			"system-prompts-evil/x.md",
+			"../system-prompts-evil/x.md",
+		],
 	])("rejects a text import %s", async (_, path, specifier) => {
 		write(path, "Doc text");
 		const issue = await rejection(textHook(specifier));
@@ -343,10 +348,73 @@ describe("extension text imports", () => {
 	test.each([
 		"helper.ts",
 		"helper.js",
-	])("rejects a script specifier (%s) carrying type: text", async (name) => {
+		"notes.txt",
+		"addon.node",
+		"noext",
+	])("rejects a non-.md specifier (%s) carrying type: text", async (name) => {
 		write(`system-prompts/${name}`, "export const x = 1;\n");
 		const issue = await rejection(textHook(`../system-prompts/${name}`));
-		expect(issue?.message).toContain("names a script");
+		expect(issue?.line).toBe(2);
+		expect(issue?.message).toBe(
+			`text import "../system-prompts/${name}" must name a .md file under system-prompts/; extensions must not run code on import`,
+		);
+	});
+
+	test.each([
+		["holding an index module", "index.ts", 'console.log("INDEX");\n'],
+		[
+			"holding a package.json that redirects outside",
+			"package.json",
+			'{"main":"../../outside.md"}\n',
+		],
+	])("rejects a directory %s, with file and line", async (_, name, content) => {
+		write("outside.md", "Outside text");
+		write(`system-prompts/dir.md/${name}`, content);
+		const issue = await rejection(textHook("../system-prompts/dir.md"));
+		expect(issue?.line).toBe(2);
+		expect(issue?.message).toContain(
+			'text import "../system-prompts/dir.md" is not a file',
+		);
+	});
+
+	test("a symlinked extension is judged from its real location for text imports", async () => {
+		// From the link (agents/), the specifier names system-prompts/doc.md;
+		// from the real file (x1/x2/x3/), Bun would load x1/x2/system-prompts/doc.md.
+		write("system-prompts/doc.md", "Checked text");
+		write("x1/x2/system-prompts/doc.md", "Divergent text");
+		write("x1/x2/x3/a.ts", textHook("../system-prompts/doc.md"));
+		write("agents/a.md", `${header}---\nBody\n`);
+		symlinkSync(join(root, "x1/x2/x3/a.ts"), join(root, "agents/a.ts"));
+		const [issue] = await issuesOf("agents/a.md");
+		expect(issue).toMatchObject({ file: "agents/a.ts", line: 2 });
+		expect(issue?.message).toContain("resolves outside system-prompts/");
+	});
+
+	test("a symlinked extension is judged from its real location for framework imports", async () => {
+		// From the link the import names the real framework; from the real file
+		// it names x1/x2/lib/agent-format/cli.ts, which would run on import.
+		const marker = join(root, "ran-on-import");
+		write("lib/agent-format/cli.ts", "export const v = 1;\n");
+		write(
+			"x1/x2/lib/agent-format/cli.ts",
+			`import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "x");\nexport const v = 1;\n`,
+		);
+		write(
+			"x1/x2/x3/a.ts",
+			'import { v } from "../lib/agent-format/cli.ts";\nexport function prepare() { return { initialPrompt: String(v) }; }\n',
+		);
+		write("agents/a.md", `${header}---\nBody\n`);
+		symlinkSync(join(root, "x1/x2/x3/a.ts"), join(root, "agents/a.ts"));
+		const [issue] = await issuesOf("agents/a.md");
+		expect(issue).toMatchObject({
+			file: "agents/a.ts",
+			line: 1,
+			field: "top-level",
+		});
+		expect(issue?.message).toContain(
+			'value import from "../lib/agent-format/cli.ts"',
+		);
+		expect(existsSync(marker)).toBe(false);
 	});
 
 	test.each([
