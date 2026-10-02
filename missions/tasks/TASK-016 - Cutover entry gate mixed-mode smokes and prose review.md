@@ -1,7 +1,7 @@
 ---
 id: TASK-016
 title: 'Cutover entry gate: mixed-mode smokes and prose review'
-status: To Do
+status: Done
 priority: high
 labels:
   - testing
@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-015
 createdAt: '2026-09-30T17:41:18.431Z'
-updatedAt: '2026-10-02T00:00:00.000Z'
+updatedAt: '2026-10-02T21:50:00.000Z'
 ---
 
 ## Description
@@ -19,9 +19,9 @@ Step 7 cutover entry gate — a checkpoint. Prove all 22 (amended 2026-10-02, D-
 Behavior owner for B-012 (ACC-005 smokes); owns no ratified constraint. It gates the next step. Halt if the gate is not satisfied rather than proceeding to strict cutover.
 
 <!-- AC:BEGIN -->
-- [ ] #1 B-012/ACC-005: the four interactive smokes (Shepherd and `plan:riff` on Claude and Codex) are recorded against the step-6 mixed build with outcomes
-- [ ] #2 the prose-review pass compares each migrated declaration/extension prompt against the still-present `system-prompts/*.md` and records the result
-- [ ] #3 all 22 names exist in mixed mode and `bun run typecheck`, `bun run check`, `bun test` and `bun run compile:all` pass (amended 2026-10-02, D-036)
-- [ ] #4 the recorded outcomes are handed to the cutover task
-- [ ] #5 the four smoke outcomes (backend, agent, cwd, prompt seen, clean exit) and the per-declaration prose-review result are written to `missions/plans/agent-format/evidence/cutover-gate.md`; the sign-off maintainer runs the interactive smokes (B-012 observer) and a worker may not mark them passed
+- [x] #1 B-012/ACC-005: the four interactive smokes (Shepherd and `plan:riff` on Claude and Codex) are recorded against the step-6 mixed build with outcomes
+- [x] #2 the prose-review pass compares each migrated declaration/extension prompt against the still-present `system-prompts/*.md` and records the result
+- [x] #3 all 22 names exist in mixed mode and `bun run typecheck`, `bun run check`, `bun test` and `bun run compile:all` pass (amended 2026-10-02, D-036)
+- [x] #4 the recorded outcomes are handed to the cutover task
+- [x] #5 the four smoke outcomes (backend, agent, cwd, prompt seen, clean exit) and the per-declaration prose-review result are written to `missions/plans/agent-format/evidence/cutover-gate.md`; the sign-off maintainer runs the interactive smokes (B-012 observer) and a worker may not mark them passed
 <!-- AC:END -->
