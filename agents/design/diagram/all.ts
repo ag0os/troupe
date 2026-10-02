@@ -1,34 +1,43 @@
-#!/usr/bin/env bun
+/**
+ * Project-wide event flow diagrams into ai/diagrams/.
+ *
+ * The system prompt lives in `all.md`. This extension computes the diagrams
+ * directory, creates it outside preview, builds the task prompt and hands
+ * the banners to the runner (D-016, D-019).
+ */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../../lib";
-import { assetsFor } from "../../../lib/assets";
-import type { ClaudeFlags } from "../../../lib/claude-flags.types";
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../../lib/agent-format/types";
 
-// Get the current working directory (the project to analyze)
-const targetProject = process.cwd();
-const diagramsDir = join(targetProject, "ai", "diagrams");
+export function prepare(ctx: PrepareContext): PrepareResult {
+	// The project to analyze
+	const targetProject = ctx.cwd;
+	const diagramsDir = join(targetProject, "ai", "diagrams");
 
-// Ensure the ai/diagrams directory exists
-try {
-	mkdirSync(diagramsDir, { recursive: true });
-	console.log(`✅ Created/verified directory: ${diagramsDir}`);
-} catch (error) {
-	console.error(`Failed to create diagrams directory: ${error}`);
-}
+	// Ensure the ai/diagrams directory exists; never in preview (D-012)
+	let directoryMessage = `✅ Created/verified directory: ${diagramsDir}`;
+	if (!ctx.preview) {
+		try {
+			mkdirSync(diagramsDir, { recursive: true });
+		} catch (error) {
+			const failure = `Failed to create diagrams directory: ${error}`;
+			// Print mode has no banner to carry the failure, so it stops here.
+			if (ctx.mode === "print") {
+				return { exit: { message: `${failure}\n`, code: 1, stream: "stderr" } };
+			}
+			directoryMessage = failure;
+		}
+	}
 
-// Optional free-form focus filter from args
-const positionals = getPositionals();
-const focusArea = positionals.join(" ");
+	// Optional free-form focus filter from args
+	const focusArea = ctx.args.join(" ");
 
-// Build the user prompt
-const userPrompt = `Analyze the codebase at ${targetProject} and generate comprehensive, project-wide event flow diagrams.
+	// Build the user prompt
+	const userPrompt = `Analyze the codebase at ${targetProject} and generate comprehensive, project-wide event flow diagrams.
 
 Target output directory: ${diagramsDir}
 
@@ -73,33 +82,19 @@ ${focusArea ? `\nFocus Area (optional filter): ${focusArea}` : "\nAnalyze ALL fl
 
 Start by scanning the project structure to understand the architecture, then systematically identify and document every event flow.`;
 
-async function main() {
-	console.log("🔍 Starting project-wide diagram generation...");
-	console.log(`📁 Target project: ${targetProject}`);
-	console.log(`📊 Diagrams will be saved to: ${diagramsDir}`);
-
-	// Load assets by convention based on filename
-	const { systemPrompt, settings } = assetsFor(import.meta.url);
-	const defaults: ClaudeFlags = {
-		...(systemPrompt ? { "append-system-prompt": systemPrompt } : {}),
-		...(settings ? { settings: JSON.stringify(settings) } : {}),
+	// Print mode's stdout is the payload, so the runner refuses banners there.
+	if (ctx.mode === "print") return { initialPrompt: userPrompt };
+	return {
+		initialPrompt: userPrompt,
+		beforeRunMessages: [
+			directoryMessage,
+			"🔍 Starting project-wide diagram generation...",
+			`📁 Target project: ${targetProject}`,
+			`📊 Diagrams will be saved to: ${diagramsDir}`,
+		],
+		afterRunMessages: [
+			"\n✨ Event flow diagram generation complete!",
+			`📁 Diagrams saved to: ${diagramsDir}`,
+		],
 	};
-
-	// Build Claude flags
-	const flags = buildClaudeFlags(defaults, parsedArgs.values as ClaudeFlags);
-
-	// Add the prompt as positional argument
-	const finalArgs = [...flags, userPrompt];
-
-	// Spawn Claude with diagram generation settings
-	const exitCode = await spawnClaudeAndWait({
-		args: finalArgs,
-		env: { CLAUDE_PROJECT_DIR: targetProject },
-	});
-
-	console.log(`\n✨ Event flow diagram generation complete!`);
-	console.log(`📁 Diagrams saved to: ${diagramsDir}`);
-	process.exit(exitCode);
 }
-
-main().catch(console.error);

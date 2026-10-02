@@ -1,4 +1,3 @@
-#!/usr/bin/env -S bun run
 /**
  * DESIGN-AUDIT: Comprehensive design system/site styling audit
  *
@@ -7,47 +6,46 @@
  * navigable audit to ai/design-audit/ without changing app code.
  *
  * Usage:
- *   bun run agents/design-audit.ts            # full audit
- *   bun run agents/design-audit.ts "auth, marketing"  # optional focus filters
+ *   design:audit                     # full audit
+ *   design:audit "auth, marketing"   # optional focus filters
+ *
+ * The system prompt and the expectations include live in `audit.md`. This
+ * extension computes the audit directory, creates it outside preview, and
+ * hands the banners to the runner (D-016, D-019).
  */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../lib";
-import type { ClaudeFlags } from "../../lib/claude-flags.types";
-import designAuditSettings from "../../settings/design-audit.settings.json" with {
-	type: "json",
-};
-import designAuditSystemPrompt from "../../system-prompts/design-audit-prompt.md" with {
-	type: "text",
-};
-import expectationsDoc from "../../system-prompts/expectations.md" with {
-	type: "text",
-};
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../lib/agent-format/types";
 
-const targetProject = process.cwd();
-const auditDir = join(targetProject, "ai", "design-audit");
+export function prepare(ctx: PrepareContext): PrepareResult {
+	const targetProject = ctx.cwd;
+	const auditDir = join(targetProject, "ai", "design-audit");
 
-// Ensure output directory exists
-try {
-	mkdirSync(auditDir, { recursive: true });
-	console.log(`✅ Created/verified directory: ${auditDir}`);
-} catch (error) {
-	console.error(`Failed to create audit directory: ${error}`);
-}
+	// Ensure output directory exists; never in preview (D-012)
+	let directoryMessage = `✅ Created/verified directory: ${auditDir}`;
+	if (!ctx.preview) {
+		try {
+			mkdirSync(auditDir, { recursive: true });
+		} catch (error) {
+			const failure = `Failed to create audit directory: ${error}`;
+			// Print mode has no banner to carry the failure, so it stops here.
+			if (ctx.mode === "print") {
+				return { exit: { message: `${failure}\n`, code: 1, stream: "stderr" } };
+			}
+			directoryMessage = failure;
+		}
+	}
 
-// Optional free-form focus filter(s)
-const positionals = getPositionals();
-const focus = positionals.join(", ");
+	// Optional free-form focus filter(s)
+	const focus = ctx.args.join(", ");
 
-// Build the user task prompt (system prompt contains the persona/contract)
-const userPrompt =
-	`Conduct a comprehensive design system audit of the project at ${targetProject}.
+	// Build the user task prompt (system prompt contains the persona/contract)
+	const userPrompt =
+		`Conduct a comprehensive design system audit of the project at ${targetProject}.
 
 Output directory: ${auditDir}
 
@@ -57,33 +55,19 @@ Instructions:
 3. Write ONLY into ${auditDir} following the system prompt's output contract.
 ${focus ? `4. Prioritize focus areas: ${focus}.` : ""}`.trim();
 
-async function main() {
-	console.log("🔎 Starting design system audit...");
-	console.log(`📁 Project: ${targetProject}`);
-	console.log(`🗂️  Output: ${auditDir}`);
-
-	// Merge user-provided flags with our defaults; append expectations for quality bar
-	const flags = buildClaudeFlags(
-		{
-			"append-system-prompt": `${designAuditSystemPrompt}\n\n---\n\n[Expectations Quality Bar]\n\n${expectationsDoc}`,
-			settings: JSON.stringify(designAuditSettings),
-		},
-		parsedArgs.values as ClaudeFlags,
-	);
-
-	const finalArgs = [...flags, userPrompt];
-
-	const exitCode = await spawnClaudeAndWait({
-		args: finalArgs,
-		env: { CLAUDE_PROJECT_DIR: targetProject },
-	});
-
-	console.log("\n✨ Design audit complete!");
-	console.log(`📁 Reports saved to: ${auditDir}`);
-	process.exit(exitCode);
+	// Print mode's stdout is the payload, so the runner refuses banners there.
+	if (ctx.mode === "print") return { initialPrompt: userPrompt };
+	return {
+		initialPrompt: userPrompt,
+		beforeRunMessages: [
+			directoryMessage,
+			"🔎 Starting design system audit...",
+			`📁 Project: ${targetProject}`,
+			`🗂️  Output: ${auditDir}`,
+		],
+		afterRunMessages: [
+			"\n✨ Design audit complete!",
+			`📁 Reports saved to: ${auditDir}`,
+		],
+	};
 }
-
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
