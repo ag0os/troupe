@@ -1,17 +1,20 @@
-#!/usr/bin/env bun
+/**
+ * Topic-focused event flow diagrams into ai/diagrams/.
+ *
+ * The system prompt lives in `topic.md`. This extension requires the topic
+ * (the first positional), slugs it, computes the diagrams directory, creates
+ * it outside preview, builds the task prompt and hands the banners to the
+ * runner (D-016, D-019).
+ */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../../lib";
-import { assetsFor } from "../../../lib/assets";
-import type { ClaudeFlags } from "../../../lib/claude-flags.types";
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../../lib/agent-format/types";
 
-function slugify(input: string): string {
+export function slugify(input: string): string {
 	return input
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
@@ -19,33 +22,43 @@ function slugify(input: string): string {
 		.slice(0, 80);
 }
 
-// Get args: first positional is required topic, rest optional focus/filter details
-const positionals = getPositionals();
-const [topic, ...rest] = positionals;
-const extraFocus = rest.join(" ");
+export function prepare(ctx: PrepareContext): PrepareResult {
+	// First positional is the required topic, the rest optional focus/filter details
+	const [topic, ...rest] = ctx.args;
+	const extraFocus = rest.join(" ");
 
-if (!topic) {
-	console.error("Missing required topic.");
-	console.error(
-		"Usage: bun run agents/diagram-topic.ts <topic> [extra focus words]",
-	);
-	process.exit(1);
-}
+	if (!topic) {
+		return {
+			exit: {
+				message:
+					"Missing required topic.\nUsage: design:diagram:topic <topic> [extra focus words]\n",
+				code: 1,
+				stream: "stderr",
+			},
+		};
+	}
 
-const topicSlug = slugify(topic);
-const targetProject = process.cwd();
-const diagramsDir = join(targetProject, "ai", "diagrams");
+	const topicSlug = slugify(topic);
+	const targetProject = ctx.cwd;
+	const diagramsDir = join(targetProject, "ai", "diagrams");
 
-// Ensure output directory exists
-try {
-	mkdirSync(diagramsDir, { recursive: true });
-	console.log(`✅ Created/verified directory: ${diagramsDir}`);
-} catch (error) {
-	console.error(`Failed to create diagrams directory: ${error}`);
-}
+	// Ensure output directory exists; never in preview (D-012)
+	let directoryMessage = `✅ Created/verified directory: ${diagramsDir}`;
+	if (!ctx.preview) {
+		try {
+			mkdirSync(diagramsDir, { recursive: true });
+		} catch (error) {
+			const failure = `Failed to create diagrams directory: ${error}`;
+			// Print mode has no banner to carry the failure, so it stops here.
+			if (ctx.mode === "print") {
+				return { exit: { message: `${failure}\n`, code: 1, stream: "stderr" } };
+			}
+			directoryMessage = failure;
+		}
+	}
 
-// Build the user prompt
-const userPrompt = `Analyze the codebase at ${targetProject} and generate event flow diagrams ONLY for the specified topic.
+	// Build the user prompt
+	const userPrompt = `Analyze the codebase at ${targetProject} and generate event flow diagrams ONLY for the specified topic.
 
 Topic: ${topic}
 ${extraFocus ? `Extra focus: ${extraFocus}` : ""}
@@ -63,30 +76,20 @@ Instructions:
 
 Begin by locating files/functions whose names, routes, types, or documentation match the topic and follow all call/data paths from those anchors.`;
 
-async function main() {
-	console.log("🎯 Starting topic-focused diagram generation...");
-	console.log(`🏷️ Topic: ${topic} (slug: ${topicSlug})`);
-	console.log(`📁 Target project: ${targetProject}`);
-	console.log(`📊 Diagrams will be saved to: ${diagramsDir}`);
-
-	// Load assets by convention based on filename
-	const { systemPrompt, settings } = assetsFor(import.meta.url);
-	const defaults: ClaudeFlags = {
-		...(systemPrompt ? { "append-system-prompt": systemPrompt } : {}),
-		...(settings ? { settings: JSON.stringify(settings) } : {}),
+	// Print mode's stdout is the payload, so the runner refuses banners there.
+	if (ctx.mode === "print") return { initialPrompt: userPrompt };
+	return {
+		initialPrompt: userPrompt,
+		beforeRunMessages: [
+			directoryMessage,
+			"🎯 Starting topic-focused diagram generation...",
+			`🏷️ Topic: ${topic} (slug: ${topicSlug})`,
+			`📁 Target project: ${targetProject}`,
+			`📊 Diagrams will be saved to: ${diagramsDir}`,
+		],
+		afterRunMessages: [
+			"\n✨ Topic-focused diagram generation complete!",
+			`📁 Diagrams saved to: ${diagramsDir}`,
+		],
 	};
-
-	const flags = buildClaudeFlags(defaults, parsedArgs.values as ClaudeFlags);
-	const finalArgs = [...flags, userPrompt];
-
-	const exitCode = await spawnClaudeAndWait({
-		args: finalArgs,
-		env: { CLAUDE_PROJECT_DIR: targetProject },
-	});
-
-	console.log(`\n✨ Topic-focused diagram generation complete!`);
-	console.log(`📁 Diagrams saved to: ${diagramsDir}`);
-	process.exit(exitCode);
 }
-
-main().catch(console.error);
