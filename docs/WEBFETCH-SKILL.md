@@ -14,10 +14,14 @@ Use `tools:webfetch` when an agent needs to fetch and analyze one public URL but
 - Give a narrow prompt: ask for a table, list, answer, section, or example.
 - Prefer explicit extraction over "summarize the whole site".
 - Use `--raw` only for best-effort page text, not exact source reproduction.
+- Use `-h` or `--help` for generated flag help. Use `--describe` for the full usage document.
 
 ## Behavioral Constraints
 
 - Claude Code WebFetch usually fetches the page, converts HTML to markdown, and applies a small model to the content.
+- The wrapper loads user settings only with `--setting-sources=user`.
+- The wrapper has a fixed maximum of three turns.
+- The declaration sets `passthrough: false`. Arguments after `--` are Webfetch positionals and never reach Claude as backend flags.
 - Large pages may be truncated or summarized.
 - Cross-host redirects may require a second fetch to the redirect URL.
 - Authenticated, private, JS-heavy, paywalled, or GitHub-native pages may fail or be degraded.

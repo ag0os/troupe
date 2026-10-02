@@ -1,7 +1,7 @@
 ---
 id: TASK-018
 title: Authoring guide and documentation updates
-status: To Do
+status: Done
 priority: medium
 labels:
   - backend
@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-017
 createdAt: '2026-09-30T17:41:21.973Z'
-updatedAt: '2026-09-30T17:41:21.973Z'
+updatedAt: '2026-10-02T23:20:00.000Z'
 ---
 
 ## Description
@@ -21,9 +21,9 @@ Ground: D-014 access mappings, D-021 FORGE_BACKEND dropped, D-028 backend flags 
 Ratified constraints (stop-and-escalate): no doc mentions `FORGE_BACKEND`; passthrough guidance is the `--` form; `agents/local/` guidance is removed. No full README rewrite (rename is out of scope).
 
 <!-- AC:BEGIN -->
-- [ ] #1 B-011: `docs/AGENT-FORMAT.md` covers schema, prompts/templates, flags and `--` passthrough, the `passthrough: false` opt-out (D-039) *(Amended 2026-10-02, D-039)*, extension data/cancellation, MCP trust including Codex project auto-trust, the Design §5/D-014 backend mapping table (append/replace, mode, model/effort, access, MCP, config inheritance), the `native.claude`/`native.codex` escape hatch, backend selection (`--backend` only; no env selection), strict compiler and publication, the known backend limits (D-032 stdio `cwd` is Codex-only, D-033 no literal `${` in MCP strings for Claude-declared agents, D-035 Codex append mode replaces a user's own `developer_instructions`), MCP secret interpolation (`${env:...}`, `${cmd:...}` and env-referenced header values per D-026, D-029 and D-034) with one worked example, a statement that no roster agent uses it since D-036, and its limit that a same-user `ps eww` on macOS shows the variable, and examples *(Amended 2026-10-02, D-036)*
-- [ ] #2 B-011: `docs/AGENT-RUNTIME.md` is removed; README, AGENTS.md and CLAUDE.md link to the one guide and contain no stale path, backend, CLI passthrough or private-agent guidance
-- [ ] #3 B-011/D-021: `docs/SHEPHERD.md` no longer mentions `FORGE_BACKEND`; SHEPHERD/COACH passthrough sentences use the `--` form; `docs/WEBFETCH-SKILL.md` reflects the new runtime — no FORGE_BACKEND is stop-and-escalate ratified ground
-- [ ] #4 B-011/D-028: active docs describe backend flags after `--` and remove `agents/local/` guidance from CLAUDE.md and AGENTS.md — no agents/local is stop-and-escalate ratified ground
-- [ ] #5 `bun run check` passes and no active doc references a deleted file
+- [x] #1 B-011: `docs/AGENT-FORMAT.md` covers schema, prompts/templates, flags and `--` passthrough, the `passthrough: false` opt-out (D-039) *(Amended 2026-10-02, D-039)*, extension data/cancellation, MCP trust including Codex project auto-trust, the Design §5/D-014 backend mapping table (append/replace, mode, model/effort, access, MCP, config inheritance), the `native.claude`/`native.codex` escape hatch, backend selection (`--backend` only; no env selection), strict compiler and publication, the known backend limits (D-032 stdio `cwd` is Codex-only, D-033 no literal `${` in MCP strings for Claude-declared agents, D-035 Codex append mode replaces a user's own `developer_instructions`), MCP secret interpolation (`${env:...}`, `${cmd:...}` and env-referenced header values per D-026, D-029 and D-034) with one worked example, a statement that no roster agent uses it since D-036, and its limit that a same-user `ps eww` on macOS shows the variable, and examples *(Amended 2026-10-02, D-036)*
+- [x] #2 B-011: `docs/AGENT-RUNTIME.md` is removed; README, AGENTS.md and CLAUDE.md link to the one guide and contain no stale path, backend, CLI passthrough or private-agent guidance
+- [x] #3 B-011/D-021: `docs/SHEPHERD.md` no longer mentions `FORGE_BACKEND`; SHEPHERD/COACH passthrough sentences use the `--` form; `docs/WEBFETCH-SKILL.md` reflects the new runtime — no FORGE_BACKEND is stop-and-escalate ratified ground
+- [x] #4 B-011/D-028: active docs describe backend flags after `--` and remove `agents/local/` guidance from CLAUDE.md and AGENTS.md — no agents/local is stop-and-escalate ratified ground
+- [x] #5 `bun run check` passes and no active doc references a deleted file
 <!-- AC:END -->

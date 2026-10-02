@@ -14,8 +14,10 @@ tutors:coach rails --cwd ~/prep    # train against a fixed root from anywhere
 tutors:coach rails --show-prompt   # print the composed prompt, don't spawn
 ```
 
-`--cwd` and `--list`/`--show-prompt` are consumed here; any other flag passes
-straight through to the Claude CLI — `--model`, `--resume`, and so on.
+`--cwd`, `--model`, `--backend`, `--list`, and `--show-prompt` are consumed by
+the generated agent CLI. Backend flags go after a standalone `--`, for example
+`tutors:coach rails -- --resume SESSION_ID`. Tokens after `--` reach the
+selected Claude or Codex backend verbatim.
 
 ## Setting up for interviews
 
