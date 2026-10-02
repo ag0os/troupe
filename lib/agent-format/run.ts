@@ -15,7 +15,7 @@ import type {
 	StreamDecoder,
 } from "./adapters/types";
 import type { CliIo, ParsedInvocation } from "./cli";
-import { scanInterpolations } from "./command-text";
+import { interpolateMcp } from "./interpolate";
 import { formatPreview, previewMcp, previewResourcePaths } from "./preview";
 import { PROMPT_SEPARATOR } from "./schema";
 import { renderTemplate } from "./template";
@@ -802,34 +802,8 @@ export type Interpolate = (
 	ctx: InterpolationContext,
 ) => Promise<Interpolated>;
 
-/**
- * The interpolation seam's placeholder until TASK-006: literal values pass
- * through unchanged and any `${env:...}`/`${cmd:...}` reference is refused,
- * so nothing unresolved can reach a backend.
- */
-export const interpolateMcp: Interpolate = async (servers) => {
-	for (const [name, server] of Object.entries(servers ?? {})) {
-		const leaves =
-			"command" in server
-				? [
-						server.command,
-						server.cwd,
-						...(server.args ?? []),
-						...Object.values(server.env ?? {}),
-					]
-				: [server.url, ...Object.values(server.headers ?? {})];
-		for (const leaf of leaves) {
-			if (leaf === undefined) continue;
-			const scan = scanInterpolations(leaf);
-			if (!scan.ok || scan.references.length > 0) {
-				throw new Error(
-					`mcp.${name}: \${env:...} and \${cmd:...} interpolation is not available in this runner yet`,
-				);
-			}
-		}
-	}
-	return { mcp: previewMcp(servers), env: {} };
-};
+/** The real resolver (`interpolate.ts`), the default behind the seam. */
+export { interpolateMcp };
 
 export interface ExecuteIo
 	extends Pick<CliIo, "stdout" | "stderr" | "isDirectory"> {

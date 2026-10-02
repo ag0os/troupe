@@ -669,3 +669,88 @@ native:
 		);
 	});
 });
+
+describe("Claude MCP limits (D-032, D-033)", () => {
+	const codexOnly = "description: Sample agent\nbackends: [codex]";
+	const claudeOnly = "description: Sample agent\nbackends: [claude]";
+
+	test("a stdio cwd fails compile with file, line and field when claude is declared", () => {
+		for (const head of [minimal, claudeOnly]) {
+			expectIssue(
+				md(`${head}\nmcp:\n  s:\n    command: x\n    cwd: /srv`),
+				"mcp.s.cwd",
+				/stdio cwd is not supported when claude is a declared backend/,
+				7,
+			);
+		}
+	});
+
+	test("a Codex-only agent may declare a stdio cwd", () => {
+		const parsed = parseAgentMarkdown(
+			FILE,
+			md(`${codexOnly}\nmcp:\n  s:\n    command: x\n    cwd: /srv`),
+		);
+		expect(parsed.source.mcp?.s).toEqual({ command: "x", cwd: "/srv" });
+	});
+
+	test.each([
+		["mcp.s.command", "s:\n    command: 'x${HOME}'"],
+		["mcp.s.args[1]", "s:\n    command: x\n    args: [a, 'b${X}']"],
+		["mcp.s.env.K", "s:\n    command: x\n    env: { K: 'pre ${env:A} ${B}' }"],
+		["mcp.h.url", "h:\n    url: 'https://x/${P}'"],
+		[
+			"mcp.h.headers.X-Api",
+			"h:\n    url: https://x\n    headers: { X-Api: '$${A}' }",
+		],
+	])(
+		"a literal ${ fails compile at %s when claude is declared",
+		(field, server) => {
+			expectIssue(
+				md(`${minimal}\nmcp:\n  ${server}`),
+				field,
+				/literal "\$\{" that Claude would expand/,
+			);
+		},
+	);
+
+	test("Troupe references alone pass; Codex-only agents keep literal ${", () => {
+		expect(() =>
+			parseAgentMarkdown(
+				FILE,
+				md(
+					`${minimal}\nmcp:\n  h:\n    url: 'https://x/\${env:HOST}'\n    headers: { A: 'Bearer \${cmd:printf "%s" "a}b"}', B: plain, C: '$\${env:A}{x}' }`,
+				),
+			),
+		).not.toThrow();
+		const parsed = parseAgentMarkdown(
+			FILE,
+			md(`${codexOnly}\nmcp:\n  s:\n    command: x\n    args: ['\${LITERAL}']`),
+		);
+		expect(parsed.source.mcp?.s).toEqual({
+			command: "x",
+			args: ["${LITERAL}"],
+		});
+	});
+});
+
+describe("fix round 1: MCP keys never carry ${", () => {
+	for (const backends of ["[claude]", "[codex]"]) {
+		test(`env and header names with \${ fail compile on ${backends}`, () => {
+			const head = `description: Sample agent\nbackends: ${backends}`;
+			expectIssue(
+				md(`${head}\nmcp:\n  s:\n    command: x\n    env: { 'K\${HOME}': v }`),
+				"mcp.s.env",
+				/name "K\$\{HOME\}" contains "\$\{"; env names are never interpolated/,
+				7,
+			);
+			expectIssue(
+				md(
+					`${head}\nmcp:\n  h:\n    url: https://x\n    headers: { '\${env:T}': v }`,
+				),
+				"mcp.h.headers",
+				/name "\$\{env:T\}" contains "\$\{"; header names are never interpolated/,
+				7,
+			);
+		});
+	}
+});
