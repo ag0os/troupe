@@ -129,13 +129,22 @@ function tempLeftovers(): string[] {
 }
 
 describe("roster", () => {
-	test("is the fixed 23 names and matches today's agents/ launchers", () => {
+	test("is the fixed 23 names and matches today's agents/ sources", () => {
 		expect(ROSTER.length).toBe(23);
 		expect(new Set(ROSTER).size).toBe(23);
 		const repo = resolve(import.meta.dir, "..");
 		return planBuild({ root: repo, mode: "mixed" }).then((plan) => {
 			expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
-			expect(plan.entries.every((entry) => entry.kind === "legacy")).toBe(true);
+			// A migrated agent builds from its declaration, the rest from legacy.
+			for (const entry of plan.entries) {
+				const declared = existsSync(
+					join(repo, "agents", `${entry.id.split(":").join("/")}.md`),
+				);
+				expect([entry.id, entry.kind]).toEqual([
+					entry.id,
+					declared ? "declaration" : "legacy",
+				]);
+			}
 		});
 	});
 });
