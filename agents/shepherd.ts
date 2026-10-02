@@ -1,5 +1,3 @@
-#!/usr/bin/env -S bun run
-
 /**
  * SHEPHERD: personal day-to-day assistant and agent coordinator.
  *
@@ -19,31 +17,28 @@
  *   5. .shepherd/integrations/*.md — workspace-local modules appended at launch,
  *                               so a directory can extend Shepherd without a recompile
  *
- * Harness agnostic: spawns through lib/runtime, so the backend is selected with
- * --backend claude-cli|codex-cli|codex-sdk or FORGE_BACKEND (default claude-cli).
- * Capability modules degrade gracefully on harnesses that lack a feature.
+ * The declaration is `shepherd.md`; this extension's `prepare` does the
+ * composition at launch (D-016). The built-in layers are text imports rather
+ * than declared includes so the prompt stays byte-identical to the legacy
+ * launcher's: includes are trimmed before joining, these are not. The launch
+ * directory is the framework's working directory, so `--cwd`, `--show-prompt`,
+ * `--print`, `--model` and `--backend` are framework flags, and backend flags
+ * such as `--resume` follow `--` (D-028). Capability modules degrade
+ * gracefully on harnesses that lack a feature.
  *
  * Usage:
- *   bun run agents/shepherd.ts                          # interactive session here
- *   bun run agents/shepherd.ts "triage my morning"      # with an initial message
- *   bun run agents/shepherd.ts --cwd ~/work             # run against another root
- *   bun run agents/shepherd.ts --backend codex-cli      # different harness
- *   bun run agents/shepherd.ts --print "status report"  # one-shot, non-interactive
- *   bun run agents/shepherd.ts --show-prompt            # print composed prompt, don't spawn
+ *   shepherd                          # interactive session here
+ *   shepherd "triage my morning"      # with an initial message
+ *   shepherd --cwd ~/work             # run against another root
+ *   shepherd --backend codex          # different harness
+ *   shepherd --print "status report"  # one-shot, non-interactive
+ *   shepherd --show-prompt            # print composed prompt, don't spawn
+ *   shepherd -- --resume <id>         # backend flags follow `--`
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import {
-	getBackend,
-	getPositionals,
-	isPrintMode,
-	parsedArgs,
-	toFlags,
-	validateBackendFlags,
-} from "../lib";
-import type { ClaudeFlags } from "../lib/claude-flags.types";
-import { runAgentInteractive, runAgentStreaming } from "../lib/runtime";
+import { dirname, join } from "node:path";
+import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
 import coreDoc from "../system-prompts/shepherd/core.md" with { type: "text" };
 import herdrDoc from "../system-prompts/shepherd/integrations/herdr.md" with {
 	type: "text",
@@ -53,44 +48,33 @@ import interAgentDoc from "../system-prompts/shepherd/integrations/inter-agent.m
 };
 
 const STATE_DIR = ".shepherd";
-const BUILT_IN_INTEGRATIONS = [herdrDoc, interAgentDoc];
 
-/**
- * Flags consumed by this launcher (or by lib/flags) that must not leak into
- * the spawned backend's argument list.
- */
-const FORGE_LEVEL_FLAGS = ["backend", "cwd", "print", "show-prompt", "model"];
-
-/**
- * State-dir file ops are pre-approved so memory and journal upkeep never
- * prompt. `herdr` is pre-approved because coordinating panes and agents is
- * Shepherd's core duty; destructive Herdr commands are forbidden by the
- * integration module instead. An enclosing workspace's state dir is added as
- * a readable directory, since its modules point at files there; Claude Code
- * checks permissions against resolved paths, so this can't ride on the
- * relative rules above.
- */
-function shepherdSettings(enclosing: string | undefined) {
-	const allow = [
-		`Read(${STATE_DIR}/**)`,
-		`Write(${STATE_DIR}/**)`,
-		`Edit(${STATE_DIR}/**)`,
-		"Bash(herdr:*)",
-	];
-	const shared = enclosing ? join(enclosing, STATE_DIR) : undefined;
-	if (shared) allow.push(`Read(/${shared}/**)`);
-	return {
-		permissions: {
-			defaultMode: "default",
-			allow,
-			...(shared ? { additionalDirectories: [shared] } : {}),
-		},
-	};
+function builtInIntegrations(): string[] {
+	return [herdrDoc, interAgentDoc];
 }
 
-const shepherdMcp = {
-	mcpServers: {},
-};
+/**
+ * The header's backend names, as the legacy launcher printed them, so an
+ * existing workspace's prompt does not change with the migration.
+ */
+const BACKEND_LABELS = { claude: "claude-cli", codex: "codex-cli" } as const;
+
+/**
+ * An enclosing workspace's state dir is added as a readable directory, since
+ * its modules point at files there. Claude Code checks permissions against
+ * resolved paths, so this can't ride on the relative `.shepherd/**` rules in
+ * the declaration, and the path is the enclosing workspace's realpath. The
+ * rule's leading `/` before an absolute path is Claude's syntax for one: it
+ * renders as `Read(//abs/...)`. Claude rules only: Codex does not emulate
+ * them, so none are returned there.
+ */
+function enclosingAccess(enclosing: string): {
+	rules: string[];
+	additionalDirectories: string[];
+} {
+	const shared = join(realpathSync(enclosing), STATE_DIR);
+	return { rules: [`Read(/${shared}/**)`], additionalDirectories: [shared] };
+}
 
 type Module = { name: string; body: string; path: string };
 
@@ -133,11 +117,11 @@ function loadCharter(cwd: string): string | undefined {
 	return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
 
-function composeSystemPrompt(
+function composeFragments(
 	cwd: string,
 	backend: string,
 	enclosing: string | undefined,
-): string {
+): string[] {
 	const charter = loadCharter(cwd);
 	const inherited = enclosing ? loadIntegrations(enclosing) : [];
 	// A local module that is the same file as an inherited one (a leftover
@@ -166,76 +150,42 @@ function composeSystemPrompt(
 
 	return [
 		coreDoc,
-		...BUILT_IN_INTEGRATIONS,
+		...builtInIntegrations(),
 		...inherited.map((m) => m.body),
 		...(charter ? [charter] : []),
 		...locals.map((l) => l.body),
 		header,
-	].join("\n\n---\n\n");
+	];
 }
 
-/**
- * Remaining CLI flags are passed through to the backend untouched (Claude CLI
- * only), preserving the framework's flag passthrough convention for things
- * like --resume or --permission-mode.
- */
-function passthroughArgs(): string[] {
-	const values = { ...parsedArgs.values } as Record<
-		string,
-		string | boolean | undefined
-	>;
-	for (const flag of FORGE_LEVEL_FLAGS) {
-		delete values[flag];
-	}
-	return toFlags(values as ClaudeFlags);
-}
+export function prepare(ctx: PrepareContext): PrepareResult {
+	const prompt = ctx.args.join(" ").trim();
 
-async function main() {
-	const backend = getBackend();
-	validateBackendFlags(backend);
-
-	const cwd = parsedArgs.values.cwd
-		? resolve(String(parsedArgs.values.cwd))
-		: process.cwd();
-	const prompt = getPositionals().join(" ").trim() || undefined;
-	const enclosing = findEnclosingWorkspace(cwd);
-	const systemPrompt = composeSystemPrompt(cwd, backend, enclosing);
-
-	if (parsedArgs.values["show-prompt"] === true) {
-		console.log(systemPrompt);
-		return;
+	// Preview only prints what would launch, so it keeps the legacy
+	// `--show-prompt --print` behavior of showing the prompt.
+	if (ctx.mode === "print" && !prompt && !ctx.preview) {
+		return {
+			exit: {
+				message: 'Print mode requires a prompt: shepherd --print "..."\n',
+				code: 1,
+				stream: "stderr",
+			},
+		};
 	}
 
-	const options = {
-		backend,
-		prompt,
-		systemPrompt,
-		cwd,
-		env: { CLAUDE_PROJECT_DIR: cwd },
-		model: parsedArgs.values.model as string | undefined,
-		...(backend === "claude-cli"
-			? {
-					settings: JSON.stringify(shepherdSettings(enclosing)),
-					mcpConfig: JSON.stringify(shepherdMcp),
-					rawArgs: passthroughArgs(),
-				}
-			: {}),
+	const enclosing = findEnclosingWorkspace(ctx.cwd);
+	const systemPromptFragments = composeFragments(
+		ctx.cwd,
+		BACKEND_LABELS[ctx.backend],
+		enclosing,
+	);
+
+	if (ctx.backend !== "claude" || !enclosing) {
+		return { systemPromptFragments, initialPrompt: prompt };
+	}
+	return {
+		systemPromptFragments,
+		initialPrompt: prompt,
+		extraAllowRules: enclosingAccess(enclosing),
 	};
-
-	if (isPrintMode()) {
-		if (!prompt) {
-			console.error('Print mode requires a prompt: shepherd --print "..."');
-			process.exit(1);
-		}
-		const result = await runAgentStreaming(options, {
-			onStdout: (data) => process.stdout.write(data),
-			onStderr: (data) => process.stderr.write(data),
-		});
-		process.exit(result.exitCode);
-	}
-
-	const result = await runAgentInteractive(options);
-	process.exit(result.exitCode);
 }
-
-await main();
