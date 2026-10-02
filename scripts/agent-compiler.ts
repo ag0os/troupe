@@ -855,7 +855,7 @@ async function bunBuild(options: {
 // Roster discovery, mixed/strict source selection and publication (D-011,
 // D-017, D-023).
 
-/** The fixed 23-agent roster (D-008). */
+/** The fixed 22-agent roster (D-008, D-036). */
 export const ROSTER = [
 	"analyze:orient",
 	"build:builder",
@@ -871,7 +871,6 @@ export const ROSTER = [
 	"git:fix",
 	"meta:prompt",
 	"modes:contain",
-	"personas:github",
 	"plan:planner",
 	"plan:riff",
 	"rails:backlog",
