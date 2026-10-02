@@ -5,9 +5,11 @@ import {
 	expect,
 	setDefaultTimeout,
 	setSystemTime,
+	spyOn,
 	test,
 } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -16,6 +18,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -286,7 +289,10 @@ describe("declaration paired with its extension (D-001, D-015, AC #3)", () => {
 		expect(generated).toContain("const extension = { prepare };");
 	});
 
-	test("importing the extension spawns no process, writes nothing and does not exit", () => {
+	// A smoke test: it catches a top-level exit, output, a cwd write or a
+	// synchronous backend launch on import. The static §4 inspection that the
+	// compiler runs is the real guard against code on import.
+	test("importing the extension exits 0, prints nothing, launches no fake backend before exit and writes nothing to the cwd", () => {
 		const cwd = workspace();
 		const base = join(root, `import-${counter++}`);
 		const bin = join(base, "bin");
@@ -600,23 +606,29 @@ describe("preview is side-effect free (D-012)", () => {
 });
 
 describe("framework flags and passthrough (D-028, AC #4, AC #6)", () => {
-	test("--resume after -- reaches the backend argv on both backends", async () => {
-		const cwd = workspace();
-		for (const backend of BACKENDS) {
-			const run = await execute(
-				["rails", "hi", "--backend", backend, "--", "--resume", "abc"],
-				cwd,
-			);
-			expect(run.code).toBe(0);
-			const [record] = run.records;
-			expect(record?.cwd).toBe(cwd);
-			const argv = record?.argv ?? [];
-			const at = argv.indexOf("--resume");
-			expect(at).toBeGreaterThan(0);
-			expect(argv[at + 1]).toBe("abc");
-			expect(argv.slice(-2)).toEqual(["--", "hi"]);
-		}
-	});
+	test.each([
+		["--resume", "abc"],
+		["--permission-mode", "plan"],
+	])(
+		"%s after -- reaches the backend argv on both backends",
+		async (flag, value) => {
+			const cwd = workspace();
+			for (const backend of BACKENDS) {
+				const run = await execute(
+					["rails", "hi", "--backend", backend, "--", flag, value],
+					cwd,
+				);
+				expect(run.code).toBe(0);
+				const [record] = run.records;
+				expect(record?.cwd).toBe(cwd);
+				const argv = record?.argv ?? [];
+				const at = argv.indexOf(flag);
+				expect(at).toBeGreaterThan(0);
+				expect(argv[at + 1]).toBe(value);
+				expect(argv.slice(-2)).toEqual(["--", "hi"]);
+			}
+		},
+	);
 
 	test("--resume and --permission-mode before -- fail as unknown flags, before prepare", () => {
 		for (const flag of ["--resume", "--permission-mode"]) {
@@ -714,5 +726,184 @@ describe("compiled binary (B-003, AC #3)", () => {
 			expect(out).toContain("# This session's subject");
 		}
 		expect(snapshotTree(cwd)).toEqual(before);
+	});
+});
+
+describe("pack frontmatter edge cases (AC #4: Coach's own content contract)", () => {
+	test("a CRLF pack parses: roster row, subject body and allow rules", async () => {
+		const cwd = workspace();
+		write(
+			join(cwd, ".coach/packs/crlf.md"),
+			LOCAL_PACK.replace("slug: go-concurrency", "slug: crlf").replaceAll(
+				"\n",
+				"\r\n",
+			),
+		);
+		const envelope = await preview(["crlf"], cwd);
+		expect(envelope.code).toBe(0);
+		expect(envelope.systemPrompt).toContain(
+			"| `tutors:coach crlf` | Go Concurrency *(local)* | Goroutines, channels, sync primitives | 30 min · drill / theory |",
+		);
+		expect(envelope.systemPrompt).toContain(
+			"Slug: `crlf` — your state directory is `.coach/crlf/`.\n\n# Pack — Go Concurrency",
+		);
+		expect(coach.prepare(context("claude", cwd, ["crlf"]))).toMatchObject({
+			extraAllowRules: { rules: [...BASE_RULES, "WebFetch", "WebSearch"] },
+		});
+	});
+
+	test("two workspace files with one slug: the later file in directory order wins, as today", async () => {
+		const cwd = workspace();
+		const pack = (name: string) =>
+			`---\nslug: dup\nname: ${name}\n---\n\n# ${name} body\n`;
+		write(join(cwd, ".coach/packs/aa-dup.md"), pack("First"));
+		write(join(cwd, ".coach/packs/zz-dup.md"), pack("Second"));
+		const envelope = await preview(["dup"], cwd);
+		expect(envelope.code).toBe(0);
+		const later = readdirSync(join(cwd, ".coach/packs")).at(-1);
+		const winner = later === "zz-dup.md" ? "Second" : "First";
+		expect(envelope.systemPrompt).toContain(
+			`| \`tutors:coach dup\` | ${winner} *(local)* |`,
+		);
+		expect(envelope.systemPrompt).toContain(`# ${winner} body`);
+		expect(envelope.systemPrompt.match(/`tutors:coach dup`/g)).toHaveLength(1);
+	});
+
+	test("a workspace pack replaces the built-in with the same slug", async () => {
+		const cwd = workspace();
+		write(
+			join(cwd, ".coach/packs/rails.md"),
+			"---\nslug: rails\nname: My Rails\nscope: Local scope\n---\n\n# Local rails body\n",
+		);
+		const envelope = await preview(["rails"], cwd);
+		expect(envelope.code).toBe(0);
+		expect(envelope.systemPrompt).toContain(
+			"| `tutors:coach rails` | My Rails *(local)* | Local scope |  |",
+		);
+		expect(envelope.systemPrompt).toContain("# Local rails body");
+		expect(envelope.systemPrompt).not.toContain(
+			text("system-prompts/coach/packs/rails.md").split("---").at(-1)?.trim() ??
+				"",
+		);
+	});
+
+	test("files without frontmatter or slug are skipped; if nothing is left, the built-ins return", async () => {
+		const cwd = workspace();
+		write(join(cwd, ".coach/packs/plain.md"), "# No frontmatter\n");
+		write(
+			join(cwd, ".coach/packs/noslug.md"),
+			"---\nname: No slug\n---\nBody\n",
+		);
+		const envelope = await preview([], cwd);
+		expect(envelope.systemPrompt).toContain("`tutors:coach rails`");
+		expect(envelope.systemPrompt).not.toContain("No slug");
+	});
+});
+
+describe("--cwd forms (AC #6)", () => {
+	test.each([
+		["relative", (base: string) => ["sub", join(base, "sub")]],
+		[
+			"with a space",
+			(base: string) => ["with space", join(base, "with space")],
+		],
+		["through a symlink", (base: string) => ["link", join(base, "link")]],
+	])(
+		"%s: the root is the resolved path, not its realpath, as today",
+		async (kind, paths) => {
+			const base = workspace();
+			mkdirSync(join(base, "sub"));
+			mkdirSync(join(base, "with space"));
+			symlinkSync(join(base, "sub"), join(base, "link"));
+			const [arg, expected] = paths(base);
+			const outcome = parseCli(spec(), ["--cwd", arg ?? "", "--show-prompt"], {
+				cwd: base,
+			});
+			if (outcome.kind !== "run") throw new Error("unexpected help");
+			let out = "";
+			const code = await previewAgent(spec(), extension, outcome.invocation, {
+				stdout: (chunk) => {
+					out += chunk;
+				},
+				stderr: () => {},
+				isDirectory: () => true,
+			});
+			expect({ kind, code }).toEqual({ kind, code: 0 });
+			expect(out).toContain(`- Root: \`${expected}\``);
+			expect(out).toContain(`append \`--cwd ${expected}\``);
+		},
+	);
+});
+
+describe("unreadable persisted state warns on execution only (D-012)", () => {
+	/** A root whose pack, student and integrations directory cannot be read. */
+	function unreadableWorkspace() {
+		const cwd = workspace();
+		write(
+			join(cwd, ".coach/packs/ok.md"),
+			"---\nslug: ok\nname: Ok\n---\nBody\n",
+		);
+		write(
+			join(cwd, ".coach/packs/locked.md"),
+			"---\nslug: locked\n---\nBody\n",
+		);
+		write(join(cwd, ".coach/student.md"), "# Locked student\n");
+		write(join(cwd, ".coach/integrations/x.md"), "# X\n");
+		const locked = [
+			join(cwd, ".coach/packs/locked.md"),
+			join(cwd, ".coach/student.md"),
+			join(cwd, ".coach/integrations"),
+		];
+		for (const path of locked) chmodSync(path, 0o000);
+		const unlock = () => {
+			chmodSync(locked[0] ?? "", 0o644);
+			chmodSync(locked[1] ?? "", 0o644);
+			chmodSync(locked[2] ?? "", 0o755);
+		};
+		return { cwd, unlock };
+	}
+
+	test("execution warns through console.warn (stderr) and still launches with the fallbacks", async () => {
+		const { cwd, unlock } = unreadableWorkspace();
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const run = await execute([], cwd);
+			expect(run.code).toBe(0);
+			expect(run.records).toHaveLength(1);
+			const messages = warn.mock.calls.map((call) => String(call[0]));
+			expect(messages).toHaveLength(3);
+			expect(messages[0]).toStartWith("Skipping unreadable pack locked.md: ");
+			expect(messages[1]).toStartWith(
+				"Falling back to the built-in student scaffold: ",
+			);
+			expect(messages[2]).toStartWith(
+				"Skipping unreadable integrations directory: ",
+			);
+			const argv = run.records[0]?.argv ?? [];
+			const prompt = argv[argv.indexOf("--append-system-prompt") + 1] ?? "";
+			expect(prompt).toContain("No `.coach/student.md` exists");
+			expect(prompt).toContain("- Local integrations loaded: none");
+			expect(prompt).toContain("`tutors:coach ok`");
+		} finally {
+			warn.mockRestore();
+			unlock();
+		}
+	});
+
+	test("preview shows the same fallbacks and warns nothing", async () => {
+		const { cwd, unlock } = unreadableWorkspace();
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const envelope = await preview([], cwd);
+			expect(envelope).toMatchObject({ code: 0, stderr: "" });
+			expect(warn).not.toHaveBeenCalled();
+			expect(envelope.systemPrompt).toContain("No `.coach/student.md` exists");
+			expect(envelope.systemPrompt).toContain(
+				"- Local integrations loaded: none",
+			);
+		} finally {
+			warn.mockRestore();
+			unlock();
+		}
 	});
 });
