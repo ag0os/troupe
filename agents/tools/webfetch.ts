@@ -7,7 +7,9 @@
  * rewrites the captured print result into the documented payload contract:
  * the agent's stdout on success, otherwise a single `ERROR:` line on stdout
  * with a non-zero exit. The turn cap and the tool rules are static Claude
- * arguments and settings in the declaration (D-037).
+ * arguments and settings in the declaration (D-037). The declaration opts
+ * out of backend passthrough, so tokens after `--` arrive here as
+ * positionals and never reach Claude (D-039).
  *
  * Usage:
  *   tools:webfetch <url> [prompt...]
@@ -46,6 +48,9 @@ The process writes its payload to stdout and exits.
   summarized.
 - **--model <name>**: Claude model (default \`haiku\`). Use \`sonnet\` or
   \`opus\` for denser extraction from complex pages.
+- **--**: everything after a standalone \`--\` is taken as positional
+  arguments (the URL, then prompt words), even when it starts with \`-\`.
+  Nothing is passed to the underlying Claude CLI.
 
 ## Output
 
@@ -98,6 +103,8 @@ The process writes its payload to stdout and exits.
 
 - \`0\` — success, payload on stdout.
 - \`64\` — usage error (missing URL).
+- \`2\` — invalid option, backend or working directory; the message is on
+  stderr, nothing on stdout.
 - non-zero otherwise — fetch or agent failure (see stdout \`ERROR:\` line).
 `;
 

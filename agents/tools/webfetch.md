@@ -2,6 +2,7 @@
 description: Print-mode WebFetch utility that fetches one URL and writes only the requested content, or an ERROR line, to stdout
 backends: [claude]
 mode: print
+passthrough: false
 model:
   claude: haiku
 flags:

@@ -7,6 +7,7 @@ import {
 	test,
 } from "bun:test";
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -77,6 +78,8 @@ let spec: AgentSpec;
 let scratch: string;
 let cwd: string;
 let fakeBin: string;
+/** A shell fake claude for payload shapes the shared fake has no scenario for. */
+let shapesBin: string;
 
 beforeAll(async () => {
 	scratch = realpathSync(mkdtempSync(join(tmpdir(), "webfetch-agent-")));
@@ -85,6 +88,20 @@ beforeAll(async () => {
 	fakeBin = join(scratch, "fakebin");
 	mkdirSync(fakeBin);
 	installFakeClis(fakeBin);
+	shapesBin = join(scratch, "shapesbin");
+	mkdirSync(shapesBin);
+	writeFileSync(
+		join(shapesBin, "claude"),
+		`#!/bin/sh
+case "$WF_SHAPE" in
+error0) printf 'ERROR: 404 Not Found\\n' ;;
+note) printf 'payload\\n'; printf 'claude note\\n' >&2 ;;
+empty) ;;
+esac
+exit 0
+`,
+	);
+	chmodSync(join(shapesBin, "claude"), 0o755);
 	spec = (await loadAgentDefinition(repo, `${SOURCE}.md`)).spec;
 });
 
@@ -164,6 +181,48 @@ function valueAfter(argv: readonly string[], flag: string): string | undefined {
 	return i === -1 ? undefined : argv[i + 1];
 }
 
+/** The review's M-1 line: tokens that would widen Claude's tools if forwarded. */
+const ATTACK = [
+	"--dangerously-skip-permissions",
+	"--settings",
+	"{}",
+	"--allowedTools",
+	"Bash",
+	"--max-turns",
+	"50",
+];
+
+/**
+ * A recorded claude argv that carries only the declared policy: one
+ * `--settings` with the legacy rules, one `--max-turns=3`, no bypass, and
+ * `words` only as the caller request inside the task prompt.
+ */
+function expectSealedArgv(argv: readonly string[], words: string) {
+	const prompt = buildTaskPrompt({
+		mode: "run",
+		url: PAGE,
+		userPrompt: words,
+		raw: false,
+	});
+	expect(argv.at(-1)).toBe(prompt);
+	expect(argv.at(-2)).toBe("--");
+	const options = argv.slice(0, -2);
+	expect(options.filter((arg) => arg === "--settings")).toHaveLength(1);
+	expect(JSON.parse(valueAfter(options, "--settings") ?? "null")).toEqual(
+		LEGACY_SETTINGS,
+	);
+	expect(options.filter((arg) => arg.includes("max-turns"))).toEqual([
+		"--max-turns=3",
+	]);
+	expect(options.filter((arg) => arg.includes("allowedTools"))).toEqual([
+		"--allowedTools=WebFetch",
+	]);
+	expect(options).not.toContain("--dangerously-skip-permissions");
+	expect(options).not.toContain("{}");
+	expect(options).not.toContain("Bash");
+	expect(options).not.toContain("50");
+}
+
 /**
  * The envelope with the argv copies of both prompts replaced by markers,
  * after checking each is exactly the previewed text, so the snapshot holds
@@ -198,6 +257,7 @@ describe("declaration and extension (D-001, D-005, D-016)", () => {
 			"describe",
 		]);
 		expect(spec.flags["max-turns"]).toBeUndefined();
+		expect(spec.passthrough).toBe(false);
 	});
 
 	// Migration check against the legacy prompt file, which the strict
@@ -212,10 +272,16 @@ describe("declaration and extension (D-001, D-005, D-016)", () => {
 		);
 	});
 
-	test("the usage document drops only the --max-turns bullet (D-037)", () => {
+	test("the usage document drops the --max-turns bullet and documents -- and exit 2 (D-037, D-039)", () => {
 		expect(USAGE_DOC).not.toContain("max-turns");
 		expect(USAGE_DOC).toContain("- **--model <name>**: Claude model");
+		expect(USAGE_DOC).toContain(
+			"- **--**: everything after a standalone `--` is taken as positional\n  arguments (the URL, then prompt words), even when it starts with `-`.\n  Nothing is passed to the underlying Claude CLI.\n",
+		);
 		expect(USAGE_DOC).toContain("- `64` — usage error (missing URL).");
+		expect(USAGE_DOC).toContain(
+			"- `2` — invalid option, backend or working directory; the message is on\n  stderr, nothing on stdout.\n",
+		);
 	});
 
 	test("mixed mode builds the same-stem pair as declaration plus extension (AC #6)", async () => {
@@ -533,15 +599,23 @@ describe("--show-prompt envelopes (B-003)", () => {
 		}
 	});
 
-	test("Claude's -p after -- reaches the argv verbatim, after the native args (AC #4)", async () => {
-		const { argv } = await envelopeOf([PAGE, "--", "-p", "--verbose"]);
-		expect(argv.slice(-5)).toEqual([
+	test("tokens after -- are positionals and the previewed argv carries no tail (AC #4, D-039)", async () => {
+		const envelope = await envelopeOf([PAGE, "--", "-p", "--verbose"]);
+		const prompt = buildTaskPrompt({
+			mode: "run",
+			url: PAGE,
+			userPrompt: "-p --verbose",
+			raw: false,
+		});
+		expect(envelope.initialPrompt).toBe(prompt);
+		expect(envelope.argv.slice(-4)).toEqual([
+			"--max-turns=3",
 			"--allowedTools=WebFetch",
-			"-p",
-			"--verbose",
 			"--",
-			buildTaskPrompt({ mode: "run", url: PAGE, userPrompt: "", raw: false }),
+			prompt,
 		]);
+		expect(envelope.argv).not.toContain("-p");
+		expect(envelope.argv).not.toContain("--verbose");
 	});
 
 	test("usage early exits under --show-prompt are stderr diagnostics with code 1 (D-030)", async () => {
@@ -780,14 +854,63 @@ describe("execution through the fake Claude CLI (B-006)", () => {
 		expect(exported.records[0]?.argv).toEqual(plain.records[0]?.argv ?? []);
 	});
 
-	test("-p after -- reaches claude (AC #4)", async () => {
-		const run = await execute([PAGE, "--", "-p"]);
+	test("the reviewer's attack line after -- never reaches claude: the tokens become prompt words (AC #4, D-039)", async () => {
+		const run = await execute([PAGE, "--", ...ATTACK]);
+		expect({ code: run.code, stdout: run.stdout, stderr: run.stderr }).toEqual({
+			code: 0,
+			stdout: "claude result\n",
+			stderr: "",
+		});
+		expect(run.records).toHaveLength(1);
+		expectSealedArgv(run.records[0]?.argv ?? [], ATTACK.join(" "));
+	});
+
+	test("a URL and prompt after -- are fetched as positionals, as the legacy parser did (review m-1)", async () => {
+		const run = await execute(["--", PAGE, "list tiers"]);
 		expect(run.code).toBe(0);
-		const argv = run.records[0]?.argv ?? [];
-		expect(argv.indexOf("-p")).toBe(
-			argv.indexOf("--allowedTools=WebFetch") + 1,
+		expect(run.records).toHaveLength(1);
+		expect(run.records[0]?.argv.at(-1)).toBe(
+			buildTaskPrompt({
+				mode: "run",
+				url: PAGE,
+				userPrompt: "list tiers",
+				raw: false,
+			}),
 		);
 	});
+
+	test("a URL that starts with a dash after -- is the URL, not an option", async () => {
+		const run = await execute(["--", "-odd.example/page", "--raw"]);
+		expect(run.code).toBe(0);
+		expect(run.records[0]?.argv.at(-1)).toBe(
+			buildTaskPrompt({
+				mode: "run",
+				url: "-odd.example/page",
+				userPrompt: "--raw",
+				raw: false,
+			}),
+		);
+		expect(run.records[0]?.argv).not.toContain("-odd.example/page");
+	});
+
+	// Shapes the shared fake has no scenario for (review n-7).
+	for (const [scenario, expected] of [
+		["error0", { code: 1, stdout: "ERROR: 404 Not Found\n", stderr: "" }],
+		["note", { code: 0, stdout: "payload\n", stderr: "claude note\n" }],
+		["empty", { code: 0, stdout: "", stderr: "" }],
+	] as const) {
+		test(`through a fake claude: ${scenario}`, async () => {
+			const run = await execute([PAGE], {
+				path: `${shapesBin}:${process.env.PATH}`,
+				env: { WF_SHAPE: scenario },
+			});
+			expect({
+				code: run.code,
+				stdout: run.stdout,
+				stderr: run.stderr,
+			}).toEqual(expected);
+		});
+	}
 });
 
 describe("compiled binary (AC #3, B-001)", () => {
@@ -866,6 +989,7 @@ describe("compiled binary (AC #3, B-001)", () => {
 			["--max-turns", "5", PAGE],
 			["-p", PAGE],
 			["--backend", "codex", PAGE],
+			["--bogus", PAGE],
 		]) {
 			const run = await runBinary(argv);
 			expect({
@@ -875,5 +999,19 @@ describe("compiled binary (AC #3, B-001)", () => {
 			}).toEqual({ code: 2, stdout: "", records: [] });
 			expect(run.stderr).toStartWith("tools:webfetch: ");
 		}
+	});
+
+	test("the attack line after -- leaves the binary's claude argv sealed (D-039)", async () => {
+		const run = await runBinary([PAGE, "--", ...ATTACK]);
+		expect({ code: run.code, stdout: run.stdout, stderr: run.stderr }).toEqual({
+			code: 0,
+			stdout: "claude result\n",
+			stderr: "",
+		});
+		expect(run.records).toHaveLength(1);
+		expectSealedArgv(run.records[0]?.argv ?? [], ATTACK.join(" "));
+		const help = await runBinary(["--help"]);
+		expect(help.stdout).not.toContain("--resume");
+		expect(help.stdout).toContain("[-- args...]");
 	});
 });
