@@ -234,7 +234,7 @@ export function parseAgentMarkdown(file: string, text: string): ParsedAgent {
 	checkBackends(backends, report);
 	checkFlags(data.flags ?? {}, report);
 	checkDeclaredBackendKeys(data, backends, report);
-	const mcp = checkMcp(data.mcp ?? {}, report);
+	const mcp = checkMcp(data.mcp ?? {}, backends, report);
 	checkNative(data.native ?? {}, report);
 	if (data.initialPrompt !== undefined) {
 		for (const problem of validateTemplate(
@@ -479,8 +479,10 @@ function checkDeclaredBackendKeys(
 
 function checkMcp(
 	servers: Record<string, unknown>,
+	backends: readonly Backend[],
 	report: Report,
 ): Record<string, McpServer> {
+	const claude = backends.includes("claude");
 	const parsed: Record<string, McpServer> = {};
 	for (const [name, value] of Object.entries(servers)) {
 		const base = ["mcp", name];
@@ -524,12 +526,56 @@ function checkMcp(
 		}
 		for (const [path, leaf] of stringLeaves(result.data, base)) {
 			const scan = scanInterpolations(leaf);
-			if (!scan.ok) report(path, scan.error);
+			if (!scan.ok) {
+				report(path, scan.error);
+				continue;
+			}
+			// D-033: Claude expands every `${VAR}` in inline MCP JSON, so a
+			// literal one would not stay literal.
+			if (claude && literalDollarBrace(leaf, scan.references)) {
+				report(
+					path,
+					'contains a literal "${" that Claude would expand; only ${env:NAME} and ${cmd:...} are allowed when claude is a declared backend',
+				);
+			}
+		}
+		// Keys are never interpolated, and Claude's handling of "${" in a key
+		// is unverified, so any "${" in an env or header name is refused.
+		const keyed =
+			"command" in result.data
+				? (["env", result.data.env] as const)
+				: (["headers", result.data.headers] as const);
+		for (const key of Object.keys(keyed[1] ?? {})) {
+			if (key.includes("${")) {
+				report(
+					[...base, keyed[0]],
+					`name "${key}" contains "\${"; ${keyed[0] === "env" ? "env" : "header"} names are never interpolated`,
+				);
+			}
+		}
+		// D-032: Claude ignores a stdio server's cwd.
+		if (claude && "command" in result.data && result.data.cwd !== undefined) {
+			report(
+				[...base, "cwd"],
+				"a stdio cwd is not supported when claude is a declared backend (Claude ignores it)",
+			);
 		}
 		parsed[name] = result.data;
 	}
 	checkSecretEnvNames(parsed, report);
 	return parsed;
+}
+
+function literalDollarBrace(
+	leaf: string,
+	references: readonly { raw: string }[],
+): boolean {
+	let rest = leaf;
+	for (const reference of references) {
+		// A separator, so text on either side cannot join into "${".
+		rest = rest.replace(reference.raw, () => "\0");
+	}
+	return rest.includes("${");
 }
 
 /** Interpolated header values must map to distinct D-029 variable names. */

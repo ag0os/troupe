@@ -1412,7 +1412,7 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 		});
 	});
 
-	test("the default interpolation stub passes literal values and refuses references", async () => {
+	test("the default interpolation passes literal values through untouched", async () => {
 		const literal = await interpolateMcp(
 			{ api: { url: "https://x.test", headers: { A: "literal" } } },
 			{
@@ -1420,7 +1420,7 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 				cwd: workspace,
 				signal: new AbortController().signal,
 				runCommand: async () => {
-					throw new Error("the stub runs nothing");
+					throw new Error("literal values run nothing");
 				},
 			},
 		);

@@ -624,8 +624,14 @@ describe("MCP mapping (B-004, D-029)", () => {
 		},
 	};
 
+	const { cwd: _cwd, ...chromeWithoutCwd } = mcp.chrome;
+	const claudeMcp = { ...mcp, chrome: chromeWithoutCwd };
+
 	test("claude: one inline --mcp-config with env-referenced secret headers", () => {
-		const plan = claudeAdapter.build(invocation("claude", { mcp }), PATHS);
+		const plan = claudeAdapter.build(
+			invocation("claude", { mcp: claudeMcp }),
+			PATHS,
+		);
 		const [config] = valuesOf(plan.argv, "--mcp-config");
 		expect(JSON.parse(config ?? "")).toEqual({
 			mcpServers: {
@@ -634,7 +640,6 @@ describe("MCP mapping (B-004, D-029)", () => {
 					command: "npx",
 					args: ["chrome-devtools-mcp@latest"],
 					env: { MODE: "real" },
-					cwd: "/srv",
 				},
 				github: {
 					type: "http",
@@ -652,6 +657,19 @@ describe("MCP mapping (B-004, D-029)", () => {
 		});
 		expect(plan.argv.join(" ")).not.toContain("s3cr3t");
 		expect(plan.displayArgv.join(" ")).not.toContain("s3cr3t");
+	});
+
+	test("claude refuses a stdio cwd and never emits one (D-032)", () => {
+		expect(() =>
+			claudeAdapter.build(invocation("claude", { mcp }), PATHS),
+		).toThrow(
+			"test:agent: mcp.chrome.cwd: a stdio cwd is not supported on claude",
+		);
+		const [config] = valuesOf(
+			claudeAdapter.build(invocation("claude", { mcp: claudeMcp }), PATHS).argv,
+			"--mcp-config",
+		);
+		expect(config).not.toContain('"cwd"');
 	});
 
 	test("codex: one mcp_servers entry per server, env_http_headers for secrets", () => {
@@ -834,43 +852,86 @@ describe("fix round 1", () => {
 	describe("hostile values round-trip through every MCP field", () => {
 		const hostile = "a\"b\nc = 1}, command = \"evil\\ #x {y} 'q' ][ ${X}";
 		const v = (text: string) => literal(text);
-		const mcp = {
+		const serversFor = (text: string) => ({
 			s: {
-				command: v(`cmd${hostile}`),
-				args: [v(`arg${hostile}`), v(hostile)],
-				env: { [`E${hostile}`]: v(`env${hostile}`) },
-				cwd: v(`cwd${hostile}`),
+				command: v(`cmd${text}`),
+				args: [v(`arg${text}`), v(text)],
+				env: { [`E${text}`]: v(`env${text}`) },
+				cwd: v(`cwd${text}`),
 			},
 			h: {
-				url: v(`url${hostile}`),
+				url: v(`url${text}`),
 				headers: {
-					[`H${hostile}`]: v(`hdr${hostile}`),
-					Authorization: secret(hostile, "h", "Authorization"),
+					[`H${text}`]: v(`hdr${text}`),
+					Authorization: secret(text, "h", "Authorization"),
 				},
 			},
-		};
+		});
+		const mcp = serversFor(hostile);
 
 		test("claude --mcp-config JSON parses back to the same values", () => {
-			const [config] = valuesOf(claude({ mcp }), "--mcp-config");
+			// Claude refuses "${" in a plain value (D-033) and a stdio cwd
+			// (D-032); "$" and "{" apart still round-trip.
+			const text = hostile.replace("${X}", "$X {X}");
+			const { cwd: _cwd, ...stdio } = serversFor(text).s;
+			const [config] = valuesOf(
+				claude({ mcp: { ...serversFor(text), s: stdio } }),
+				"--mcp-config",
+			);
 			expect(JSON.parse(config ?? "")).toEqual({
 				mcpServers: {
 					s: {
 						type: "stdio",
-						command: `cmd${hostile}`,
-						args: [`arg${hostile}`, hostile],
-						env: { [`E${hostile}`]: `env${hostile}` },
-						cwd: `cwd${hostile}`,
+						command: `cmd${text}`,
+						args: [`arg${text}`, text],
+						env: { [`E${text}`]: `env${text}` },
 					},
 					h: {
 						type: "http",
-						url: `url${hostile}`,
+						url: `url${text}`,
 						headers: {
-							[`H${hostile}`]: `hdr${hostile}`,
+							[`H${text}`]: `hdr${text}`,
 							Authorization: "${" + "TROUPE_MCP_H_AUTHORIZATION}",
 						},
 					},
 				},
 			});
+		});
+
+		test('claude refuses a plain value carrying "${" without naming the value', () => {
+			const fields: [string, Invocation["mcp"]][] = [
+				["s.command", { s: { command: v("x${SECRETVAL}") } }],
+				["s.args[0]", { s: { command: v("x"), args: [v("${SECRETVAL}")] } }],
+				["s.env.K", { s: { command: v("x"), env: { K: v("${SECRETVAL}") } } }],
+				["h.url", { h: { url: v("https://x/${SECRETVAL}") } }],
+				[
+					"h.headers.A",
+					{ h: { url: v("https://x"), headers: { A: v("${SECRETVAL}") } } },
+				],
+			];
+			for (const [field, servers] of fields) {
+				let message = "";
+				try {
+					claude({ mcp: servers });
+				} catch (error) {
+					message = (error as Error).message;
+				}
+				expect(message).toBe(
+					`test:agent: mcp.${field}: the resolved value contains "\${", which Claude would expand (D-033)`,
+				);
+				expect(message).not.toContain("SECRETVAL");
+			}
+			// A secret header goes by reference, so its value may hold anything.
+			expect(
+				claude({
+					mcp: {
+						h: {
+							url: v("https://x"),
+							headers: { A: secret("${Y}", "h", "A") },
+						},
+					},
+				}),
+			).toBeDefined();
 		});
 
 		test("codex -c fragments parse as TOML to exactly the declared tables", () => {

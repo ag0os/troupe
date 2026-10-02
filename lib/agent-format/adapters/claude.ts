@@ -66,6 +66,23 @@ export const claudeAdapter: BackendAdapter = {
 			out.push("--permission-mode", PERMISSION_MODES[spec.access]);
 		}
 
+		for (const [name, server] of Object.entries(inv.mcp)) {
+			// D-032: Claude starts stdio servers in its own cwd and ignores this.
+			if (isStdio(server) && server.cwd !== undefined) {
+				throw new Error(
+					`${spec.id}: mcp.${name}.cwd: a stdio cwd is not supported on claude`,
+				);
+			}
+			for (const [field, value] of plainLeaves(server)) {
+				// D-033: Claude would expand it again, so a resolved value must
+				// not carry "${". The value itself is never named.
+				if (value.actual.includes("${")) {
+					throw new Error(
+						`${spec.id}: mcp.${name}.${field}: the resolved value contains "\${", which Claude would expand (D-033)`,
+					);
+				}
+			}
+		}
 		const mcp = mcpConfig(inv.mcp);
 		if (mcp) out.push("--mcp-config").pushValue(mcp.actual, mcp.display);
 
@@ -125,6 +142,31 @@ function mcpConfig(
 	);
 }
 
+/** Every leaf Claude receives as written; secret headers go by reference. */
+function plainLeaves(server: ResolvedMcpServer): [string, ResolvedValue][] {
+	if (isStdio(server)) {
+		return [
+			["command", server.command],
+			...(server.args ?? []).map((arg, i): [string, ResolvedValue] => [
+				`args[${i}]`,
+				arg,
+			]),
+			...Object.entries(server.env ?? {}).map(
+				([key, value]): [string, ResolvedValue] => [`env.${key}`, value],
+			),
+		];
+	}
+	return [
+		["url", server.url],
+		...Object.entries(server.headers ?? {})
+			.filter(([, value]) => !value.secretEnv)
+			.map(([key, value]): [string, ResolvedValue] => [
+				`headers.${key}`,
+				value,
+			]),
+	];
+}
+
 function serverJson(
 	server: ResolvedMcpServer,
 	pick: (value: ResolvedValue) => string,
@@ -136,7 +178,6 @@ function serverJson(
 		};
 		if (server.args) json.args = server.args.map(pick);
 		if (server.env) json.env = mapValues(server.env, pick);
-		if (server.cwd) json.cwd = pick(server.cwd);
 		return json;
 	}
 	const json: Record<string, unknown> = { type: "http", url: pick(server.url) };
