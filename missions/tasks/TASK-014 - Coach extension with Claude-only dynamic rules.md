@@ -1,7 +1,7 @@
 ---
 id: TASK-014
 title: Coach extension with Claude-only dynamic rules
-status: To Do
+status: Done
 priority: medium
 labels:
   - backend
@@ -9,7 +9,7 @@ labels:
 dependencies:
   - TASK-009
 createdAt: '2026-09-30T17:41:14.320Z'
-updatedAt: '2026-09-30T18:30:00.000Z'
+updatedAt: '2026-10-02T14:22:38.000Z'
 ---
 
 ## Description
@@ -21,10 +21,10 @@ Ground: D-016 prepare carries required behavior, D-015 extensions return runner 
 Ratified constraints: dynamic rules return only on Claude so a Codex preview never errors; extensions never spawn or build argv (D-015). Land as its own same-stem commit with Coach snapshots, a nested-workspace Codex preview, and an import-has-no-side-effects check.
 
 <!-- AC:BEGIN -->
-- [ ] #1 D-016: Coach's prepare handles init/list, persisted roster/student/integrations, prompt and cwd, and returns dynamic rules only when `ctx.backend === "claude"`
-- [ ] #2 D-016: a Codex preview of a nested Coach workspace shows the prompt/cwd with no rule error and is snapshotted; rule objects are never returned on Codex (fail-closed)
-- [ ] #3 D-015: importing the extension spawns no process and does not exit, and the same-stem pair builds as declaration+extension
-- [ ] #4 D-028: Coach's `--resume`/`--permission-mode` follow `--`, and the Coach pack frontmatter stays a separate runtime content contract
-- [ ] #5 `bun run typecheck` and the project's test step pass with Coach snapshots
-- [ ] #6 D-028: Coach's `--cwd`/`--show-prompt` are framework flags, not Coach-parsed flags
+- [x] #1 D-016: Coach's prepare handles init/list, persisted roster/student/integrations, prompt and cwd, and returns dynamic rules only when `ctx.backend === "claude"`
+- [x] #2 D-016: a Codex preview of a nested Coach workspace shows the prompt/cwd with no rule error and is snapshotted; rule objects are never returned on Codex (fail-closed)
+- [x] #3 D-015: importing the extension spawns no process and does not exit, and the same-stem pair builds as declaration+extension
+- [x] #4 D-028: Coach's `--resume`/`--permission-mode` follow `--`, and the Coach pack frontmatter stays a separate runtime content contract
+- [x] #5 `bun run typecheck` and the project's test step pass with Coach snapshots
+- [x] #6 D-028: Coach's `--cwd`/`--show-prompt` are framework flags, not Coach-parsed flags
 <!-- AC:END -->

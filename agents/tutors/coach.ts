@@ -1,5 +1,3 @@
-#!/usr/bin/env -S bun run
-
 /**
  * COACH: one dynamic tutor, many subject packs.
  *
@@ -31,14 +29,20 @@
  * .coach/integrations/*.md read at launch) so it can act on the program rather
  * than only describe it.
  *
+ * The declaration is `coach.md`; this extension's `prepare` does the
+ * composition at launch (D-016). The training root is the framework's
+ * working directory, so `--cwd` and `--show-prompt` are framework flags, and
+ * backend flags such as `--resume` follow `--` (D-028).
+ *
  * Usage:
- *   bun run agents/tutors/coach.ts                    # coordinator: what to train today
- *   bun run agents/tutors/coach.ts rails              # open the Rails coach
- *   bun run agents/tutors/coach.ts coding "ts drill"  # open with an initial message
- *   bun run agents/tutors/coach.ts --list             # print the roster and exit
- *   bun run agents/tutors/coach.ts --init             # seed .coach/ with student + packs
- *   bun run agents/tutors/coach.ts rails --show-prompt # print composed prompt, don't spawn
- *   bun run agents/tutors/coach.ts rails --cwd ~/training  # train against a fixed root
+ *   tutors:coach                        # coordinator: what to train today
+ *   tutors:coach rails                  # open the Rails coach
+ *   tutors:coach coding "ts drill"      # open with an initial message
+ *   tutors:coach --list                 # print the roster and exit
+ *   tutors:coach --init                 # seed .coach/ with student + packs
+ *   tutors:coach rails --show-prompt    # print composed prompt, don't spawn
+ *   tutors:coach rails --cwd ~/training # train against a fixed root
+ *   tutors:coach rails -- --resume <id> # backend flags follow `--`
  */
 
 import {
@@ -48,14 +52,11 @@ import {
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
-import {
-	buildClaudeFlags,
-	getPositionals,
-	parsedArgs,
-	spawnClaudeAndWait,
-} from "../../lib";
-import type { ClaudeFlags } from "../../lib/claude-flags.types";
+import { join } from "node:path";
+import type {
+	PrepareContext,
+	PrepareResult,
+} from "../../lib/agent-format/types";
 import coordinatorDoc from "../../system-prompts/coach/coordinator.md" with {
 	type: "text",
 };
@@ -86,14 +87,16 @@ import studentScaffold from "../../system-prompts/coach/student.md" with {
 };
 
 /** Seeds for a fresh training root — not a floor every root inherits. */
-const BUILT_IN_PACKS: string[] = [
-	codingPack,
-	dataModelingPack,
-	railsPack,
-	systemDesignPack,
-	testingPack,
-	tsReactPack,
-];
+function builtInPacks(): string[] {
+	return [
+		codingPack,
+		dataModelingPack,
+		railsPack,
+		systemDesignPack,
+		testingPack,
+		tsReactPack,
+	];
+}
 
 /**
  * Every coach owns `.coach/`: its own state directory, and the student profile
@@ -112,8 +115,10 @@ const BASE_ALLOW = ["Read(.coach/**)", "Write(.coach/**)", "Edit(.coach/**)"];
  * `herdr` is pre-approved so launching a staged session doesn't prompt;
  * destructive Herdr commands are forbidden by the module instead.
  */
-const BUILT_IN_INTEGRATIONS = [herdrIntegration];
-const COORDINATOR_ALLOW = [...BASE_ALLOW, "Bash(herdr:*)"];
+function builtInIntegrations(): string[] {
+	return [herdrIntegration];
+}
+const COORDINATOR_EXTRA_ALLOW = ["Bash(herdr:*)"];
 
 type Pack = {
 	slug: string;
@@ -125,9 +130,13 @@ type Pack = {
 	local: boolean;
 };
 
+/** Where a warning goes: stderr when executing, nowhere in preview (D-012). */
+type Warn = (message: string) => void;
+
 /**
  * Minimal frontmatter reader: flat `key: value` pairs between `---` fences.
- * Deliberately not YAML — packs only ever carry scalar metadata.
+ * Deliberately not YAML — packs only ever carry scalar metadata. This is the
+ * pack's own runtime content contract, separate from the agent declaration.
  */
 function parsePack(raw: string, local: boolean): Pack | null {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
@@ -160,12 +169,14 @@ function parsePack(raw: string, local: boolean): Pack | null {
 
 /** The built-in seeds, paired with the raw text `--init` needs to write out. */
 function builtInEntries(): { pack: Pack; raw: string }[] {
-	return BUILT_IN_PACKS.map((raw) => ({
-		raw,
-		pack: parsePack(raw, false),
-	})).filter((entry): entry is { pack: Pack; raw: string } =>
-		Boolean(entry.pack),
-	);
+	return builtInPacks()
+		.map((raw) => ({
+			raw,
+			pack: parsePack(raw, false),
+		}))
+		.filter((entry): entry is { pack: Pack; raw: string } =>
+			Boolean(entry.pack),
+		);
 }
 
 function bySlug(a: Pack, b: Pack): number {
@@ -184,7 +195,7 @@ function packsDir(root: string): string {
  * only the seed for a root that has none; treating them as a permanent floor
  * is what made retired subjects impossible to remove without a recompile.
  */
-function loadPacks(root: string): Pack[] {
+function loadPacks(root: string, warn: Warn): Pack[] {
 	const localDir = packsDir(root);
 	if (!existsSync(localDir)) {
 		return builtInEntries()
@@ -199,7 +210,7 @@ function loadPacks(root: string): Pack[] {
 			const pack = parsePack(readFileSync(join(localDir, file), "utf8"), true);
 			if (pack) packs.set(pack.slug, pack);
 		} catch (error) {
-			console.warn(`Skipping unreadable pack ${file}: ${error}`);
+			warn(`Skipping unreadable pack ${file}: ${error}`);
 		}
 	}
 
@@ -218,7 +229,10 @@ function loadPacks(root: string): Pack[] {
  * Workspace-local capability modules, appended after the built-ins so a
  * training root can extend or override the coordinator without a recompile.
  */
-function loadLocalIntegrations(root: string): { name: string; body: string }[] {
+function loadLocalIntegrations(
+	root: string,
+	warn: Warn,
+): { name: string; body: string }[] {
 	const dir = join(root, ".coach", "integrations");
 	if (!existsSync(dir)) return [];
 	try {
@@ -230,7 +244,7 @@ function loadLocalIntegrations(root: string): { name: string; body: string }[] {
 				body: readFileSync(join(dir, file), "utf8"),
 			}));
 	} catch (error) {
-		console.warn(`Skipping unreadable integrations directory: ${error}`);
+		warn(`Skipping unreadable integrations directory: ${error}`);
 		return [];
 	}
 }
@@ -245,7 +259,7 @@ function studentPath(root: string): string {
  * provenance line matters as much as the text: without a path, a coach told to
  * "update this file" has no file to update.
  */
-function loadStudent(root: string): string {
+function loadStudent(root: string, warn: Warn): string {
 	const path = studentPath(root);
 	let doc = studentScaffold;
 	let local = false;
@@ -255,7 +269,7 @@ function loadStudent(root: string): string {
 			doc = readFileSync(path, "utf8");
 			local = true;
 		} catch (error) {
-			console.warn(`Falling back to the built-in student scaffold: ${error}`);
+			warn(`Falling back to the built-in student scaffold: ${error}`);
 		}
 	}
 
@@ -266,8 +280,11 @@ function loadStudent(root: string): string {
 	return `${doc.trim()}\n\n${provenance}`;
 }
 
-/** Seed a training root with the built-in student profile and pack set. */
-function initRoot(root: string): void {
+/**
+ * Seed a training root with the built-in student profile and pack set, and
+ * return the report that `--init` prints.
+ */
+function initRoot(root: string): string {
 	const dir = packsDir(root);
 	mkdirSync(dir, { recursive: true });
 
@@ -287,31 +304,16 @@ function initRoot(root: string): void {
 	const studentWritten = !existsSync(student);
 	if (studentWritten) writeFileSync(student, studentScaffold, "utf8");
 
-	console.log(`Seeded ${join(root, ".coach")}\n`);
-	console.log(
+	const lines = [`Seeded ${join(root, ".coach")}\n`];
+	lines.push(
 		`  student.md   ${studentWritten ? "written" : "kept (already present)"}`,
 	);
-	if (written.length) console.log(`  packs written  ${written.join(", ")}`);
-	if (skipped.length) console.log(`  packs kept     ${skipped.join(", ")}`);
-	console.log(
+	if (written.length) lines.push(`  packs written  ${written.join(", ")}`);
+	if (skipped.length) lines.push(`  packs kept     ${skipped.join(", ")}`);
+	lines.push(
 		"\nThis directory is now the roster. Delete a pack file to retire the subject;\nadd one to create a subject. No recompile either way.",
 	);
-}
-
-/**
- * `--cwd` picks the training root: where `.coach/` lives and where subjects
- * are launched. It must not reach the Claude CLI, so it is consumed here.
- */
-function resolveRoot(): string {
-	const requested = parsedArgs.values.cwd;
-	if (typeof requested !== "string" || requested === "") return process.cwd();
-
-	const root = resolve(requested);
-	if (!existsSync(root)) {
-		console.error(`--cwd does not exist: ${root}`);
-		process.exit(1);
-	}
-	return root;
+	return `${lines.join("\n")}\n`;
 }
 
 function renderRoster(packs: Pack[]): string {
@@ -334,34 +336,46 @@ function renderRoster(packs: Pack[]): string {
 	].join("\n");
 }
 
-function printRoster(packs: Pack[]): void {
-	console.log("Subjects:\n");
+/** The roster as `--list` prints it. */
+function printRoster(packs: Pack[]): string {
+	const lines = ["Subjects:\n"];
 	for (const pack of packs) {
 		const tag = pack.local ? " (local)" : "";
-		console.log(`  tutors:coach ${pack.slug.padEnd(16)}${pack.name}${tag}`);
-		if (pack.scope) console.log(`  ${" ".repeat(29)}${pack.scope}`);
+		lines.push(`  tutors:coach ${pack.slug.padEnd(16)}${pack.name}${tag}`);
+		if (pack.scope) lines.push(`  ${" ".repeat(29)}${pack.scope}`);
 	}
 
-	console.log("\nRun `tutors:coach` with no subject to plan a session.");
+	lines.push("\nRun `tutors:coach` with no subject to plan a session.");
+	return `${lines.join("\n")}\n`;
 }
 
-async function main() {
-	const root = resolveRoot();
+export function prepare(ctx: PrepareContext): PrepareResult {
+	const root = ctx.cwd;
+	const warn: Warn = ctx.preview
+		? () => {}
+		: (message) => console.warn(message);
 
-	if (parsedArgs.values.init === true) {
-		initRoot(root);
-		process.exit(0);
+	if (ctx.flags.init === true) {
+		// Preview writes nothing (D-012); its early exit is a diagnostic (D-030).
+		if (ctx.preview) {
+			return {
+				exit: {
+					message: `--init seeds ${join(root, ".coach")} when run; preview writes nothing.\n`,
+					code: 0,
+					stream: "stdout",
+				},
+			};
+		}
+		return { exit: { message: initRoot(root), code: 0, stream: "stdout" } };
 	}
 
-	const packs = loadPacks(root);
+	const packs = loadPacks(root, warn);
 
-	if (parsedArgs.values.list === true) {
-		printRoster(packs);
-		process.exit(0);
+	if (ctx.flags.list === true) {
+		return { exit: { message: printRoster(packs), code: 0, stream: "stdout" } };
 	}
 
-	const positionals = getPositionals();
-	const requested = positionals[0];
+	const requested = ctx.args[0];
 	const pack = requested
 		? packs.find((candidate) => candidate.slug === requested)
 		: undefined;
@@ -369,29 +383,33 @@ async function main() {
 	// A slug-shaped first argument that matches nothing is a typo, not a
 	// message. Anything else (`coach "plan my week"`) goes to the coordinator.
 	if (requested && !pack && /^[a-z0-9][a-z0-9-]*$/.test(requested)) {
-		console.error(`Unknown subject: ${requested}\n`);
-		printRoster(packs);
-		process.exit(1);
+		return {
+			exit: {
+				message: `Unknown subject: ${requested}\n\n${printRoster(packs)}`,
+				code: 1,
+				stream: "stderr",
+			},
+		};
 	}
 
-	const studentDoc = loadStudent(root);
-	const locals = pack ? [] : loadLocalIntegrations(root);
+	const studentDoc = loadStudent(root, warn);
+	const locals = pack ? [] : loadLocalIntegrations(root, warn);
 
 	// With a subject: student + core + roster + pack. Without one: the
 	// coordinator, which plans rather than teaches and so skips the core, but
 	// gains the capability modules that let it act on the program.
-	const systemPrompt = pack
+	const systemPromptFragments = pack
 		? [
 				studentDoc,
 				coreDoc,
 				renderRoster(packs),
 				`# This session's subject\n\nSlug: \`${pack.slug}\` — your state directory is \`.coach/${pack.slug}/\`.\n\n${pack.body}`,
-			].join("\n\n---\n\n")
+			]
 		: [
 				studentDoc,
 				renderRoster(packs),
 				coordinatorDoc,
-				...BUILT_IN_INTEGRATIONS,
+				...builtInIntegrations(),
 				...locals.map((local) => local.body),
 				[
 					"# This training root",
@@ -405,51 +423,24 @@ async function main() {
 					"",
 					"The roster is exactly `.coach/packs/*.md` once that directory exists: adding a subject means writing a pack file there, and retiring one means deleting it. Neither needs a recompile.",
 				].join("\n"),
-			].join("\n\n---\n\n");
+			];
 
-	if (parsedArgs.values["show-prompt"] === true) {
-		console.log(systemPrompt);
-		process.exit(0);
+	const initialPrompt = (pack ? ctx.args.slice(1) : ctx.args).join(" ").trim();
+
+	// Every coach gets `.coach/` — its state directory and the student
+	// profile it is told to keep current. Packs add to that, never replace it;
+	// the coordinator instead gets what its capability modules need. These are
+	// Claude rules: Codex does not emulate them, so none are returned there.
+	if (ctx.backend !== "claude") {
+		return { systemPromptFragments, initialPrompt };
 	}
-
-	const coachSettings = {
-		permissions: {
-			defaultMode: "default",
-			// Every coach gets `.coach/` — its state directory and the student
-			// profile it is told to keep current. Packs add to that, never replace it;
-			// the coordinator instead gets what its capability modules need.
-			allow: pack
+	return {
+		systemPromptFragments,
+		initialPrompt,
+		extraAllowRules: {
+			rules: pack
 				? [...new Set([...BASE_ALLOW, ...pack.allow])]
-				: COORDINATOR_ALLOW,
+				: [...BASE_ALLOW, ...COORDINATOR_EXTRA_ALLOW],
 		},
 	};
-
-	const coachMcp = { mcpServers: {} };
-
-	const userPrompt = (pack ? positionals.slice(1) : positionals)
-		.join(" ")
-		.trim();
-
-	// `cwd` is ours, not the CLI's — drop it before the flags are forwarded.
-	const { cwd: _consumed, ...forwarded } = parsedArgs.values;
-
-	const flags = buildClaudeFlags(
-		{
-			"append-system-prompt": systemPrompt,
-			settings: JSON.stringify(coachSettings),
-			"mcp-config": JSON.stringify(coachMcp),
-		},
-		forwarded as ClaudeFlags,
-	);
-	const args = userPrompt ? [...flags, userPrompt] : [...flags];
-
-	const exitCode = await spawnClaudeAndWait({
-		args,
-		cwd: root,
-		env: { CLAUDE_PROJECT_DIR: root },
-	});
-
-	process.exit(exitCode);
 }
-
-await main();
