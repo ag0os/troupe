@@ -1003,9 +1003,13 @@ async function lifecycle(
 			io.stdout(message.endsWith("\n") ? message : `${message}\n`);
 		}
 		await io.flush?.();
+		const env = definedEnv({ ...io.env, ...interpolated.env, ...plan.env });
+		// Spec Migration drops CLAUDE_PROJECT_DIR: a value inherited from an
+		// enclosing Claude Code session would name the wrong project.
+		if (backend === "claude") delete env.CLAUDE_PROJECT_DIR;
 		child = scope.spawn([executable, ...plan.argv], {
 			cwd: plan.cwd,
-			env: definedEnv({ ...io.env, ...interpolated.env, ...plan.env }),
+			env,
 			stdin: plan.stdin,
 			stdout: plan.stdout,
 			stderr: plan.stderr,

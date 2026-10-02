@@ -108,6 +108,8 @@ interface RunOptions {
 	createResources?: ExecuteIo["createResources"];
 	flush?: ExecuteIo["flush"];
 	killGraceMs?: number;
+	/** Extra variables in the launch environment. */
+	env?: Record<string, string>;
 }
 
 async function run(
@@ -140,6 +142,7 @@ async function run(
 			FAKE_RECORD: recordFile,
 			FAKE_PID_FILE: pidFile,
 			FAKE_SCENARIO: options.scenario ?? "ok",
+			...options.env,
 		},
 		tmpRoot,
 	};
@@ -1180,6 +1183,22 @@ describe("runner-created resources (AC #8; D-019, Design §5)", () => {
 		expect(first?.tmpdirEntries).toEqual([]);
 		expect(existsSync(first?.tmpdir ?? "")).toBe(false);
 		expect(readdirSync(tmpRoot)).toEqual([]);
+	});
+
+	test("an inherited CLAUDE_PROJECT_DIR never reaches a Claude child; Codex keeps the launch env", async () => {
+		const env = { CLAUDE_PROJECT_DIR: "/elsewhere/project" };
+		for (const mode of ["interactive", "print", "stream"] as const) {
+			rmSync(recordFile, { force: true });
+			const result = await run(fixtureSpec({ mode }), [], {}, { env });
+			expect(result.code).toBe(0);
+			expect(readRecords(recordFile)).toHaveLength(1);
+			expect(readRecords(recordFile)[0]).not.toHaveProperty("claudeProjectDir");
+		}
+		rmSync(recordFile, { force: true });
+		await run(fixtureSpec(), ["--backend", "codex"], {}, { env });
+		expect(readRecords(recordFile)[0]?.claudeProjectDir).toBe(
+			"/elsewhere/project",
+		);
 	});
 
 	test("the Codex replace prompt file is owner-only (0600), holds the prompt and is removed", async () => {
