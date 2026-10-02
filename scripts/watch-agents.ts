@@ -4,23 +4,22 @@
  * shared compiler on any change, one rebuild at a time.
  */
 
-import { startWatcher, takeModeArg } from "./agent-compiler";
+import { startWatcher } from "./agent-compiler";
 
-const { mode, rest, error } = takeModeArg(process.argv.slice(2));
-if (error || !mode || rest.length > 0) {
-	console.error(error ?? `Unknown arguments: ${rest.join(" ")}`);
+const rest = process.argv.slice(2);
+if (rest.length > 0) {
+	console.error(`Unknown arguments: ${rest.join(" ")}`);
 	process.exit(1);
 }
 
 const controller = new AbortController();
 const watcher = startWatcher({
 	root: process.cwd(),
-	mode,
 	signal: controller.signal,
 	log: (line) => console.log(line),
 	warn: (line) => console.error(line),
 });
-console.log(`Watching ${watcher.roots.join(", ")} (${mode} mode)...`);
+console.log(`Watching ${watcher.roots.join(", ")}...`);
 void watcher.queue.request();
 
 let stopping = false;

@@ -4,9 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "compile": "bun scripts/compile.ts --mode=mixed",
-    "compile:all": "bun scripts/compile-all.ts --mode=mixed",
-    "watch": "bun scripts/watch-agents.ts --mode=mixed",
+    "compile": "bun scripts/compile.ts",
+    "compile:all": "bun scripts/compile-all.ts",
+    "watch": "bun scripts/watch-agents.ts",
     "lint": "biome check --write .",
     "format": "biome format --write .",
     "check": "biome check .",

@@ -303,14 +303,13 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		expect(agent.spec.mcp).toBeUndefined();
 	});
 
-	test("mixed mode builds the pair as declaration plus extension, never the hook as entry", async () => {
-		const plan = await planBuild({ root: repo, mode: "mixed" });
+	test("builds the pair as declaration plus extension, never the hook as entry", async () => {
+		const plan = await planBuild({ root: repo });
 		const entries = plan.entries.filter((entry) => entry.id === "shepherd");
 		expect(entries).toHaveLength(1);
 		const [entry] = entries;
-		expect(entry?.kind).toBe("declaration");
 		expect(entry?.source).toBe(SOURCE);
-		if (entry?.kind !== "declaration") return;
+		if (!entry) return;
 		expect(entry.agent.extension?.file).toBe(EXTENSION_FILE);
 		const generated = generateEntry(entry.agent);
 		expect(generated).toContain(

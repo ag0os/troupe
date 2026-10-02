@@ -28,7 +28,6 @@ import {
 	executeAgent,
 	previewAgent,
 } from "../../lib/agent-format/run";
-import { PROMPT_SEPARATOR } from "../../lib/agent-format/schema";
 import type { AgentSpec, Backend } from "../../lib/agent-format/types";
 import {
 	compileAgent,
@@ -54,8 +53,6 @@ interface Subject {
 	extension: AgentExtension;
 	/** Positionals used for the envelopes and runs. */
 	args: string[];
-	/** The legacy prompt file the body was moved from. */
-	legacyPrompt: string;
 	/** Output directory relative to the cwd. */
 	outputDir: string;
 	/** Today's banners, with `<cwd>` for the project. */
@@ -68,7 +65,6 @@ const SUBJECTS: Record<string, Subject> = {
 		source: "agents/design/audit.md",
 		extension: { prepare: audit.prepare },
 		args: ["hello world"],
-		legacyPrompt: "system-prompts/design-audit-prompt.md",
 		outputDir: "ai/design-audit",
 		before: [
 			"✅ Created/verified directory: <cwd>/ai/design-audit",
@@ -85,7 +81,6 @@ const SUBJECTS: Record<string, Subject> = {
 		source: "agents/design/diagram/all.md",
 		extension: { prepare: all.prepare },
 		args: ["hello world"],
-		legacyPrompt: "system-prompts/diagram-all-prompt.md",
 		outputDir: "ai/diagrams",
 		before: [
 			"✅ Created/verified directory: <cwd>/ai/diagrams",
@@ -102,7 +97,6 @@ const SUBJECTS: Record<string, Subject> = {
 		source: "agents/design/diagram/consolidate.md",
 		extension: { prepare: consolidate.prepare },
 		args: ["hello world"],
-		legacyPrompt: "system-prompts/diagram-consolidate-prompt.md",
 		outputDir: "ai/diagrams",
 		before: [
 			"✅ Created/verified directory: <cwd>/ai/diagrams",
@@ -119,7 +113,6 @@ const SUBJECTS: Record<string, Subject> = {
 		source: "agents/design/diagram/topic.md",
 		extension: { prepare: topic.prepare },
 		args: ["Auth Login", "extra words"],
-		legacyPrompt: "system-prompts/diagram-topic-prompt.md",
 		outputDir: "ai/diagrams",
 		before: [
 			"✅ Created/verified directory: <cwd>/ai/diagrams",
@@ -351,15 +344,14 @@ describe("declarations paired with extensions (D-001, D-015)", () => {
 		}
 	});
 
-	test("mixed mode builds each pair as declaration plus extension, never the hook as entry", async () => {
-		const plan = await planBuild({ root: repo, mode: "mixed" });
+	test("builds each pair as declaration plus extension, never the hook as entry", async () => {
+		const plan = await planBuild({ root: repo });
 		for (const [id, { source }] of Object.entries(SUBJECTS)) {
 			const entries = plan.entries.filter((entry) => entry.id === id);
 			expect(entries).toHaveLength(1);
 			const [entry] = entries;
-			expect(entry?.kind).toBe("declaration");
 			expect(entry?.source).toBe(source);
-			if (entry?.kind !== "declaration") continue;
+			if (!entry) continue;
 			const extensionFile = join(repo, source.replace(/\.md$/, ".ts"));
 			expect(entry.agent.extension?.file).toBe(extensionFile);
 			const generated = generateEntry(entry.agent);
@@ -430,39 +422,6 @@ describe("declarations paired with extensions (D-001, D-015)", () => {
 			expect(existsSync(recordFile)).toBe(false);
 			expect(readdirSync(cwd)).toEqual([]);
 		}
-	});
-});
-
-// Migration checks against the legacy prompt files under system-prompts/.
-// TASK-017 deletes those files and must delete these two tests with them;
-// the envelope snapshots are the lasting guard for the prose.
-describe("restored bodies and the audit include (B-007, D1)", () => {
-	test("each diagram body is its legacy prompt file, moved unchanged", () => {
-		for (const id of IDS.filter((id) => id !== "design:audit")) {
-			const legacy = readFileSync(
-				join(repo, subject(id).legacyPrompt),
-				"utf8",
-			).trimEnd();
-			expect(spec(id).systemPrompt).toBe(legacy);
-		}
-	});
-
-	test("audit declares expectations.md and composes like today, with the label before the separator", () => {
-		const source = readFileSync(join(repo, "agents/design/audit.md"), "utf8");
-		expect(source).toContain(
-			"includes:\n  - ../../system-prompts/expectations.md\n",
-		);
-		const prompt = readFileSync(
-			join(repo, "system-prompts/design-audit-prompt.md"),
-			"utf8",
-		).trimEnd();
-		const expectations = readFileSync(
-			join(repo, "system-prompts/expectations.md"),
-			"utf8",
-		).trimEnd();
-		expect(spec("design:audit").systemPrompt).toBe(
-			`${prompt}\n\n[Expectations Quality Bar]${PROMPT_SEPARATOR}${expectations}`,
-		);
 	});
 });
 

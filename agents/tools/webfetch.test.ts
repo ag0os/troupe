@@ -55,8 +55,8 @@ const PAGE = "https://example.com";
 const MISSING_URL =
 	"ERROR: missing URL. Run `tools:webfetch --describe` for usage.\n";
 
-/** The legacy `settings/webfetch.settings.json`, rule by rule. */
-const LEGACY_SETTINGS = {
+/** Webfetch's Claude settings, rule by rule, as the legacy launcher had them. */
+const SETTINGS = {
 	permissions: {
 		allow: ["WebFetch"],
 		deny: [
@@ -209,7 +209,7 @@ function expectSealedArgv(argv: readonly string[], words: string) {
 	const options = argv.slice(0, -2);
 	expect(options.filter((arg) => arg === "--settings")).toHaveLength(1);
 	expect(JSON.parse(valueAfter(options, "--settings") ?? "null")).toEqual(
-		LEGACY_SETTINGS,
+		SETTINGS,
 	);
 	expect(options.filter((arg) => arg.includes("max-turns"))).toEqual([
 		"--max-turns=3",
@@ -263,18 +263,6 @@ describe("declaration and extension (D-001, D-005, D-016)", () => {
 		expect(spec.passthrough).toBe(false);
 	});
 
-	// Migration check against the legacy prompt file, which the strict
-	// cutover deletes; delete this check with it. The envelope snapshots are
-	// the lasting guard.
-	test("the body is the legacy webfetch-prompt.md", () => {
-		expect(spec.systemPrompt).toBe(
-			readFileSync(
-				join(repo, "system-prompts/webfetch-prompt.md"),
-				"utf8",
-			).trimEnd(),
-		);
-	});
-
 	test("the usage document drops the --max-turns bullet and documents -- and exit 2 (D-037, D-039)", () => {
 		expect(USAGE_DOC).not.toContain("max-turns");
 		expect(USAGE_DOC).toContain("- **--model <name>**: Claude model");
@@ -287,11 +275,10 @@ describe("declaration and extension (D-001, D-005, D-016)", () => {
 		);
 	});
 
-	test("mixed mode builds the same-stem pair as declaration plus extension (AC #6)", async () => {
-		const plan = await planBuild({ root: repo, mode: "mixed" });
+	test("builds the same-stem pair as declaration plus extension (AC #6)", async () => {
+		const plan = await planBuild({ root: repo });
 		const entry = plan.entries.find((candidate) => candidate.id === ID);
-		expect(entry?.kind).toBe("declaration");
-		if (entry?.kind !== "declaration") return;
+		if (!entry) return;
 		expect(entry.source).toBe(`${SOURCE}.md`);
 		expect(entry.agent.extension).toEqual({
 			file: join(repo, `${SOURCE}.ts`),
@@ -568,12 +555,10 @@ describe("--show-prompt envelopes (B-003)", () => {
 		expect(argv[1]).toBe("--print");
 		expect(valueAfter(argv, "--model")).toBe("haiku");
 		expect(JSON.parse(valueAfter(argv, "--settings") ?? "null")).toEqual(
-			LEGACY_SETTINGS,
+			SETTINGS,
 		);
 		// Byte for byte, the JSON the legacy launcher passed.
-		expect(valueAfter(argv, "--settings")).toBe(
-			JSON.stringify(LEGACY_SETTINGS),
-		);
+		expect(valueAfter(argv, "--settings")).toBe(JSON.stringify(SETTINGS));
 		expect(argv.filter((arg) => arg.startsWith("--max-turns"))).toEqual([
 			"--max-turns=3",
 		]);
@@ -793,7 +778,7 @@ describe("execution through the fake Claude CLI (B-006)", () => {
 		expect(argv).toEqual(previewed.slice(1));
 		expect(argv).toContain("--max-turns=3");
 		expect(JSON.parse(valueAfter(argv, "--settings") ?? "null")).toEqual(
-			LEGACY_SETTINGS,
+			SETTINGS,
 		);
 	});
 
@@ -965,7 +950,7 @@ describe("compiled binary (AC #3, B-001)", () => {
 		expect(envelope.systemPrompt).toBe(spec.systemPrompt);
 		expect(
 			JSON.parse(valueAfter(envelope.argv, "--settings") ?? "null"),
-		).toEqual(LEGACY_SETTINGS);
+		).toEqual(SETTINGS);
 		const exported = await runBinary(["--show-prompt", PAGE], {
 			FORGE_BACKEND: "codex",
 		});
@@ -984,7 +969,7 @@ describe("compiled binary (AC #3, B-001)", () => {
 			JSON.parse(
 				valueAfter(run.records[0]?.argv ?? [], "--settings") ?? "null",
 			),
-		).toEqual(LEGACY_SETTINGS);
+		).toEqual(SETTINGS);
 	});
 
 	test("missing URL, --max-turns, -p and --backend codex exit as declared", async () => {

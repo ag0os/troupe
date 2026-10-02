@@ -1,8 +1,8 @@
 /**
  * Shared agent compiler used by `compile`, `compile:all` and the watcher:
  * reads Markdown declarations, resolves and reads their includes, statically
- * inspects paired `.ts` extensions, selects mixed or strict sources against
- * the roster, and publishes binaries by temp-dir build then rename.
+ * inspects paired `.ts` extensions, checks the sources against the exact
+ * roster, and publishes binaries by temp-dir build then rename.
  */
 
 import {
@@ -69,7 +69,7 @@ export interface ExtensionInspection {
 	/**
 	 * The subset of `exportProblems` that could hide a reserved export
 	 * (`export *`, or a shape tied to `prepare`/`finish`). `export default`
-	 * and `export =` cannot, so a legacy sibling using them is not a hook.
+	 * and `export =` cannot, so a sibling using them only has no hooks.
 	 */
 	hidingExportProblems: SourceIssue[];
 	/** Statements that would run code on import. Fatal for extensions. */
@@ -149,8 +149,7 @@ export async function loadAgentDefinition(
 		},
 	);
 	// A sibling without reserved exports is not an extension, unless an
-	// unresolvable export could be hiding one; mode handling for legacy
-	// siblings belongs to discovery.
+	// unresolvable export could be hiding one; discovery rejects it.
 	if (inspection.exports.length === 0) {
 		if (inspection.hidingExportProblems.length > 0) {
 			throw new AgentSourceError(inspection.hidingExportProblems);
@@ -861,8 +860,8 @@ async function bunBuild(options: {
 }
 
 // ---------------------------------------------------------------------------
-// Roster discovery, mixed/strict source selection and publication (D-011,
-// D-017, D-023).
+// Roster discovery, strict source selection and publication (D-011, D-017,
+// D-023).
 
 /** The fixed 22-agent roster (D-008, D-036). */
 export const ROSTER = [
@@ -890,13 +889,6 @@ export const ROSTER = [
 	"tutors:coach",
 ] as const;
 
-/**
- * `mixed` is the migration mode: Markdown and legacy TypeScript launchers
- * side by side. `strict` is the final mode: Markdown declarations only.
- */
-export const COMPILE_MODES = ["mixed", "strict"] as const;
-export type CompileMode = (typeof COMPILE_MODES)[number];
-
 /** The only directories the watcher watches and includes may resolve into. */
 export const WATCH_ROOTS = INCLUDE_ROOTS;
 
@@ -905,19 +897,19 @@ export const LOCAL_AGENTS_WARNING =
 
 export interface CompilerOptions {
 	root: string;
-	mode: CompileMode;
 	/** Output directory. Defaults to `<root>/bin`. */
 	outDir?: string;
 	/** Defaults to `ROSTER`. */
 	roster?: readonly string[];
 }
 
-export type BuildEntry =
-	| { kind: "declaration"; id: string; source: string; agent: LoadedAgent }
-	| { kind: "legacy"; id: string; source: string };
+export interface BuildEntry {
+	id: string;
+	source: string;
+	agent: LoadedAgent;
+}
 
 export interface BuildPlan {
-	mode: CompileMode;
 	entries: BuildEntry[];
 	warnings: string[];
 }
@@ -1001,6 +993,8 @@ export function resolveAgentName(
 /**
  * Discover and validate sources without building anything. With `only`, the
  * plan covers that one roster name; otherwise it covers the exact roster.
+ * The rule that every .ts under agents/ is a same-stem extension applies
+ * either way.
  * Throws `AgentSourceError` naming every offending file and field.
  */
 export async function planBuild(
@@ -1010,23 +1004,17 @@ export async function planBuild(
 	const roster = new Set(options.roster ?? ROSTER);
 	const found = discoverSources(root);
 	const issues = [...found.issues];
-	const strict = options.mode === "strict";
-
 	const ids = new Set(found.markdown.keys());
-	if (!strict) for (const id of found.typescript.keys()) ids.add(id);
-	const sourceOf = (id: string) =>
-		found.markdown.get(id) ?? found.typescript.get(id) ?? expectedSource(id);
 
-	if (strict && !options.only) {
-		for (const [id, file] of found.typescript) {
-			if (!found.markdown.has(id)) {
-				issues.push({
-					file,
-					field: "path",
-					message:
-						"strict mode builds Markdown declarations only; a .ts under agents/ must be the same-stem extension of a declaration",
-				});
-			}
+	// Checked for every entry point, single compile included (D-017).
+	for (const [id, file] of found.typescript) {
+		if (!found.markdown.has(id)) {
+			issues.push({
+				file,
+				field: "path",
+				message:
+					"only Markdown declarations are built; a .ts under agents/ must be the same-stem extension of a declaration",
+			});
 		}
 	}
 
@@ -1040,79 +1028,90 @@ export async function planBuild(
 				message: `"${id}" is not a roster agent`,
 			});
 		} else if (!ids.has(id)) {
-			issues.push(missingIssue(id, strict));
+			issues.push(missingIssue(id));
 		}
 		selected = ids.has(id) && roster.has(id) ? [id] : [];
 	} else {
 		for (const id of ids) {
 			if (!roster.has(id)) {
 				issues.push({
-					file: sourceOf(id),
+					file: found.markdown.get(id) as string,
 					field: "roster",
 					message: `"${id}" is not a roster agent`,
 				});
 			}
 		}
 		for (const id of roster) {
-			if (!ids.has(id)) issues.push(missingIssue(id, strict));
+			if (!ids.has(id)) issues.push(missingIssue(id));
 		}
 		selected = [...ids].filter((id) => roster.has(id));
 	}
 
 	const entries: BuildEntry[] = [];
 	for (const id of selected.sort()) {
-		const markdown = found.markdown.get(id);
-		if (!markdown) {
-			entries.push({
-				kind: "legacy",
-				id,
-				source: found.typescript.get(id) as string,
-			});
-			continue;
-		}
+		const markdown = found.markdown.get(id) as string;
 		try {
 			const agent = await loadAgentDefinition(root, markdown);
 			const sibling = found.typescript.get(id);
 			if (sibling?.endsWith(".tsx")) {
-				// Only a same-stem .ts is read as an extension; a .tsx hook would
-				// otherwise be dropped without a word.
-				issues.push({
-					file: sibling,
-					field: "path",
-					message:
-						"an extension must be a same-stem .ts file; a .tsx beside a declaration is not read",
-				});
-			} else if (strict && sibling && !agent.extension) {
-				issues.push({
-					file: sibling,
-					field: "exports",
-					message:
-						"strict mode requires a same-stem .ts to export prepare or finish",
-				});
+				issues.push(tsxSiblingIssue(sibling));
+			} else if (sibling && !agent.extension) {
+				issues.push(hooklessSiblingIssue(sibling));
 			}
-			entries.push({ kind: "declaration", id, source: markdown, agent });
+			entries.push({ id, source: markdown, agent });
 		} catch (error) {
 			if (!(error instanceof AgentSourceError)) throw error;
 			issues.push(...error.issues);
 		}
 	}
 
+	// A single compile does not load the other declarations, but their
+	// same-stem siblings must still be extensions.
+	for (const [id, sibling] of found.typescript) {
+		if (selected.includes(id) || !found.markdown.has(id)) continue;
+		if (sibling.endsWith(".tsx")) {
+			issues.push(tsxSiblingIssue(sibling));
+		} else if (
+			inspectExtension(sibling, readFileSync(join(root, sibling), "utf8"))
+				.exports.length === 0
+		) {
+			issues.push(hooklessSiblingIssue(sibling));
+		}
+	}
+
 	if (issues.length > 0) throw new AgentSourceError(issues);
 	return {
-		mode: options.mode,
 		entries,
 		warnings: found.localPresent ? [LOCAL_AGENTS_WARNING] : [],
 	};
 }
 
-function missingIssue(id: string, strict: boolean): SourceIssue {
-	const file = expectedSource(id);
+/**
+ * Only a same-stem .ts is read as an extension; a .tsx hook would otherwise
+ * be dropped without a word.
+ */
+function tsxSiblingIssue(file: string): SourceIssue {
 	return {
 		file,
+		field: "path",
+		message:
+			"an extension must be a same-stem .ts file; a .tsx beside a declaration is not read",
+	};
+}
+
+function hooklessSiblingIssue(file: string): SourceIssue {
+	return {
+		file,
+		field: "exports",
+		message: "a same-stem .ts must export prepare or finish",
+	};
+}
+
+function missingIssue(id: string): SourceIssue {
+	return {
+		file: expectedSource(id),
 		field: "roster",
-		message: strict
-			? `roster agent "${id}" has no declaration`
-			: `roster agent "${id}" has no declaration or legacy launcher (${file.replace(/\.md$/, ".ts")})`,
+		message: `roster agent "${id}" has no declaration`,
 	};
 }
 
@@ -1196,7 +1195,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 
 	if (options.dryRun) {
 		for (const entry of plan.entries) {
-			log(`would build ${entry.id} (${entry.kind}: ${entry.source})`);
+			log(`would build ${entry.id} (${entry.source})`);
 		}
 		for (const orphan of orphans) log(`would prune ${orphan}`);
 		return {
@@ -1219,37 +1218,17 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 		await mkdir(builtDir);
 		await mkdir(entryDir);
 
-		const generateAssets = join(root, "scripts", "gen-assets.ts");
-		if (
-			plan.entries.some((entry) => entry.kind === "legacy") &&
-			existsSync(generateAssets)
-		) {
-			// Legacy launchers read their prompts through the generated asset map.
-			await bunRun([generateAssets], root, options.signal);
-		}
-
 		for (const entry of plan.entries) {
 			options.signal?.throwIfAborted();
-			const outFile = join(builtDir, entry.id);
-			if (entry.kind === "legacy") {
-				await bunBuild({
-					entry: entry.source,
-					outFile,
-					cwd: root,
-					label: entry.source,
-					signal: options.signal,
-				});
-			} else {
-				const file = join(entryDir, `${entry.id}.ts`);
-				await writeFile(file, generateEntry(entry.agent));
-				await bunBuild({
-					entry: file,
-					outFile,
-					cwd: entryDir,
-					label: entry.source,
-					signal: options.signal,
-				});
-			}
+			const file = join(entryDir, `${entry.id}.ts`);
+			await writeFile(file, generateEntry(entry.agent));
+			await bunBuild({
+				entry: file,
+				outFile: join(builtDir, entry.id),
+				cwd: entryDir,
+				label: entry.source,
+				signal: options.signal,
+			});
 			log(`built ${entry.id}`);
 		}
 
@@ -1365,36 +1344,6 @@ export function describePublishFailure(error: unknown, label = "bin/"): string {
 	return `${cause}\nNothing published; ${label} left untouched.`;
 }
 
-async function bunRun(
-	args: string[],
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<void> {
-	signal?.throwIfAborted();
-	const child = Bun.spawn([process.execPath, ...args], {
-		cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const kill = () => child.kill("SIGTERM");
-	signal?.addEventListener("abort", kill, { once: true });
-	try {
-		const [exitCode, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stderr).text(),
-			new Response(child.stdout).text(),
-		]);
-		signal?.throwIfAborted();
-		if (exitCode !== 0) {
-			throw new Error(
-				`bun ${args.join(" ")} failed (exit ${exitCode}):\n${stderr}`,
-			);
-		}
-	} finally {
-		signal?.removeEventListener("abort", kill);
-	}
-}
-
 /**
  * Runs `task` one at a time. A request during a run is coalesced into one
  * follow-up run, so a burst of changes never builds concurrently and the last
@@ -1506,33 +1455,6 @@ export function startWatcher(options: WatcherOptions): {
 			for (const watcher of watchers) watcher.close();
 		},
 	};
-}
-
-/** Parse `--mode=<mixed|strict>` (or `--mode <value>`); the rest is returned. */
-export function takeModeArg(argv: readonly string[]): {
-	mode?: CompileMode;
-	rest: string[];
-	error?: string;
-} {
-	const rest: string[] = [];
-	let mode: string | undefined;
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i] as string;
-		if (arg === "--mode") {
-			mode = argv[++i];
-		} else if (arg.startsWith("--mode=")) {
-			mode = arg.slice("--mode=".length);
-		} else {
-			rest.push(arg);
-		}
-	}
-	if (mode === undefined) {
-		return { rest, error: "--mode=mixed or --mode=strict is required" };
-	}
-	if (!(COMPILE_MODES as readonly string[]).includes(mode)) {
-		return { rest, error: `unknown --mode "${mode}" (mixed or strict)` };
-	}
-	return { mode: mode as CompileMode, rest };
 }
 
 /**

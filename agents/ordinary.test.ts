@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CliError, parseCli, resolveCli } from "../lib/agent-format/cli";
@@ -165,28 +171,19 @@ describe("ordinary agent declarations (B-007, D-001)", () => {
 			expect(agent?.spec.systemPrompt.length).toBeGreaterThan(0);
 			expect(agent?.spec.promptMode).toBe("append");
 			expect(agent?.spec.mode).toBe("interactive");
-			// The legacy sibling has no reserved exports, so it is not an extension.
 			expect(agent?.extension).toBeUndefined();
 		}
 	});
 
-	test("mixed mode: the 12 declarations shadow their legacy siblings; no ordinary agent is legacy", async () => {
-		const plan = await planBuild({ root: repo, mode: "mixed" });
+	test("the roster builds from declarations; the 12 ordinary agents have no .ts beside them", async () => {
+		const plan = await planBuild({ root: repo });
 		expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
 		for (const id of Object.keys(ORDINARY)) {
 			const entry = plan.entries.find((candidate) => candidate.id === id);
-			expect([id, entry?.kind, entry?.source]).toEqual([
-				id,
-				"declaration",
-				sourceOf(id),
-			]);
-		}
-		// Special agents convert in their own tasks; whatever is still legacy
-		// is a .ts launcher outside the ordinary set.
-		for (const entry of plan.entries) {
-			if (entry.kind !== "legacy") continue;
-			expect(entry.source).toMatch(/\.ts$/);
-			expect(Object.hasOwn(ORDINARY, entry.id)).toBe(false);
+			expect([id, entry?.source]).toEqual([id, sourceOf(id)]);
+			expect(existsSync(join(repo, sourceOf(id).replace(/\.md$/, ".ts")))).toBe(
+				false,
+			);
 		}
 	});
 });

@@ -18,29 +18,25 @@ import {
 	describePublishFailure,
 	PartialPublishError,
 	publish,
-	takeModeArg,
 } from "./agent-compiler";
 
-const { mode, rest, error } = takeModeArg(process.argv.slice(2));
+const rest = process.argv.slice(2);
 const unknown = rest.filter(
 	(arg) => arg !== "--dry-run" && arg !== "--no-prune",
 );
-if (error || !mode || unknown.length > 0) {
+if (unknown.length > 0) {
 	console.error(
-		error ?? `Unknown arguments: ${unknown.join(" ")} (--dry-run, --no-prune)`,
+		`Unknown arguments: ${unknown.join(" ")} (--dry-run, --no-prune)`,
 	);
 	process.exit(1);
 }
 const dryRun = rest.includes("--dry-run");
 
 const signals = abortOnSignals();
-console.log(
-	`${dryRun ? "[dry run] " : ""}compiling the roster (${mode} mode) → bin/`,
-);
+console.log(`${dryRun ? "[dry run] " : ""}compiling the roster → bin/`);
 try {
 	const result = await publish({
 		root: process.cwd(),
-		mode,
 		dryRun,
 		prune: !rest.includes("--no-prune"),
 		signal: signals.signal,

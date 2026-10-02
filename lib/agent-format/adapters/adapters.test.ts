@@ -442,13 +442,6 @@ describe("#6 native guards and verbatim user tail (D-006, D-013)", () => {
 	});
 });
 
-describe("#7 legacy runtime stays untouched (D-024)", () => {
-	test("lib/index.ts still re-exports the legacy runtime", () => {
-		const index = readFileSync(join(import.meta.dir, "../../index.ts"), "utf8");
-		expect(index).toContain('export * from "./runtime"');
-	});
-});
-
 describe("#8 argv composition (Design §5)", () => {
 	const full = spec({
 		model: { claude: "opus", codex: "gpt-5.5" },

@@ -12,14 +12,13 @@ import {
 	PartialPublishError,
 	publish,
 	resolveAgentName,
-	takeModeArg,
 } from "./agent-compiler";
 
 const root = process.cwd();
-const { mode, rest, error } = takeModeArg(process.argv.slice(2));
+const rest = process.argv.slice(2);
 const input = rest[0];
-if (error || !mode || !input || rest.length > 1) {
-	console.error(error ?? "Usage: bun compile <roster-name | agent source>");
+if (!input || rest.length > 1) {
+	console.error("Usage: bun compile <roster-name | agent source>");
 	process.exit(1);
 }
 
@@ -28,7 +27,6 @@ const signals = abortOnSignals();
 try {
 	await publish({
 		root,
-		mode,
 		only: name,
 		signal: signals.signal,
 		log: () => {},

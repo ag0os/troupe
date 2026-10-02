@@ -31,7 +31,6 @@ import {
 	ROSTER,
 	resolveAgentName,
 	startWatcher,
-	takeModeArg,
 	WATCH_ROOTS,
 } from "./agent-compiler";
 
@@ -57,9 +56,21 @@ function write(path: string, text: string) {
 
 const header = "---\ndescription: Fixture\nbackends: [claude, codex]\n";
 
-/** A legacy launcher that prints its own name. */
-function legacy(path: string, text = path) {
-	write(path, `console.log(${JSON.stringify(text)});\n`);
+/** A declaration whose body is `body`. */
+function addDeclaration(path: string, body = path) {
+	write(path, `${header}---\n${body}\n`);
+}
+
+/** A stray TypeScript file that is not an extension. */
+function stray(path: string) {
+	write(path, 'console.log("stray");\n');
+}
+
+/** The system prompt a built binary previews. */
+function previewedPrompt(binary: string): string {
+	const preview = run(binary, ["--show-prompt"]);
+	expect(preview.code).toBe(0);
+	return preview.stdout.split("--- System prompt ---\n")[1]?.split("\n")[0] ?? "";
 }
 
 /** Every entry under `dir`: type, mode and content, keyed by relative path. */
@@ -96,7 +107,7 @@ function seedOutDir() {
 }
 
 function opts(extra: Partial<PublishOptions> = {}): PublishOptions {
-	return { root, outDir, mode: "mixed", roster: ["a", "ns:b"], ...extra };
+	return { root, outDir, roster: ["a", "ns:b"], ...extra };
 }
 
 async function issuesOf(promise: Promise<unknown>): Promise<SourceIssue[]> {
@@ -135,35 +146,31 @@ describe("roster", () => {
 		// D-036: personas:github was removed from the hub.
 		expect(ROSTER as readonly string[]).not.toContain("personas:github");
 		const repo = resolve(import.meta.dir, "..");
-		return planBuild({ root: repo, mode: "mixed" }).then((plan) => {
+		return planBuild({ root: repo }).then((plan) => {
 			expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
-			// A migrated agent builds from its declaration, the rest from legacy.
 			for (const entry of plan.entries) {
-				const declared = existsSync(
-					join(repo, "agents", `${entry.id.split(":").join("/")}.md`),
-				);
-				expect([entry.id, entry.kind]).toEqual([
+				expect([entry.id, entry.source]).toEqual([
 					entry.id,
-					declared ? "declaration" : "legacy",
+					`agents/${entry.id.split(":").join("/")}.md`,
 				]);
 			}
 		});
 	});
 });
 
-describe("strict mode over the real roster (D-036)", () => {
+describe("the real roster (D-036)", () => {
 	const sourceOf = (id: string) => `agents/${id.split(":").join("/")}.md`;
 
-	test("the 22 roster declarations satisfy strict mode", async () => {
+	test("the 22 roster declarations satisfy the roster check", async () => {
 		for (const id of ROSTER) write(sourceOf(id), `${header}---\n${id}\n`);
-		const plan = await planBuild({ root, mode: "strict" });
+		const plan = await planBuild({ root });
 		expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
 	});
 
 	test("a personas:github declaration is refused, and a missing one is not required", async () => {
 		for (const id of ROSTER) write(sourceOf(id), `${header}---\n${id}\n`);
 		write("agents/personas/github.md", `${header}---\nGitHub\n`);
-		const issues = await issuesOf(planBuild({ root, mode: "strict" }));
+		const issues = await issuesOf(planBuild({ root }));
 		expect(issues).toEqual([
 			expect.objectContaining({
 				file: "agents/personas/github.md",
@@ -174,45 +181,26 @@ describe("strict mode over the real roster (D-036)", () => {
 	});
 });
 
-describe("mixed mode discovery (D-017)", () => {
-	test("union of Markdown and legacy TypeScript; .md wins a same-stem collision", async () => {
-		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/a.ts");
-		legacy("agents/ns/b.ts");
-		legacy("agents/ns/b.test.ts");
-		const plan = await planBuild(opts());
-		expect(
-			plan.entries.map((entry) => [entry.id, entry.kind, entry.source]),
-		).toEqual([
-			["a", "declaration", "agents/a.md"],
-			["ns:b", "legacy", "agents/ns/b.ts"],
-		]);
-		const a = plan.entries[0];
-		expect(a?.kind === "declaration" && a.agent.extension).toBeUndefined();
-	});
-
+describe("extensions (D-017)", () => {
 	test("a paired TS that exports prepare and is side-effect free is the extension", async () => {
-		write("agents/a.md", `${header}---\nA body\n`);
+		addDeclaration("agents/a.md", "A body");
 		write(
 			"agents/a.ts",
 			'export function prepare() { return { systemPromptFragments: ["From prepare"] }; }\n',
 		);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const plan = await planBuild(opts());
-		const a = plan.entries[0];
-		expect(a?.kind).toBe("declaration");
-		expect(a?.kind === "declaration" && a.agent.extension?.exports).toEqual([
-			"prepare",
-		]);
+		expect(plan.entries[0]?.agent.extension?.exports).toEqual(["prepare"]);
+		expect(plan.entries[1]?.agent.extension).toBeUndefined();
 	});
 
 	test("a paired TS that exports prepare but runs code on import fails with file and line", async () => {
-		write("agents/a.md", `${header}---\nA body\n`);
+		addDeclaration("agents/a.md", "A body");
 		write(
 			"agents/a.ts",
 			'export function prepare() { return {}; }\nconsole.log("boot");\n',
 		);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const issues = await issuesOf(planBuild(opts()));
 		expect(issues).toEqual([
 			expect.objectContaining({
@@ -222,27 +210,9 @@ describe("mixed mode discovery (D-017)", () => {
 			}),
 		]);
 	});
-
-	test("publishes a declaration and a legacy launcher side by side", async () => {
-		write("agents/a.md", `${header}---\nA body\n`);
-		write(
-			"agents/a.ts",
-			'console.log("legacy a must not be built");\nexport const unused = 1;\n',
-		);
-		legacy("agents/ns/b.ts", "legacy b runs");
-		const result = await publish(opts());
-		expect(result.built).toEqual(["a", "ns:b"]);
-		expect(readdirSync(outDir).sort()).toEqual(["a", "ns:b"]);
-		expect(run(join(outDir, "ns:b")).stdout).toBe("legacy b runs\n");
-		const preview = run(join(outDir, "a"), ["--show-prompt"]);
-		expect(preview.code).toBe(0);
-		expect(preview.stdout).toContain("--- System prompt ---\nA body\n");
-		expect(preview.stdout).not.toContain("legacy a");
-		expect(tempLeftovers()).toEqual([]);
-	}, 120_000);
 });
 
-describe("strict mode (D-017)", () => {
+describe("declarations only (D-017)", () => {
 	test("discovers Markdown only and accepts same-stem extensions and test files", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		write(
@@ -251,19 +221,21 @@ describe("strict mode (D-017)", () => {
 		);
 		write("agents/ns/b.md", `${header}---\nB body\n`);
 		write("agents/ns/b.test.ts", 'import "bun:test";\n');
-		const plan = await planBuild(opts({ mode: "strict" }));
-		expect(plan.entries.map((entry) => [entry.id, entry.kind])).toEqual([
-			["a", "declaration"],
-			["ns:b", "declaration"],
+		const plan = await planBuild(opts());
+		expect(
+			plan.entries.map((entry) => [entry.id, entry.source]),
+		).toEqual([
+			["a", "agents/a.md"],
+			["ns:b", "agents/ns/b.md"],
 		]);
 	});
 
 	test("rejects an unpaired .ts and a paired .ts without prepare/finish, naming file and field", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/a.ts");
+		stray("agents/a.ts");
 		write("agents/ns/b.md", `${header}---\nB body\n`);
-		legacy("agents/ns/stray.ts");
-		const issues = await issuesOf(planBuild(opts({ mode: "strict" })));
+		stray("agents/ns/stray.ts");
+		const issues = await issuesOf(planBuild(opts()));
 		expect(issues).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ file: "agents/ns/stray.ts", field: "path" }),
@@ -273,10 +245,10 @@ describe("strict mode (D-017)", () => {
 		expect(issues.length).toBe(2);
 	});
 
-	test("a legacy launcher alone does not satisfy the strict roster", async () => {
+	test("a .ts alone does not satisfy the roster", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
-		const issues = await issuesOf(planBuild(opts({ mode: "strict" })));
+		stray("agents/ns/b.ts");
+		const issues = await issuesOf(planBuild(opts()));
 		expect(issues).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ file: "agents/ns/b.ts", field: "path" }),
@@ -288,36 +260,34 @@ describe("strict mode (D-017)", () => {
 	test("roster errors publish nothing", async () => {
 		seedOutDir();
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
+		stray("agents/ns/b.ts");
 		const before = snapshot(root);
-		await issuesOf(publish(opts({ mode: "strict" })));
+		await issuesOf(publish(opts()));
 		expect(snapshot(root)).toEqual(before);
 	});
 });
 
 describe("roster errors (B-001/D-008)", () => {
-	for (const mode of ["mixed", "strict"] as const) {
-		test(`${mode}: missing, extra and out-of-roster names each name file and field`, async () => {
-			seedOutDir();
-			write("agents/a.md", `${header}---\nA body\n`);
-			write("agents/extra.md", `${header}---\nExtra\n`);
-			const before = snapshot(root);
-			const issues = await issuesOf(publish(opts({ mode })));
-			expect(issues).toEqual([
-				{
-					file: "agents/extra.md",
-					field: "roster",
-					message: '"extra" is not a roster agent',
-				},
-				expect.objectContaining({
-					file: "agents/ns/b.md",
-					field: "roster",
-					message: expect.stringContaining('roster agent "ns:b" has no'),
-				}),
-			]);
-			expect(snapshot(root)).toEqual(before);
-		});
-	}
+	test("missing, extra and out-of-roster names each name file and field", async () => {
+		seedOutDir();
+		write("agents/a.md", `${header}---\nA body\n`);
+		write("agents/extra.md", `${header}---\nExtra\n`);
+		const before = snapshot(root);
+		const issues = await issuesOf(publish(opts()));
+		expect(issues).toEqual([
+			{
+				file: "agents/extra.md",
+				field: "roster",
+				message: '"extra" is not a roster agent',
+			},
+			{
+				file: "agents/ns/b.md",
+				field: "roster",
+				message: 'roster agent "ns:b" has no declaration',
+			},
+		]);
+		expect(snapshot(root)).toEqual(before);
+	});
 
 	test("an invalid declaration anywhere publishes nothing", async () => {
 		seedOutDir();
@@ -365,7 +335,11 @@ describe("publication (D-011, D-023)", () => {
 	test("a failing build leaves the output directory byte-identical", async () => {
 		seedOutDir();
 		write("agents/a.md", `${header}---\nA body\n`);
-		write("agents/ns/b.ts", 'import "./does-not-exist";\n');
+		addDeclaration("agents/ns/b.md", "B body");
+		write(
+			"agents/ns/b.ts",
+			'import { missing } from "troupe-package-that-does-not-exist";\nexport function prepare() { return missing(); }\n',
+		);
 		const before = snapshot(outDir);
 		const parent = readdirSync(root).sort();
 		await expect(publish(opts())).rejects.toThrow(/bun build failed/);
@@ -376,7 +350,7 @@ describe("publication (D-011, D-023)", () => {
 	test("an abort during the build leaves the output directory untouched", async () => {
 		seedOutDir();
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const before = snapshot(outDir);
 		const controller = new AbortController();
 		const pending = publish(opts({ signal: controller.signal }));
@@ -389,7 +363,7 @@ describe("publication (D-011, D-023)", () => {
 	test("--dry-run reports builds and prunes and writes nothing", async () => {
 		seedOutDir();
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		mkdirSync(join(root, "agents/local"));
 		const before = snapshot(root);
 		const lines: string[] = [];
@@ -403,8 +377,8 @@ describe("publication (D-011, D-023)", () => {
 		});
 		expect(lines).toEqual([
 			LOCAL_AGENTS_WARNING,
-			"would build a (declaration: agents/a.md)",
-			"would build ns:b (legacy: agents/ns/b.ts)",
+			"would build a (agents/a.md)",
+			"would build ns:b (agents/ns/b.md)",
 			"would prune local:mine",
 			"would prune orphan",
 		]);
@@ -425,7 +399,7 @@ describe("publication (D-011, D-023)", () => {
 			}),
 		);
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts", "b");
+		addDeclaration("agents/ns/b.md", "B body");
 
 		const kept = await publish(opts({ prune: false }));
 		expect(kept.pruned).toEqual([]);
@@ -444,7 +418,7 @@ describe("publication (D-011, D-023)", () => {
 		expect(readFileSync(join(outDir, "helper")).toString()).toBe(
 			"owned by compile:helper",
 		);
-		expect(run(join(outDir, "ns:b")).stdout).toBe("b\n");
+		expect(previewedPrompt(join(outDir, "ns:b"))).toBe("B body");
 		expect(tempLeftovers()).toEqual([]);
 	}, 240_000);
 
@@ -488,7 +462,7 @@ describe("single compile (D-011)", () => {
 	test("builds only the named roster agent and prunes nothing", async () => {
 		seedOutDir();
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts", "b");
+		addDeclaration("agents/ns/b.md", "B body");
 		const result = await publish(opts({ only: "ns:b" }));
 		expect(result).toEqual({ built: ["ns:b"], pruned: [], dryRun: false });
 		expect(readdirSync(outDir).sort()).toEqual([
@@ -498,12 +472,12 @@ describe("single compile (D-011)", () => {
 			"orphan",
 		]);
 		expect(readFileSync(join(outDir, "a")).toString()).toBe("old a binary");
-		expect(run(join(outDir, "ns:b")).stdout).toBe("b\n");
+		expect(previewedPrompt(join(outDir, "ns:b"))).toBe("B body");
 	}, 120_000);
 
 	test("a name outside the roster fails and writes nothing", async () => {
 		seedOutDir();
-		legacy("agents/extra.ts");
+		addDeclaration("agents/extra.md");
 		const before = snapshot(root);
 		for (const only of ["extra", "nope", "local:mine"]) {
 			const issues = await issuesOf(publish(opts({ only })));
@@ -515,6 +489,47 @@ describe("single compile (D-011)", () => {
 			]);
 		}
 		expect(snapshot(root)).toEqual(before);
+	});
+
+	test("an unrelated unpaired .ts fails a single compile and leaves bin/ unchanged (D-017)", async () => {
+		seedOutDir();
+		write("agents/a.md", `${header}---\nA body\n`);
+		addDeclaration("agents/ns/b.md", "B body");
+		stray("agents/stray.ts");
+		const before = snapshot(outDir);
+		const issues = await issuesOf(publish(opts({ only: "ns:b" })));
+		expect(issues).toEqual([
+			expect.objectContaining({ file: "agents/stray.ts", field: "path" }),
+		]);
+		expect(snapshot(outDir)).toEqual(before);
+		expect(tempLeftovers()).toEqual([]);
+	});
+
+	test("another declaration's hookless or .tsx sibling fails a single compile", async () => {
+		write("agents/a.md", `${header}---\nA body\n`);
+		stray("agents/a.ts");
+		addDeclaration("agents/ns/b.md", "B body");
+		addDeclaration("agents/ns/c.md", "C body");
+		write("agents/ns/c.tsx", "export function prepare() { return {}; }\n");
+		const issues = await issuesOf(
+			publish(opts({ roster: ["a", "ns:b", "ns:c"], only: "ns:b" })),
+		);
+		expect(issues).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ file: "agents/a.ts", field: "exports" }),
+				expect.objectContaining({ file: "agents/ns/c.tsx", field: "path" }),
+			]),
+		);
+		expect(issues.length).toBe(2);
+		expect(existsSync(outDir)).toBe(false);
+	});
+
+	test("a sibling that is an extension does not fail a single compile of another agent", async () => {
+		write("agents/a.md", `${header}---\nA body\n`);
+		write("agents/a.ts", "export function prepare() { return {}; }\n");
+		addDeclaration("agents/ns/b.md", "B body");
+		const plan = await planBuild(opts({ only: "ns:b" }));
+		expect(plan.entries.map((entry) => entry.id)).toEqual(["ns:b"]);
 	});
 
 	test("a roster name without a source fails naming the expected file", async () => {
@@ -534,7 +549,7 @@ describe("single compile (D-011)", () => {
 	});
 
 	test("a path outside agents/ is not mapped to a same-named roster agent", async () => {
-		legacy("agents/shepherd.ts");
+		addDeclaration("agents/shepherd.md");
 		write("system-prompts/shepherd.md", "fragment");
 		expect(resolveAgentName(root, "system-prompts/shepherd.md", root)).toBe(
 			"system-prompts/shepherd.md",
@@ -566,16 +581,16 @@ describe("single compile (D-011)", () => {
 describe("agents/local/ (D-011)", () => {
 	test("is never discovered, and a present directory gives one warning line", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		write("agents/local/broken.md", "not a declaration");
 		write("agents/local/mine.ts", 'throw new Error("never built");\n');
 		const plan = await planBuild(opts());
 		expect(plan.entries.map((entry) => entry.id)).toEqual(["a", "ns:b"]);
 		expect(plan.warnings).toEqual([LOCAL_AGENTS_WARNING]);
-		const strict = await planBuild(
-			opts({ mode: "strict", roster: ["a"] }),
-		).catch((error: AgentSourceError) => error.issues);
-		expect(JSON.stringify(strict)).not.toContain("agents/local");
+		const narrowed = await planBuild(opts({ roster: ["a"] })).catch(
+			(error: AgentSourceError) => error.issues,
+		);
+		expect(JSON.stringify(narrowed)).not.toContain("agents/local");
 
 		rmSync(join(root, "agents/local"), { recursive: true });
 		expect((await planBuild(opts())).warnings).toEqual([]);
@@ -630,7 +645,6 @@ describe("watcher (D-011, D-027)", () => {
 		let rebuilds = 0;
 		const watcher = startWatcher({
 			root,
-			mode: "mixed",
 			debounceMs: 5,
 			watch: (dir, options, listener) => {
 				expect(options.recursive).toBe(true);
@@ -668,7 +682,7 @@ describe("watcher (D-011, D-027)", () => {
 
 	test("a real rebuild publishes through the shared compiler", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts", "b");
+		addDeclaration("agents/ns/b.md", "B body");
 		const lines: string[] = [];
 		const watcher = startWatcher({
 			...opts(),
@@ -682,33 +696,16 @@ describe("watcher (D-011, D-027)", () => {
 	}, 120_000);
 });
 
-describe("mode argument", () => {
-	test("is explicit and limited to mixed or strict", () => {
-		expect(takeModeArg(["--mode=mixed", "--dry-run"])).toEqual({
-			mode: "mixed",
-			rest: ["--dry-run"],
-		});
-		expect(takeModeArg(["--mode", "strict", "x"])).toEqual({
-			mode: "strict",
-			rest: ["x"],
-		});
-		expect(takeModeArg(["x"]).error).toContain("required");
-		expect(takeModeArg(["--mode=loose"]).error).toContain("unknown");
-	});
-});
-
 describe("package scripts", () => {
 	const repo = resolve(import.meta.dir, "..");
 	const scripts = JSON.parse(
 		readFileSync(join(repo, "package.json"), "utf8"),
 	).scripts;
 
-	test("compile, compile:all and watch all run the shared compiler in mixed mode", () => {
-		expect(scripts.compile).toBe("bun scripts/compile.ts --mode=mixed");
-		expect(scripts["compile:all"]).toBe(
-			"bun scripts/compile-all.ts --mode=mixed",
-		);
-		expect(scripts.watch).toBe("bun scripts/watch-agents.ts --mode=mixed");
+	test("compile, compile:all and watch all run the shared compiler", () => {
+		expect(scripts.compile).toBe("bun scripts/compile.ts");
+		expect(scripts["compile:all"]).toBe("bun scripts/compile-all.ts");
+		expect(scripts.watch).toBe("bun scripts/watch-agents.ts");
 		for (const script of ["compile", "compile-all", "watch-agents"]) {
 			const text = readFileSync(join(repo, `scripts/${script}.ts`), "utf8");
 			expect(text).toContain('from "./agent-compiler"');
@@ -729,26 +726,26 @@ describe("package scripts", () => {
 	}
 
 	test("compile-all --dry-run over the full roster writes nothing", () => {
-		for (const id of ROSTER) legacy(`agents/${id.split(":").join("/")}.ts`);
+		for (const id of ROSTER) addDeclaration(`agents/${id.split(":").join("/")}.md`);
 		mkdirSync(join(root, "agents/local"));
 		seedOutDir();
 		const before = snapshot(root);
-		const result = cli("compile-all.ts", ["--mode=mixed", "--dry-run"]);
+		const result = cli("compile-all.ts", ["--dry-run"]);
 		expect(result.code).toBe(0);
 		expect(result.stderr).toBe(`${LOCAL_AGENTS_WARNING}\n`);
 		expect(result.stdout).toContain("22 would be built, 3 would be pruned.");
 		expect(snapshot(root)).toEqual(before);
 	});
 
-	test("compile-all fails without a mode, and on a roster error names the file", () => {
-		expect(cli("compile-all.ts", []).code).toBe(1);
+	test("compile-all rejects an unknown argument, and on a roster error names the file", () => {
+		expect(cli("compile-all.ts", ["--mode=mixed"]).code).toBe(1);
 		seedOutDir();
-		legacy("agents/extra.ts");
+		stray("agents/extra.ts");
 		const before = snapshot(root);
-		const result = cli("compile-all.ts", ["--mode=strict"]);
+		const result = cli("compile-all.ts", []);
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain(
-			"agents/extra.ts: path: strict mode builds Markdown declarations only",
+			"agents/extra.ts: path: only Markdown declarations are built",
 		);
 		expect(result.stderr).toContain(
 			'agents/shepherd.md: roster: roster agent "shepherd" has no declaration',
@@ -756,14 +753,29 @@ describe("package scripts", () => {
 		expect(snapshot(root)).toEqual(before);
 	});
 
-	test("compile rejects a name outside the roster", () => {
+	test("compile of one roster agent fails on an unrelated stray .ts and writes nothing", () => {
+		for (const id of ROSTER)
+			addDeclaration(`agents/${id.split(":").join("/")}.md`, id);
+		stray("agents/stray.ts");
 		seedOutDir();
-		legacy("agents/extra.ts");
 		const before = snapshot(root);
-		const result = cli("compile.ts", ["--mode=mixed", "agents/extra.ts"]);
+		const result = cli("compile.ts", ["shepherd"]);
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain(
-			'agents/extra.ts: roster: "extra" is not a roster agent',
+			"agents/stray.ts: path: only Markdown declarations are built",
+		);
+		expect(result.stderr).toContain("✗ shepherd failed");
+		expect(snapshot(root)).toEqual(before);
+	});
+
+	test("compile rejects a name outside the roster", () => {
+		seedOutDir();
+		addDeclaration("agents/extra.md");
+		const before = snapshot(root);
+		const result = cli("compile.ts", ["agents/extra.md"]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain(
+			'agents/extra.md: roster: "extra" is not a roster agent',
 		);
 		expect(snapshot(root)).toEqual(before);
 	});
@@ -774,31 +786,21 @@ describe("fix round 1: paired siblings (D-017)", () => {
 		["export default", 'console.log("legacy");\nexport default {};\n'],
 		["export =", 'console.log("legacy");\nexport = {};\n'],
 	] as const) {
-		test(`mixed: a paired legacy launcher with ${label} and no hooks is ignored`, async () => {
-			write("agents/a.md", `${header}---\nA body\n`);
-			write("agents/a.ts", text);
-			legacy("agents/ns/b.ts");
-			const plan = await planBuild(opts());
-			const a = plan.entries[0];
-			expect(a?.kind).toBe("declaration");
-			expect(a?.kind === "declaration" && a.agent.extension).toBeUndefined();
-		});
-
-		test(`strict: a paired sibling with ${label} and no hooks still fails`, async () => {
+		test(`a paired sibling with ${label} and no hooks fails`, async () => {
 			write("agents/a.md", `${header}---\nA body\n`);
 			write("agents/a.ts", text);
 			write("agents/ns/b.md", `${header}---\nB body\n`);
-			const issues = await issuesOf(planBuild(opts({ mode: "strict" })));
+			const issues = await issuesOf(planBuild(opts()));
 			expect(issues).toEqual([
 				expect.objectContaining({ file: "agents/a.ts", field: "exports" }),
 			]);
 		});
 	}
 
-	test("mixed: a problem that could hide a hook still fails", async () => {
+	test("a problem that could hide a hook names its line", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		write("agents/a.ts", 'export * from "node:path";\n');
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const issues = await issuesOf(planBuild(opts()));
 		expect(issues).toEqual([
 			expect.objectContaining({
@@ -810,13 +812,13 @@ describe("fix round 1: paired siblings (D-017)", () => {
 		]);
 	});
 
-	test("mixed: a hook file that also has export default fails", async () => {
+	test("a hook file that also has export default fails", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		write(
 			"agents/a.ts",
 			"export function prepare() { return {}; }\nexport default {};\n",
 		);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const issues = await issuesOf(planBuild(opts()));
 		expect(issues).toEqual([
 			expect.objectContaining({
@@ -827,51 +829,45 @@ describe("fix round 1: paired siblings (D-017)", () => {
 		]);
 	});
 
-	for (const mode of ["mixed", "strict"] as const) {
-		test(`${mode}: a same-stem .tsx beside a declaration fails naming the file`, async () => {
-			write("agents/a.md", `${header}---\nA body\n`);
-			write("agents/a.tsx", "export function prepare() { return {}; }\n");
-			write("agents/ns/b.md", `${header}---\nB body\n`);
-			const issues = await issuesOf(planBuild(opts({ mode })));
-			expect(issues).toEqual([
-				{
-					file: "agents/a.tsx",
-					field: "path",
-					message:
-						"an extension must be a same-stem .ts file; a .tsx beside a declaration is not read",
-				},
-			]);
-		});
-	}
+	test("a same-stem .tsx beside a declaration fails naming the file", async () => {
+		write("agents/a.md", `${header}---\nA body\n`);
+		write("agents/a.tsx", "export function prepare() { return {}; }\n");
+		write("agents/ns/b.md", `${header}---\nB body\n`);
+		const issues = await issuesOf(planBuild(opts()));
+		expect(issues).toEqual([
+			{
+				file: "agents/a.tsx",
+				field: "path",
+				message:
+					"an extension must be a same-stem .ts file; a .tsx beside a declaration is not read",
+			},
+		]);
+	});
 
-	test("mixed: an unpaired .tsx stays a legacy launcher", async () => {
+	test("an unpaired .tsx is refused", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		write("agents/ns/b.tsx", 'console.log("b");\n');
-		const plan = await planBuild(opts());
-		expect(plan.entries.map((entry) => [entry.id, entry.kind])).toEqual([
-			["a", "declaration"],
-			["ns:b", "legacy"],
-		]);
+		const issues = await issuesOf(planBuild(opts()));
+		expect(issues).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ file: "agents/ns/b.tsx", field: "path" }),
+			]),
+		);
 	});
 });
 
 describe("fix round 1: publication safety (D-011, D-023)", () => {
-	test("sequential builds: a roster-sized set of trivial launchers, published three times, each binary prints its own name", async () => {
+	test("sequential builds: a roster-sized set of declarations, published three times, each binary previews its own body", async () => {
 		const roster = Array.from(
 			{ length: ROSTER.length },
 			(_, i) => `ns:agent-${i}`,
 		);
-		for (const id of roster) legacy(`agents/ns/${id.slice(3)}.ts`, id);
+		for (const id of roster) addDeclaration(`agents/ns/${id.slice(3)}.md`, id);
 		for (let round = 0; round < 3; round++) {
 			const result = await publish(opts({ roster }));
 			expect(result.built).toEqual([...roster].sort());
 			for (const id of roster) {
-				const child = run(join(outDir, id));
-				expect({ id, code: child.code, stdout: child.stdout }).toEqual({
-					id,
-					code: 0,
-					stdout: `${id}\n`,
-				});
+				expect([id, previewedPrompt(join(outDir, id))]).toEqual([id, id]);
 			}
 			expect(tempLeftovers()).toEqual([]);
 		}
@@ -882,7 +878,7 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 		mkdirSync(join(outDir, "ns:b"));
 		writeFileSync(join(outDir, "ns:b", "keep"), "keep");
 		write("agents/a.md", `${header}---\nA body\n`);
-		legacy("agents/ns/b.ts");
+		addDeclaration("agents/ns/b.md", "B body");
 		const before = snapshot(outDir);
 		let failure: unknown;
 		await publish(opts()).catch((error) => {
@@ -902,7 +898,7 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 		mkdirSync(built);
 		mkdirSync(outDir);
 		const entries = ["gone", "empty", "dir", "ok"].map(
-			(id): BuildEntry => ({ kind: "legacy", id, source: `agents/${id}.ts` }),
+			(id) => ({ id, source: `agents/${id}.md` }) as BuildEntry,
 		);
 		writeFileSync(join(built, "empty"), "");
 		mkdirSync(join(built, "dir"));
@@ -941,16 +937,11 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 
 	for (const signals of [["SIGINT", "SIGINT"], ["SIGHUP"]] as const) {
 		test(`compile-all on ${signals.join(" then ")} removes its temp dir and leaves bin/ untouched`, async () => {
-			for (const id of ROSTER)
-				legacy(`agents/${id.split(":").join("/")}.ts`, id);
+			for (const id of ROSTER) addDeclaration(`agents/${id.split(":").join("/")}.md`, id);
 			seedOutDir();
 			const before = snapshot(outDir);
 			const child = Bun.spawn(
-				[
-					process.execPath,
-					resolve(import.meta.dir, "compile-all.ts"),
-					"--mode=mixed",
-				],
+				[process.execPath, resolve(import.meta.dir, "compile-all.ts")],
 				{ cwd: root, stdout: "pipe", stderr: "pipe" },
 			);
 			const reader = child.stdout.getReader();

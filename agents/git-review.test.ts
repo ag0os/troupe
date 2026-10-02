@@ -65,7 +65,7 @@ const EXTENSIONS: Record<string, AgentExtension> = {
 
 const sourceOf = (id: string) => `agents/${id.split(":").join("/")}`;
 
-/** The legacy `settings/pr-review.settings.json` allow list, in its order. */
+/** review:pr's Claude allow list, in its order. */
 const PR_REVIEW_ALLOW = [
 	"Bash(gh issue view:*)",
 	"Bash(gh issue list:*)",
@@ -351,22 +351,7 @@ describe("declarations and extensions (D-001, D-015, D-019)", () => {
 		}
 	});
 
-	// Migration check against the legacy prompt files, which TASK-017 deletes at the
-	// strict cutover; delete this check with them. The envelope snapshots are
-	// the lasting guard.
-	test("bodies are the legacy prompt files; git:fix had none and emits no prompt flag", async () => {
-		expect(spec("review:pr").systemPrompt).toBe(
-			readFileSync(
-				join(repo, "system-prompts/pr-review-prompt.md"),
-				"utf8",
-			).trimEnd(),
-		);
-		expect(spec("build:comment-review").systemPrompt).toBe(
-			readFileSync(
-				join(repo, "system-prompts/comment-review-prompt.md"),
-				"utf8",
-			).trimEnd(),
-		);
+	test("git:fix has no body and emits no prompt flag", async () => {
 		expect(spec("git:fix").systemPrompt).toBe("");
 		for (const backend of FAMILY["git:fix"] ?? []) {
 			const { argv } = await envelopeOf(
@@ -381,12 +366,11 @@ describe("declarations and extensions (D-001, D-015, D-019)", () => {
 		}
 	});
 
-	test("mixed mode builds each same-stem pair as declaration plus extension", async () => {
-		const plan = await planBuild({ root: repo, mode: "mixed" });
+	test("builds each same-stem pair as declaration plus extension", async () => {
+		const plan = await planBuild({ root: repo });
 		for (const id of Object.keys(FAMILY)) {
 			const entry = plan.entries.find((candidate) => candidate.id === id);
-			expect(entry?.kind).toBe("declaration");
-			if (entry?.kind !== "declaration") continue;
+			if (!entry) continue;
 			expect(entry.source).toBe(`${sourceOf(id)}.md`);
 			expect(entry.agent.extension?.exports).toEqual(["prepare"]);
 			const source = generateEntry(entry.agent);
@@ -796,10 +780,7 @@ describe("Claude rules and dropped settings (AC #2, #3, D-006, D-007)", () => {
 		expect(config.join("\n")).not.toContain("permissions");
 	});
 
-	// Migration check against the legacy settings file, which TASK-017 deletes at the
-	// strict cutover; delete this check with them. The envelope snapshots are
-	// the lasting guard.
-	test("review:pr carries the legacy allow list in order and no empty deny", async () => {
+	test("review:pr carries its allow list in order and no empty deny", async () => {
 		const { argv } = await envelopeOf(
 			"review:pr",
 			["123"],
@@ -808,11 +789,6 @@ describe("Claude rules and dropped settings (AC #2, #3, D-006, D-007)", () => {
 		expect(JSON.parse(valueAfter(argv, "--settings") ?? "{}")).toEqual({
 			permissions: { allow: PR_REVIEW_ALLOW },
 		});
-		const legacy = JSON.parse(
-			readFileSync(join(repo, "settings/pr-review.settings.json"), "utf8"),
-		);
-		expect(legacy.permissions.allow).toEqual(PR_REVIEW_ALLOW);
-		expect(legacy.permissions.deny).toEqual([]);
 	});
 
 	test("git:fix has no settings, MCP or model on either backend", async () => {
@@ -826,18 +802,7 @@ describe("Claude rules and dropped settings (AC #2, #3, D-006, D-007)", () => {
 		}
 	});
 
-	// Migration check against the legacy settings files, which TASK-017 deletes at the
-	// strict cutover; delete this check with them. The envelope snapshots are
-	// the lasting guard.
-	test("none of the three had a lifecycle echo hook, and none reaches an envelope", async () => {
-		for (const file of [
-			"settings/pr-review.settings.json",
-			"settings/comment-review.settings.json",
-		]) {
-			expect(
-				Object.keys(JSON.parse(readFileSync(join(repo, file), "utf8"))),
-			).toEqual(["permissions"]);
-		}
+	test("no lifecycle echo hook or dead setting reaches an envelope", async () => {
 		for (const [id, backends] of Object.entries(FAMILY)) {
 			expect(Object.keys(spec(id).native?.claude?.settings ?? {})).toEqual(
 				id === "git:fix" ? [] : ["permissions"],
