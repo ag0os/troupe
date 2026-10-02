@@ -170,20 +170,21 @@ describe("ordinary agent declarations (B-007, D-001)", () => {
 		}
 	});
 
-	test("mixed mode: the 12 declarations shadow their legacy siblings and the 11 special agents stay legacy", async () => {
+	test("mixed mode: the 12 declarations shadow their legacy siblings; no ordinary agent is legacy", async () => {
 		const plan = await planBuild({ root: repo, mode: "mixed" });
 		expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
-		const declared = plan.entries
-			.filter((entry) => entry.kind === "declaration")
-			.map((entry) => [entry.id, entry.source]);
-		expect(declared).toEqual(
-			Object.keys(ORDINARY)
-				.sort()
-				.map((id) => [id, sourceOf(id)]),
-		);
-		const legacy = plan.entries.filter((entry) => entry.kind === "legacy");
-		expect(legacy).toHaveLength(11);
-		for (const entry of legacy) {
+		for (const id of Object.keys(ORDINARY)) {
+			const entry = plan.entries.find((candidate) => candidate.id === id);
+			expect([id, entry?.kind, entry?.source]).toEqual([
+				id,
+				"declaration",
+				sourceOf(id),
+			]);
+		}
+		// Special agents convert in their own tasks; whatever is still legacy
+		// is a .ts launcher outside the ordinary set.
+		for (const entry of plan.entries) {
+			if (entry.kind !== "legacy") continue;
 			expect(entry.source).toMatch(/\.ts$/);
 			expect(Object.hasOwn(ORDINARY, entry.id)).toBe(false);
 		}
