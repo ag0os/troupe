@@ -55,6 +55,9 @@ export const INCLUDE_ROOTS = ["agents", "system-prompts"] as const;
 /** Directory whose modules extensions may import by relative path. */
 export const FRAMEWORK_DIR = "lib/agent-format";
 
+/** Directory whose files extensions may import as text. */
+export const TEXT_IMPORT_DIR = "system-prompts";
+
 export interface ExtensionInspection {
 	/** Reserved extension exports the module declares statically. */
 	exports: ExtensionExport[];
@@ -76,6 +79,12 @@ export interface ExtensionInspection {
 export interface InspectOptions {
 	/** True when a relative specifier resolves under `lib/agent-format/`. */
 	isFrameworkImport?: (specifier: string) => boolean;
+	/**
+	 * Why a well-formed default text import of `specifier` is not allowed, or
+	 * undefined when it resolves to a file under `system-prompts/`. Without
+	 * it, every text import is rejected.
+	 */
+	textImportProblem?: (specifier: string) => string | undefined;
 }
 
 export interface LoadedAgent {
@@ -132,6 +141,8 @@ export async function loadAgentDefinition(
 						existsSync(candidate) &&
 						isInside(realpathSync(frameworkDir), realpathSync(candidate)),
 				),
+			textImportProblem: (specifier) =>
+				textImportProblem(repoRoot, sibling, specifier),
 		},
 	);
 	// A sibling without reserved exports is not an extension, unless an
@@ -200,6 +211,32 @@ async function readIncludes(
 	return texts;
 }
 
+/**
+ * A text import must name a relative path to an existing file whose realpath
+ * is under `system-prompts/`, the same root the watcher covers (D-027).
+ */
+function textImportProblem(
+	repoRoot: string,
+	extension: string,
+	specifier: string,
+): string | undefined {
+	if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+		return `text import "${specifier}" must be a relative path into ${TEXT_IMPORT_DIR}/`;
+	}
+	const target = resolve(dirname(extension), specifier);
+	if (!existsSync(target)) {
+		return `text import "${specifier}" does not exist`;
+	}
+	const textRoot = join(repoRoot, TEXT_IMPORT_DIR);
+	if (
+		!existsSync(textRoot) ||
+		!isInside(realpathSync(textRoot), realpathSync(target))
+	) {
+		return `text import "${specifier}" resolves outside ${TEXT_IMPORT_DIR}/`;
+	}
+	return undefined;
+}
+
 function realpathOrSelf(path: string): string {
 	return existsSync(path) ? realpathSync(path) : path;
 }
@@ -219,7 +256,9 @@ function isInside(dir: string, path: string): boolean {
  * The rule guards against accidentally pairing a legacy launcher or any module
  * that does work on import; it is not a sandbox against a hostile author.
  * Allowed at the top level: `import type`, value imports from packages,
- * builtins and the framework module, local exports, type/interface
+ * builtins and the framework module, default imports carrying exactly
+ * `with { type: "text" }` of a non-script file under `system-prompts/`
+ * (importing text runs no code), local exports, type/interface
  * declarations, function declarations, classes extending a plain identifier,
  * enums with literal initializers, and `const` declarations with
  * side-effect-free initializers. Relative imports outside the framework,
@@ -231,7 +270,13 @@ export function inspectExtension(
 	text: string,
 	options: InspectOptions = {},
 ): ExtensionInspection {
-	const isFrameworkImport = options.isFrameworkImport ?? (() => false);
+	const rules: ImportRules = {
+		isFrameworkImport: options.isFrameworkImport ?? (() => false),
+		textImportProblem:
+			options.textImportProblem ??
+			((specifier) =>
+				`text import "${specifier}" cannot be resolved without a repository`),
+	};
 	const sourceFile = ts.createSourceFile(
 		file,
 		text,
@@ -279,7 +324,7 @@ export function inspectExtension(
 			exportProblems.push(issue);
 			if (problem.mayHideReserved) hidingExportProblems.push(issue);
 		}
-		const problem = topLevelProblem(statement, isFrameworkImport);
+		const problem = topLevelProblem(statement, rules);
 		if (problem) {
 			sideEffects.push(
 				issueAt(
@@ -477,9 +522,14 @@ function isBareSpecifier(specifier: string): boolean {
 	return !/^(\.|\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(specifier);
 }
 
+type ImportRules = Required<InspectOptions>;
+
+/** File types a text import may not name: their text is code. */
+const SCRIPT_EXTENSION = /\.(?:[cm]?[jt]sx?|json)$/i;
+
 function importProblem(
 	statement: ts.Statement,
-	isFrameworkImport: (specifier: string) => boolean,
+	rules: ImportRules,
 ): string | undefined {
 	if (ts.isImportEqualsDeclaration(statement)) {
 		return `"import ${statement.name.text} =" is not supported`;
@@ -493,17 +543,54 @@ function importProblem(
 	const clause = statement.importClause;
 	if (!clause) return `side-effect import "${specifier}"`;
 	if (clause.isTypeOnly) return undefined;
-	if (isBareSpecifier(specifier) || isFrameworkImport(specifier)) {
+	if (statement.attributes) {
+		return textImportShapeProblem(statement, specifier, rules);
+	}
+	if (isBareSpecifier(specifier) || rules.isFrameworkImport(specifier)) {
 		return undefined;
 	}
 	return `value import from "${specifier}" (only packages, builtins and ${FRAMEWORK_DIR} may be imported)`;
 }
 
+/**
+ * The one import form that carries attributes: `import name from "<file>"
+ * with { type: "text" }`, nothing more, of a non-script file the repository
+ * rules accept. Any other attribute use is rejected, packages included.
+ */
+function textImportShapeProblem(
+	statement: ts.ImportDeclaration,
+	specifier: string,
+	rules: ImportRules,
+): string | undefined {
+	const attributes = statement.attributes;
+	const clause = statement.importClause;
+	if (!attributes || !clause) return undefined;
+	const [only, ...extra] = attributes.elements;
+	const isTextType =
+		attributes.token === ts.SyntaxKind.WithKeyword &&
+		only !== undefined &&
+		extra.length === 0 &&
+		(ts.isIdentifier(only.name) || ts.isStringLiteral(only.name)) &&
+		only.name.text === "type" &&
+		ts.isStringLiteral(only.value) &&
+		only.value.text === "text";
+	if (!isTextType) {
+		return `import attributes on "${specifier}" must be exactly with { type: "text" }`;
+	}
+	if (!clause.name || clause.namedBindings) {
+		return `text import "${specifier}" must be a single default import`;
+	}
+	if (SCRIPT_EXTENSION.test(specifier)) {
+		return `text import "${specifier}" names a script; only prompt text may be imported as text`;
+	}
+	return rules.textImportProblem(specifier);
+}
+
 function topLevelProblem(
 	statement: ts.Statement,
-	isFrameworkImport: (specifier: string) => boolean,
+	rules: ImportRules,
 ): string | undefined {
-	const imported = importProblem(statement, isFrameworkImport);
+	const imported = importProblem(statement, rules);
 	if (imported) return imported;
 	if (hasModifier(statement, ts.SyntaxKind.DeclareKeyword)) {
 		const reserved = declaredNames(statement).filter(isReserved);
