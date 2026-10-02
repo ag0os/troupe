@@ -1,34 +1,29 @@
-#!/usr/bin/env bun
-
 /**
  * tools:webfetch — Print-mode WebFetch utility for external agent systems
  *
- * Wraps Claude Code's WebFetch tool in a one-shot, non-interactive binary.
- * Designed to be invoked as a sub-tool by agents or automation that lack
- * WebFetch (or MCP) access of their own. The agent's stdout is the payload.
+ * The extension half of `webfetch.md` (D-016). `prepare` turns the declared
+ * flags and positionals into the task prompt, or exits early with the
+ * `--describe` document or the missing-URL `ERROR:` line on stdout. `finish`
+ * rewrites the captured print result into the documented payload contract:
+ * the agent's stdout on success, otherwise a single `ERROR:` line on stdout
+ * with a non-zero exit. The turn cap and the tool rules are static Claude
+ * arguments and settings in the declaration (D-037).
  *
  * Usage:
  *   tools:webfetch <url> [prompt...]
  *   tools:webfetch --url <url> --prompt "extract the pricing tiers"
  *   tools:webfetch --describe                # print self-documentation
  *   tools:webfetch                           # same as --describe
- *
- * Options:
- *   --url <url>          URL to fetch (or pass as first positional).
- *   --prompt <text>      What to extract / ask about the page. If omitted a
- *                        concise factual summary is returned.
- *   --raw                Return the page text close to verbatim (no summary).
- *   --model <name>       Claude model to use (default: haiku).
- *   --max-turns <n>      Max turns for the underlying agent (default: 3).
- *   --describe           Print self-documentation and exit.
- *   -h, --help           Alias for --describe.
  */
 
-import { parseArgs } from "node:util";
-import { type RunResult, runAgentOnce } from "../../lib";
-import { type AgentAssets, assetsFor } from "../../lib/assets";
+import type {
+	FinishResult,
+	PrepareContext,
+	PrepareResult,
+	RunResult,
+} from "../../lib/agent-format/types";
 
-const USAGE_DOC = `# tools:webfetch
+export const USAGE_DOC = `# tools:webfetch
 
 Print-mode wrapper around Claude Code's WebFetch tool. Invoke it as a one-shot
 sub-process from agents or automation that lack native WebFetch or MCP access.
@@ -51,7 +46,6 @@ The process writes its payload to stdout and exits.
   summarized.
 - **--model <name>**: Claude model (default \`haiku\`). Use \`sonnet\` or
   \`opus\` for denser extraction from complex pages.
-- **--max-turns <n>**: turn cap for the underlying agent (default 3).
 
 ## Output
 
@@ -107,68 +101,38 @@ The process writes its payload to stdout and exits.
 - non-zero otherwise — fetch or agent failure (see stdout \`ERROR:\` line).
 `;
 
-const DEFAULT_MODEL = "haiku";
-const DEFAULT_MAX_TURNS = 3;
 const ERROR_PREFIX = "ERROR: ";
 
-type WebfetchCliResult = {
-	stdout?: string;
-	stderr?: string;
-	exitCode: number;
-};
-
-type WebfetchRunArgs = {
+export type WebfetchRequest = {
 	mode: "run";
 	url: string;
 	userPrompt: string;
 	raw: boolean;
-	model: string;
-	maxTurns: number;
 };
 
-type WebfetchParseResult =
-	| WebfetchRunArgs
+export type WebfetchInput =
+	| WebfetchRequest
 	| {
 			mode: "describe" | "usage-error";
 			stdout: string;
 			exitCode: number;
 	  };
 
-type WebfetchDependencies = {
-	runAgentOnce: typeof runAgentOnce;
-	assetsFor: (importerUrl: string) => AgentAssets;
-};
-
-const DEFAULT_DEPS: WebfetchDependencies = {
-	runAgentOnce,
-	assetsFor,
-};
-
-export function parseWebfetchArgs(
+/**
+ * The legacy argument rules over the runner's parsed flags and positionals:
+ * `--describe`, or no URL, prompt or positional at all, prints the usage
+ * document; the URL is `--url`, else the first positional; the prompt is
+ * `--prompt`, else the remaining positionals.
+ */
+export function resolveWebfetchInput(
+	flags: Readonly<Record<string, string | boolean>>,
 	args: readonly string[],
-): WebfetchParseResult {
-	const { values, positionals } = parseArgs({
-		args: [...args],
-		options: {
-			url: { type: "string" },
-			prompt: { type: "string" },
-			raw: { type: "boolean", default: false },
-			model: { type: "string", default: DEFAULT_MODEL },
-			"max-turns": { type: "string" },
-			describe: { type: "boolean", default: false },
-			help: { type: "boolean", short: "h", default: false },
-			backend: { type: "string" },
-		},
-		strict: false,
-		allowPositionals: true,
-	});
-
+): WebfetchInput {
 	const wantsDescribe =
-		values.describe === true ||
-		values.help === true ||
-		(positionals.length === 0 &&
-			typeof values.url !== "string" &&
-			typeof values.prompt !== "string");
+		flags.describe === true ||
+		(args.length === 0 &&
+			typeof flags.url !== "string" &&
+			typeof flags.prompt !== "string");
 
 	if (wantsDescribe) {
 		return {
@@ -179,9 +143,7 @@ export function parseWebfetchArgs(
 	}
 
 	const url =
-		typeof values.url === "string" && values.url.length > 0
-			? values.url
-			: positionals[0];
+		typeof flags.url === "string" && flags.url.length > 0 ? flags.url : args[0];
 
 	if (!url) {
 		return {
@@ -193,25 +155,17 @@ export function parseWebfetchArgs(
 	}
 
 	const promptFromFlag =
-		typeof values.prompt === "string" ? values.prompt.trim() : "";
+		typeof flags.prompt === "string" ? flags.prompt.trim() : "";
 	const promptFromPositionals =
-		typeof values.url === "string"
-			? positionals.join(" ").trim()
-			: positionals.slice(1).join(" ").trim();
-
-	const maxTurnsRaw = values["max-turns"];
-	const maxTurns =
-		typeof maxTurnsRaw === "string" && Number.isFinite(Number(maxTurnsRaw))
-			? Math.max(1, Math.floor(Number(maxTurnsRaw)))
-			: DEFAULT_MAX_TURNS;
+		typeof flags.url === "string"
+			? args.join(" ").trim()
+			: args.slice(1).join(" ").trim();
 
 	return {
 		mode: "run",
 		url,
 		userPrompt: promptFromFlag || promptFromPositionals,
-		raw: values.raw === true,
-		model: typeof values.model === "string" ? values.model : DEFAULT_MODEL,
-		maxTurns,
+		raw: flags.raw === true,
 	};
 }
 
@@ -219,7 +173,7 @@ export function buildTaskPrompt({
 	raw,
 	url,
 	userPrompt,
-}: WebfetchRunArgs): string {
+}: WebfetchRequest): string {
 	if (raw) {
 		return `Call WebFetch on this URL and return the closest available raw page text with no commentary. Treat this as best-effort raw text: the underlying tool may convert HTML to markdown, truncate large pages, or summarize some content. If WebFetch reports a redirect to a different host, call WebFetch once more with the redirect URL. If the page is authenticated, private, blocked, or unavailable, return a single ERROR line instead of guessing.\n\nURL: ${url}`;
 	}
@@ -249,7 +203,8 @@ export function formatErrorLine(reason: string): string {
 	return `${ERROR_PREFIX}${line && line.length > 0 ? line : "web fetch failed"}\n`;
 }
 
-export function normalizeRunResult(result: RunResult): WebfetchCliResult {
+/** The backend's captured print result as the payload contract. */
+export function normalizeRunResult(result: RunResult): FinishResult {
 	if (result.exitCode === 0) {
 		if (startsWithError(result.stdout)) {
 			return {
@@ -283,43 +238,28 @@ export function normalizeRunResult(result: RunResult): WebfetchCliResult {
 	};
 }
 
-export async function runWebfetchCli(
-	args: readonly string[],
-	deps: WebfetchDependencies = DEFAULT_DEPS,
-): Promise<WebfetchCliResult> {
-	const parsed = parseWebfetchArgs(args);
-	if (parsed.mode !== "run") {
-		return parsed;
-	}
-
-	const { systemPrompt, settings } = deps.assetsFor(import.meta.url);
-
-	try {
-		const result = await deps.runAgentOnce({
-			prompt: buildTaskPrompt(parsed),
-			systemPrompt,
-			settings: settings ? JSON.stringify(settings) : undefined,
-			model: parsed.model,
-			maxTurns: parsed.maxTurns,
-			tools: { allowed: ["WebFetch"] },
-			backend: "claude-cli",
-		});
-
-		return normalizeRunResult(result);
-	} catch (error) {
+/** Early exits for usage; otherwise the task prompt for the backend. */
+export function prepare(ctx: PrepareContext): PrepareResult {
+	const input = resolveWebfetchInput(ctx.flags, ctx.args);
+	if (input.mode !== "run") {
 		return {
-			stdout: formatErrorLine(
-				error instanceof Error ? error.message : String(error),
-			),
+			exit: { message: input.stdout, code: input.exitCode, stream: "stdout" },
+		};
+	}
+	return { initialPrompt: buildTaskPrompt(input) };
+}
+
+/**
+ * A failure before the backend ran (prepare, interpolation, adapter, spawn)
+ * becomes `ERROR: <message>` with exit 1, as a thrown runtime error did in
+ * the legacy launcher; a backend result goes through `normalizeRunResult`.
+ */
+export function finish(result: RunResult): FinishResult {
+	if (result.failure && result.failure.stage !== "backend") {
+		return {
+			stdout: formatErrorLine(result.failure.message),
 			exitCode: 1,
 		};
 	}
-}
-
-if (import.meta.main) {
-	const result = await runWebfetchCli(Bun.argv.slice(2));
-
-	if (result.stdout) process.stdout.write(result.stdout);
-	if (result.stderr) process.stderr.write(result.stderr);
-	process.exit(result.exitCode);
+	return normalizeRunResult(result);
 }
