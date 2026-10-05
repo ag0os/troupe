@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_MARKS, DEFAULT_WINDOWS, loadConfig } from "./config";
+import {
+	DEFAULT_MARKS,
+	DEFAULT_WINDOWS,
+	loadConfig,
+	splitConfigProblems,
+} from "./config";
 
 const fixtures: string[] = [];
 
@@ -161,7 +166,10 @@ describe("loadConfig", () => {
 		const target = join(outer, "target");
 		const outerFile = workspaceFile(outer);
 		const targetFile = workspaceFile(target);
-		writeJson(outerFile, { marks: { opening: 15_000 } });
+		writeJson(outerFile, {
+			marks: { opening: 15_000 },
+			sessionPrefix: "outer",
+		});
 		mkdirSync(join(target, ".shepherd"), { recursive: true });
 		writeFileSync(targetFile, "{not json");
 
@@ -177,6 +185,22 @@ describe("loadConfig", () => {
 		expect(config.problems[0]).toMatchObject({
 			file: targetFile,
 			key: "config",
+		});
+	});
+
+	test("splits user problems from workspace problems", () => {
+		const home = fixture();
+		const userFile = join(home, ".config", "shepherd", "config.json");
+		const workspace = join(home, "project");
+		const localFile = workspaceFile(workspace);
+		writeJson(userFile, { sessionPrefix: "wrong-scope" });
+		writeJson(localFile, { codex: { model: "wrong-scope" } });
+
+		const config = loadConfig({ home, env: {}, workspaceChain: [workspace] });
+
+		expect(splitConfigProblems(config.problems, { home, env: {} })).toEqual({
+			user: [{ file: userFile, key: "sessionPrefix", problem: "unknown key" }],
+			workspace: [{ file: localFile, key: "codex", problem: "unknown key" }],
 		});
 	});
 

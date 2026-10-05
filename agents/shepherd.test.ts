@@ -38,6 +38,7 @@ import {
 	loadAgentDefinition,
 	planBuild,
 } from "../scripts/agent-compiler";
+import { fakeToolEnv, makeTree } from "../test-support";
 import * as shepherd from "./shepherd";
 
 const repo = resolve(import.meta.dir, "..");
@@ -921,9 +922,91 @@ describe("print mode (B-008, AC #3)", () => {
 		expect(envelope).toMatchObject({ code: 0, stderr: "", initialPrompt: "" });
 		expect(envelope.argv).toContain("--print");
 	});
+
+	test("Codex print mode ignores configured interactive defaults", async () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(
+			configFile,
+			JSON.stringify({
+				codex: {
+					home: join(home, "missing-codex-home"),
+					model: "configured",
+					effort: "high",
+				},
+			}),
+		);
+		try {
+			const envelope = await preview(
+				["--backend", "codex", "--print", "hi"],
+				cwd,
+			);
+			expect(envelope).toMatchObject({ code: 0, stderr: "" });
+			expect(envelope.systemPrompt).not.toContain("- Codex home:");
+			expect(envelope.argv).not.toContain("configured");
+			expect(envelope.argv).not.toContain('model_reasoning_effort="high"');
+			const prepared = extension.prepare(
+				context("codex", cwd, { mode: "print", args: ["hi"] }),
+			);
+			expect(prepared).not.toHaveProperty("codexHome");
+			expect(prepared).not.toHaveProperty("model");
+			expect(prepared).not.toHaveProperty("effort");
+		} finally {
+			rmSync(configFile, { force: true });
+		}
+	});
 });
 
 describe("framework flags and passthrough (D-028, AC #6)", () => {
+	test("an invalid user config fails the launch with exit 2", async () => {
+		const { cwd } = build("plain");
+		const configFile = join(root, "home", ".config", "shepherd", "config.json");
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(configFile, JSON.stringify({ sessionPrefix: "wrong-scope" }));
+		try {
+			const run = await execute(["hello"], cwd);
+			expect(run).toEqual({
+				code: 2,
+				stdout: "",
+				stderr: `shepherd: ${configFile}: sessionPrefix: unknown key\n`,
+				records: [],
+			});
+		} finally {
+			rmSync(configFile, { force: true });
+		}
+	});
+
+	test("an invalid workspace config warns only interactively and uses the directory prefix", async () => {
+		const { cwd } = buildFrom({
+			cwd: "fallback",
+			files: {
+				"fallback/.shepherd/charter.md": "# Charter\n",
+				"fallback/.shepherd/config.json": JSON.stringify({
+					sessionPrefix: "bad prefix",
+				}),
+			},
+		});
+		const configFile = join(cwd, ".shepherd", "config.json");
+		const warning = `shepherd: ${configFile}: sessionPrefix: must start with a letter and contain only letters, digits, and hyphens`;
+		const interactive = await execute(["hello"], cwd);
+		expect(interactive).toMatchObject({
+			code: 0,
+			stdout: `${warning}\n`,
+			stderr: "",
+		});
+		const interactiveArgv = interactive.records[0]?.argv ?? [];
+		expect(interactiveArgv[interactiveArgv.indexOf("-n") + 1]).toBe(
+			"fallback-1002",
+		);
+
+		const printed = await execute(["--print", "hello"], cwd);
+		expect(printed.code).toBe(0);
+		expect(printed.stdout).not.toContain(warning);
+		expect(printed.records).toHaveLength(1);
+	});
+
 	test("Codex config supplies home, model, effort, and the home header", async () => {
 		const { cwd } = build("plain");
 		const home = join(root, "home");
@@ -1104,6 +1187,69 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 		);
 		expect(envelope.argv.filter((token) => token === "-n")).toHaveLength(1);
 		expect(envelope.argv[envelope.argv.indexOf("-n") + 1]).toBe("ws-1002");
+	});
+
+	test("the injected clock supplies both the header date and session name", () => {
+		const { cwd } = build("plain");
+		const ctx = context("claude", cwd);
+		const result = shepherd.prepare(ctx, {
+			...testToolEnv(ctx),
+			now: new Date(2026, 10, 7, 12),
+		});
+		expect(result).toMatchObject({ sessionName: "ws-1107" });
+		expect(JSON.stringify(result)).toContain("- Date: 2026-11-07");
+		expect(JSON.stringify(result)).toContain(
+			"- Session name: ws-1107 (set by the launcher)",
+		);
+	});
+
+	test("Claude registry names move the launcher name to the b suffix", () => {
+		const tree = makeTree({
+			"home/.claude/sessions/123.json": JSON.stringify({
+				pid: 123,
+				name: "workspace-1005",
+				cwd: "/elsewhere",
+				status: "running",
+			}),
+			"workspace/.shepherd/charter.md": "# Charter\n",
+		});
+		try {
+			const cwd = join(tree.root, "workspace");
+			const result = shepherd.prepare(
+				context("claude", cwd),
+				fakeToolEnv({
+					home: join(tree.root, "home"),
+					cwd,
+					alivePids: [123],
+				}),
+			);
+			expect(result).toMatchObject({ sessionName: "workspace-1005b" });
+			expect(JSON.stringify(result)).toContain(
+				"- Session name: workspace-1005b (set by the launcher)",
+			);
+		} finally {
+			tree.cleanup();
+		}
+	});
+
+	test("Codex index names move the suggested name to the b suffix", () => {
+		const tree = makeTree({
+			"home/.codex/session_index.jsonl": `${JSON.stringify({ id: "one", thread_name: "workspace-1005" })}\n`,
+			"workspace/.shepherd/charter.md": "# Charter\n",
+		});
+		try {
+			const cwd = join(tree.root, "workspace");
+			const result = shepherd.prepare(
+				context("codex", cwd),
+				fakeToolEnv({ home: join(tree.root, "home"), cwd }),
+			);
+			expect(result).not.toHaveProperty("sessionName");
+			expect(JSON.stringify(result)).toContain(
+				"suggested: workspace-1005b, through its rename dialog",
+			);
+		} finally {
+			tree.cleanup();
+		}
 	});
 
 	test("a typed Claude name reaches the argv once and a passthrough name is not added", async () => {

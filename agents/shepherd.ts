@@ -51,7 +51,11 @@ import {
 	passthroughModelToken,
 } from "../lib/shepherd/codex-defaults";
 import { composeFragments } from "../lib/shepherd/compose";
-import { loadConfig } from "../lib/shepherd/config";
+import {
+	type ConfigProblem,
+	loadConfig,
+	splitConfigProblems,
+} from "../lib/shepherd/config";
 import { sessionNameFor } from "../lib/shepherd/session-name";
 import {
 	claudeSessions,
@@ -69,6 +73,10 @@ import {
  * existing workspace's prompt does not change with the migration.
  */
 const BACKEND_LABELS = { claude: "claude-cli", codex: "codex-cli" } as const;
+
+function configProblemLine(problem: ConfigProblem): string {
+	return `shepherd: ${problem.file}: ${problem.key}: ${problem.problem}`;
+}
 
 /**
  * An enclosing workspace's state dir is added as a readable directory, since
@@ -119,6 +127,25 @@ export function prepare(
 	toolEnv: ToolEnv = processToolEnv(ctx),
 ): PrepareResult {
 	const prompt = ctx.args.join(" ").trim();
+	const enclosing = findEnclosingWorkspace(ctx.cwd);
+	const config = loadConfig({
+		home: toolEnv.home,
+		env: toolEnv.env,
+		workspaceChain: workspaceChain(ctx.cwd),
+	});
+	const configProblems = splitConfigProblems(config.problems, {
+		home: toolEnv.home,
+		env: toolEnv.env,
+	});
+	if (configProblems.user.length > 0) {
+		return {
+			exit: {
+				message: `${configProblems.user.map(configProblemLine).join("\n")}\n`,
+				code: 2,
+				stream: "stderr",
+			},
+		};
+	}
 
 	// Preview only prints what would launch, so it keeps the legacy
 	// `--show-prompt --print` behavior of showing the prompt.
@@ -131,13 +158,6 @@ export function prepare(
 			},
 		};
 	}
-
-	const enclosing = findEnclosingWorkspace(ctx.cwd);
-	const config = loadConfig({
-		home: toolEnv.home,
-		env: toolEnv.env,
-		workspaceChain: workspaceChain(ctx.cwd),
-	});
 	const claude = ctx.backend === "claude" ? claudeSessions(toolEnv) : undefined;
 	const takenNames =
 		claude?.available === true
@@ -174,7 +194,7 @@ export function prepare(
 		};
 	}
 	const defaults =
-		ctx.backend === "codex"
+		ctx.backend === "codex" && ctx.mode === "interactive"
 			? codexDefaults(
 					config,
 					toolEnv,
@@ -196,7 +216,12 @@ export function prepare(
 			...naming.headerLines,
 			...(defaults?.headerLine ? [defaults.headerLine] : []),
 		],
+		toolEnv.now,
 	);
+	const beforeRunMessages =
+		ctx.mode === "interactive"
+			? configProblems.workspace.map(configProblemLine)
+			: [];
 
 	if (ctx.backend !== "claude" || !enclosing) {
 		return {
@@ -206,6 +231,7 @@ export function prepare(
 			...(defaults?.codexHome ? { codexHome: defaults.codexHome } : {}),
 			...(defaults?.model !== undefined ? { model: defaults.model } : {}),
 			...(defaults?.effort !== undefined ? { effort: defaults.effort } : {}),
+			...(beforeRunMessages.length > 0 ? { beforeRunMessages } : {}),
 		};
 	}
 	return {
@@ -213,5 +239,6 @@ export function prepare(
 		initialPrompt: prompt,
 		...(naming.sessionName ? { sessionName: naming.sessionName } : {}),
 		extraAllowRules: enclosingAccess(enclosing),
+		...(beforeRunMessages.length > 0 ? { beforeRunMessages } : {}),
 	};
 }

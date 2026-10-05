@@ -54,6 +54,11 @@ export type LoadConfigOptions = {
 	workspaceChain: readonly string[];
 };
 
+export type ConfigProblemsByScope = {
+	user: ConfigProblem[];
+	workspace: ConfigProblem[];
+};
+
 const positiveInteger = z.number().int().positive();
 const marksSchema = z.strictObject({
 	opening: positiveInteger.optional(),
@@ -101,6 +106,30 @@ function expandHome(path: string, home: string): string {
 		: path.startsWith("~/")
 			? join(home, path.slice(2))
 			: path;
+}
+
+function userConfigFile(
+	options: Pick<LoadConfigOptions, "home" | "env">,
+): string {
+	const configHome = expandHome(
+		options.env.XDG_CONFIG_HOME || join(options.home, ".config"),
+		options.home,
+	);
+	return join(configHome, "shepherd", "config.json");
+}
+
+/** Split config diagnostics by the failure policy of their source file. */
+export function splitConfigProblems(
+	problems: readonly ConfigProblem[],
+	options: Pick<LoadConfigOptions, "home" | "env">,
+): ConfigProblemsByScope {
+	const userFile = userConfigFile(options);
+	const user: ConfigProblem[] = [];
+	const workspace: ConfigProblem[] = [];
+	for (const problem of problems) {
+		(problem.file === userFile ? user : workspace).push(problem);
+	}
+	return { user, workspace };
 }
 
 function issueProblems(
@@ -185,11 +214,7 @@ export function loadConfig({
 		codex: {},
 		problems: [],
 	};
-	const configHome = expandHome(
-		env.XDG_CONFIG_HOME || join(home, ".config"),
-		home,
-	);
-	const userFile = join(configHome, "shepherd", "config.json");
+	const userFile = userConfigFile({ home, env });
 	const user = readLayer(userFile, userSchema, config.problems);
 	if (user) {
 		applyLayer(config, user);

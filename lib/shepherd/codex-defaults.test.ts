@@ -144,6 +144,44 @@ describe("codexDefaults", () => {
 		).toBe(`${userFile}: Codex home is not an existing directory: ${missing}`);
 	});
 
+	test("rejects relative configured homes with their source file", () => {
+		const home = fixture();
+		const userFile = join(home, ".config", "shepherd", "config.json");
+		expect(
+			codexDefaults(
+				config({ home: "relative/home" }),
+				environment(home),
+				[],
+				"new",
+				false,
+			).error,
+		).toBe(`${userFile}: Codex home is not an absolute path: relative/home`);
+	});
+
+	test("rejects a relative home read from homeFile with the homeFile source", () => {
+		const home = fixture();
+		const homeFile = join(home, ".codex-active");
+		writeFileSync(homeFile, "relative/home\n");
+		expect(
+			codexDefaults(config({ homeFile }), environment(home), [], "new", false)
+				.error,
+		).toBe(`${homeFile}: Codex home is not an absolute path: relative/home`);
+	});
+
+	test("leaves a relative environment home inherited and keeps its header", () => {
+		const home = fixture();
+		const result = codexDefaults(
+			config(),
+			environment(home, { CODEX_HOME: "relative/home" }),
+			[],
+			"new",
+			false,
+		);
+		expect(result).toEqual({
+			headerLine: "- Codex home: relative/home (environment)",
+		});
+	});
+
 	test("reports the Codex default without setting CODEX_HOME", () => {
 		const home = fixture();
 		expect(

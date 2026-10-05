@@ -122,6 +122,19 @@ describe("contract 1c: PrepareResult.sessionName", () => {
 		]);
 	});
 
+	test("execute passes the prepared name to Claude", async () => {
+		const result = await execute(fixtureSpec(), [], {
+			prepare: () => ({ sessionName: "shepherd-1005" }),
+		});
+		expect(result).toEqual({ code: 0, stderr: "" });
+		const argv = readRecords(recordFile)[0]?.argv ?? [];
+		expect(argv.filter((token) => token === "-n")).toHaveLength(1);
+		expect(argv.slice(argv.indexOf("-n"), argv.indexOf("-n") + 2)).toEqual([
+			"-n",
+			"shepherd-1005",
+		]);
+	});
+
 	test("Codex, print mode and unknown result fields fail preparation", async () => {
 		const codex = await preview(fixtureSpec(), ["--backend", "codex"], {
 			prepare: () => ({ sessionName: "wrong-backend" }),
@@ -196,6 +209,33 @@ describe("contract 1d: PrepareResult.model", () => {
 		expect(previewArgv(codex.stdout)).toContain("prepared-codex");
 		expect(previewArgv(codex.stdout)).not.toContain("declared-codex");
 	});
+
+	test("execute passes prepared models to both adapters and a flag still wins", async () => {
+		for (const backend of ["claude", "codex"] as const) {
+			const backendArgs = backend === "codex" ? ["--backend", "codex"] : [];
+			const prepared = await execute(fixtureSpec(), backendArgs, {
+				prepare: () => ({ model: "from-prepare" }),
+			});
+			expect(prepared).toEqual({ code: 0, stderr: "" });
+			const preparedArgv = readRecords(recordFile).at(-1)?.argv ?? [];
+			const modelFlag = backend === "claude" ? "--model" : "-m";
+			expect(preparedArgv[preparedArgv.indexOf(modelFlag) + 1]).toBe(
+				"from-prepare",
+			);
+
+			const flagged = await execute(
+				fixtureSpec(),
+				[...backendArgs, "--model", "from-flag"],
+				{ prepare: () => ({ model: "from-prepare" }) },
+			);
+			expect(flagged).toEqual({ code: 0, stderr: "" });
+			const flaggedArgv = readRecords(recordFile).at(-1)?.argv ?? [];
+			expect(flaggedArgv[flaggedArgv.indexOf(modelFlag) + 1]).toBe(
+				"from-flag",
+			);
+			expect(flaggedArgv).not.toContain("from-prepare");
+		}
+	});
 });
 
 describe("contract 1e: PrepareResult.effort", () => {
@@ -217,6 +257,22 @@ describe("contract 1e: PrepareResult.effort", () => {
 			'model_reasoning_effort="xhigh"',
 		);
 		expect(previewArgv(codex.stdout).join(" ")).not.toContain("minimal");
+	});
+
+	test("execute passes prepared effort to both adapters", async () => {
+		for (const backend of ["claude", "codex"] as const) {
+			const argv = backend === "codex" ? ["--backend", "codex"] : [];
+			const result = await execute(fixtureSpec(), argv, {
+				prepare: () => ({ effort: "high" }),
+			});
+			expect(result).toEqual({ code: 0, stderr: "" });
+			const recorded = readRecords(recordFile).at(-1)?.argv ?? [];
+			if (backend === "claude") {
+				expect(recorded[recorded.indexOf("--effort") + 1]).toBe("high");
+			} else {
+				expect(recorded).toContain('model_reasoning_effort="high"');
+			}
+		}
 	});
 
 	test("effort accepts lowercase letters only", async () => {

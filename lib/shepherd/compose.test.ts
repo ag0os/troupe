@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { prepare } from "../../agents/shepherd";
 import { loadAgentDefinition } from "../../scripts/agent-compiler";
+import { fakeToolEnv } from "../../test-support";
 import { parseCli } from "../agent-format/cli";
 import { previewAgent } from "../agent-format/run";
 import { promptWords } from "./compose";
@@ -26,9 +27,14 @@ test("promptWords counts the system prompt produced by previewAgent", async () =
 		if (outcome.kind !== "run") throw new Error("unexpected help");
 		let stdout = "";
 		let stderr = "";
+		const toolEnv = fakeToolEnv({
+			home: join(workspace, "home"),
+			cwd: workspace,
+			env: {},
+		});
 		const code = await previewAgent(
 			agent.spec,
-			{ prepare },
+			{ prepare: (ctx) => prepare(ctx, toolEnv) },
 			outcome.invocation,
 			{
 				stdout: (chunk) => {
@@ -47,7 +53,7 @@ test("promptWords counts the system prompt produced by previewAgent", async () =
 			);
 		expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
 		expect(match?.[1]).toBeDefined();
-		expect(promptWords(workspace)).toBe(words(match?.[1] ?? ""));
+		expect(promptWords(workspace, toolEnv.now)).toBe(words(match?.[1] ?? ""));
 	} finally {
 		rmSync(workspace, { recursive: true, force: true });
 	}

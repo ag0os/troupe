@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { Config } from "./config";
 import type { LaunchKind } from "./session-name";
 import type { ToolEnv } from "./sessions";
@@ -104,12 +104,19 @@ export function codexDefaults(
 	let codexHome: string | undefined;
 	let headerLine: string;
 	if (toolEnv.env.CODEX_HOME) {
-		codexHome = toolEnv.env.CODEX_HOME;
-		headerLine = `- Codex home: ${codexHome} (environment)`;
+		const environmentHome = expandHome(toolEnv.env.CODEX_HOME, toolEnv.home);
+		if (isAbsolute(environmentHome)) codexHome = environmentHome;
+		headerLine = `- Codex home: ${environmentHome} (environment)`;
 	} else {
 		const configured = configuredHome(config, toolEnv);
 		if (configured.error) return { headerLine: "", error: configured.error };
 		if (configured.path) {
+			if (!isAbsolute(configured.path)) {
+				return {
+					headerLine: "",
+					error: `${configured.source}: Codex home is not an absolute path: ${configured.path}`,
+				};
+			}
 			if (!isDirectory(configured.path)) {
 				return {
 					headerLine: "",

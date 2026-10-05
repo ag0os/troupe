@@ -56,6 +56,7 @@ export function composeFragments(
 	backend: string,
 	enclosing: string | undefined,
 	headerLines: readonly string[] = [],
+	now: Date = new Date(),
 ): string[] {
 	const charter = loadCharter(cwd);
 	const inherited = enclosing ? loadIntegrations(enclosing) : [];
@@ -80,7 +81,7 @@ export function composeFragments(
 		"",
 		`- Launch directory: ${cwd}`,
 		`- State directory: ${join(cwd, STATE_DIR)}`,
-		`- Date: ${dayOf(new Date())}`,
+		`- Date: ${dayOf(now)}`,
 		`- Backend: ${backend}`,
 		...headerLines,
 		enclosing
@@ -107,12 +108,16 @@ export function composeFragments(
 }
 
 /** The composed Claude system prompt's word count for a workspace. */
-export function promptWords(dir: string): number {
-	const name = defaultSessionName(dir, new Date(), undefined, false);
+export function promptWords(dir: string, now: Date = new Date()): number {
+	const name = defaultSessionName(dir, now, undefined, false);
 	return words(
-		composeFragments(dir, "claude-cli", findEnclosingWorkspace(dir), [
-			`- Session name: ${name} (set by the launcher)`,
-		])
+		composeFragments(
+			dir,
+			"claude-cli",
+			findEnclosingWorkspace(dir),
+			[`- Session name: ${name} (set by the launcher)`],
+			now,
+		)
 			.filter((fragment) => fragment.length > 0)
 			.join(PROMPT_SEPARATOR),
 	);
