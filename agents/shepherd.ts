@@ -219,6 +219,15 @@ function composeFragments(
 		(m) => !inheritedPaths.has(m.path),
 	);
 	const children = findChildWorkspaces(cwd);
+	const gates = {
+		// An ancestor that publishes no module shares no layer to live under.
+		nested: inherited.length > 0,
+		root: children.length > 0,
+		software: declaredModules(charter).has("software"),
+	};
+	const gated = Object.entries(gates)
+		.filter(([, on]) => on)
+		.map(([name]) => name);
 	const header = [
 		"# Shepherd session context",
 		"",
@@ -229,7 +238,8 @@ function composeFragments(
 		enclosing
 			? `- Enclosing workspace: ${enclosing} (inherited integrations: ${inherited.map((m) => m.name).join(", ") || "none"})`
 			: "- Enclosing workspace: none",
-		`- Workspaces beneath: ${children.join(", ") || "none"}`,
+		`- Workspaces beneath: ${children.join(", ") || `none within ${CHILD_DEPTH} levels`}`,
+		`- Gated modules loaded: ${gated.join(", ") || "none"}`,
 		charter
 			? "- Charter: loaded"
 			: "- Charter: none, this workspace is uninitiated",
@@ -240,12 +250,7 @@ function composeFragments(
 
 	return [
 		coreDoc,
-		...builtInIntegrations({
-			// An ancestor that publishes no module shares no layer to live under.
-			nested: inherited.length > 0,
-			root: children.length > 0,
-			software: declaredModules(charter).has("software"),
-		}),
+		...builtInIntegrations(gates),
 		...inherited.map((m) => m.body),
 		...locals.map((l) => l.body),
 		...(charter ? [charter] : []),

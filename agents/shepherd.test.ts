@@ -402,7 +402,8 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 		const charter = fixture?.files[`${fixture.cwd}/.shepherd/charter.md`];
 		const header = (parts.at(-1) ?? "").replace(
 			/^- Enclosing workspace: .*$/m,
-			(line) => `${line}\n- Workspaces beneath: none`,
+			(line) =>
+				`${line}\n- Workspaces beneath: none within 3 levels\n- Gated modules loaded: ${/\(inherited integrations: (?!none\))/.test(line) ? "nested" : "none"}`,
 		);
 		const modules = parts
 			.slice(LEGACY_BASE_LAYERS, -1)
@@ -645,6 +646,7 @@ describe("composition order (B-008, AC #1)", () => {
 			"# Flock charter\n\nMust not load in a child.\n",
 		]);
 		expect(parts.at(-1)).toContain("- Workspaces beneath: child\n");
+		expect(parts.at(-1)).toContain("- Gated modules loaded: root\n");
 		expect(parts.at(-1)).toContain(
 			"- Workspace-local integrations loaded: a-shared.md, b-flock.md",
 		);
@@ -695,7 +697,8 @@ describe("composition order (B-008, AC #1)", () => {
 					"- Date: 2026-10-02",
 					`- Backend: ${label}`,
 					"- Enclosing workspace: none",
-					"- Workspaces beneath: none",
+					"- Workspaces beneath: none within 3 levels",
+					"- Gated modules loaded: none",
 					"- Charter: loaded",
 					"- Workspace-local integrations loaded: local-a.md",
 				].join("\n"),

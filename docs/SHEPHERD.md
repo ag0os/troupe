@@ -51,7 +51,7 @@ Two modules load into every Shepherd and check their own availability at run tim
 | `software.md` | Coordinating work that changes code | the charter has the line `Modules: software` |
 
 - **Nested.** A parent directory that has a `.shepherd/` but no `integrations/*.md` shares nothing, so it is named in the header and `nested.md` stays out.
-- **Root.** The launcher walks down from the launch directory for directories with their own `.shepherd/`, does not look inside one it finds, skips hidden directories, `node_modules` and symlinks, and stops three levels down. The header lists what it found as `- Workspaces beneath: <relative paths>`, or `none`.
+- **Root.** The launcher walks down from the launch directory for directories with their own `.shepherd/`, does not look inside one it finds, skips hidden directories, `node_modules` and symlinks, and stops three levels down. The header lists what it found as `- Workspaces beneath: <relative paths>`, or `none within 3 levels`. A further header line, `- Gated modules loaded: <names>` or `none`, shows which of `nested`, `root` and `software` this launch loaded, so a misspelt `Modules:` line is visible.
 - **Software.** Nothing on disk says what a workspace's work is, so the charter declares it: a line of its own reading `Modules: software`. Init names the module when it reaches the charter's Structure section. An existing charter needs the line added, with the user's agreement like any charter change.
 
 ## Init and the charter
