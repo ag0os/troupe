@@ -28,38 +28,37 @@ The session prompt is layered, in order:
 | Layer | Source | Baked in |
 |-------|--------|----------|
 | Core | `system-prompts/shepherd/core.md` | yes |
-| Built in integrations | `system-prompts/shepherd/integrations/*.md` | yes |
+| Built in integrations | `system-prompts/shepherd/integrations/*.md`, those that apply to this launch | yes |
 | Inherited integrations | `.shepherd/integrations/*.md` of the nearest enclosing workspace (a parent directory with its own `.shepherd/`) | no, read at launch |
-| Workspace charter | `.shepherd/charter.md` in the launch directory | no, read at launch |
 | Workspace integrations | `.shepherd/integrations/*.md` in the launch directory | no, read at launch |
-| Session context header | generated (cwd, state dir, date, backend, charter status, loaded modules) | no |
+| Workspace charter | `.shepherd/charter.md` in the launch directory | no, read at launch |
+| Session context header | generated (cwd, state dir, local date, backend, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
+
+The charter comes after every module because it is the contract: where it and a module disagree about how the workspace works, the charter wins. Modules stay authoritative about what a capability can do and about their safety rules.
 
 An enclosing workspace lets a group of workspaces share one layer: put them in subdirectories of a workspace whose `integrations/` holds the shared modules, and each one inherits them, with no copies or links. The extension also adds that workspace's real `.shepherd/` path as a readable directory, so the modules can point at reference files there. A local module that resolves to the same file as an inherited one is skipped.
 
-Every integration module is self gated: it declares how to detect availability (for example `HERDR_ENV=1`, or the presence of messaging tools) and Shepherd skips the capability cleanly when the check fails. That is what keeps the prompt harness agnostic.
-
 ### Built in modules
 
-All four load into every Shepherd, in this order, and each one gates itself:
+Two modules load into every Shepherd and check their own availability at run time, which keeps the prompt harness agnostic. The launcher adds the other three only when they apply, so no Shepherd spends prompt on a module that would tell it to skip itself.
 
-| Module | For | Gate |
-|--------|-----|------|
-| `herdr.md` | Running commands and agents in Herdr panes | `HERDR_ENV=1` |
-| `inter-agent.md` | Messaging other agent sessions | The harness exposes messaging tools this session |
-| `nested.md` | Workspaces inside workspaces: the shared layer and who keeps it | The header's "Enclosing workspace" line, or workspaces beneath the launch directory |
-| `software.md` | Coordinating work that changes code | The charter makes changing code part of the workspace's work |
+| Module | For | Loaded when |
+|--------|-----|-------------|
+| `herdr.md` | Running commands and agents in Herdr panes | always; checks `HERDR_ENV=1` itself |
+| `inter-agent.md` | Messaging other agent sessions | always; checks for messaging tools itself |
+| `nested.md` | Living under an enclosing workspace's shared layer | an enclosing workspace exists and publishes at least one module |
+| `root.md` | Keeping that shared layer, and acting as the user's assistant across workspaces | workspaces sit beneath the launch directory |
+| `software.md` | Coordinating work that changes code | the charter has the line `Modules: software` |
 
-`nested.md` has two readers. A workspace with an enclosing workspace gets the rules for living under a shared layer: its charter wins on how it works, shared facts beat its own memories, it reads the shared reference files before acting, and it files corrections, shared facts and promotions through `.shepherd/outbox/` instead of editing the shared layer. The root (no enclosing workspace, workspaces beneath it) is the steward of that layer and the user's general assistant across the workspaces. The module carries the mechanism only: what a shared layer says stays in the workspace that keeps it.
-
-A root's own `integrations/` holds the modules its workspaces inherit. For the root itself they are local modules, composed after its charter, so `nested.md` tells the root that its charter still governs it.
-
-`software.md` gives the investigate, decide, implement, review, verify cycle and the checks specific to code, such as Shepherd running the gates itself and checking its code host identity before a write.
+- **Nested.** A parent directory that has a `.shepherd/` but no `integrations/*.md` shares nothing, so it is named in the header and `nested.md` stays out.
+- **Root.** The launcher walks down from the launch directory for directories with their own `.shepherd/`, does not look inside one it finds, skips hidden directories, `node_modules` and symlinks, and stops three levels down. The header lists what it found as `- Workspaces beneath: <relative paths>`, or `none`.
+- **Software.** Nothing on disk says what a workspace's work is, so the charter declares it: a line of its own reading `Modules: software`. Init names the module when it reaches the charter's Structure section. An existing charter needs the line added, with the user's agreement like any charter change.
 
 ## Init and the charter
 
-A fresh workspace is deliberately generic. On first launch Shepherd runs an init conversation with the user to agree the mission, the way of working, the toolset (for example cosmonauts, gh, project tooling), and any structure the workspace needs, then records the agreement as `.shepherd/charter.md`. The charter loads into every session and is the contract; renegotiate it rather than drift from it. A workspace can be any shape: one project, several, a coordinator of coordinators, internet chores.
+A fresh workspace is deliberately generic. On first launch Shepherd runs an init conversation with the user to agree the mission, Shepherd's role, what lives where and what is confidential, the way of working, the cadence, what done means, the toolset (for example gh and project tooling), and any structure the workspace needs, then records the agreement as `.shepherd/charter.md`. The charter loads into every session and is the contract; renegotiate it rather than drift from it. A workspace can be any shape: one project, several, a coordinator of coordinators, internet chores.
 
-The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. It opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing rules agreed later go into the charter, not into `CURRENT.md`.
+The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. It opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing rules agreed later go into the charter, not into `CURRENT.md`. A charter agreed before this skeleton stands as it is.
 
 ## Self evolution
 
@@ -72,7 +71,7 @@ Shepherd improves its own operating instructions over time, gated by agreement r
 ## Extending Shepherd
 
 - **Framework wide**: add a module to `system-prompts/shepherd/integrations/`, import it in `agents/shepherd.ts`, add it to `builtInIntegrations()`, then recompile.
-- **Per workspace**: drop a `*.md` module into `.shepherd/integrations/` in that directory, or let Shepherd write one during init. Loaded on next launch, no recompile. The charter and local modules are appended after built ins and may extend or override them.
+- **Per workspace**: drop a `*.md` module into `.shepherd/integrations/` in that directory, or let Shepherd write one during init. Loaded on next launch, no recompile. Local modules are appended after built in and inherited ones and may extend or override them; the charter comes last.
 
 ## Workspace state
 
@@ -86,7 +85,7 @@ Shepherd maintains `.shepherd/` in the launch directory:
   MEMORY.md          # index: one line per memory
   memories/          # one fact per file (frontmatter: name, description, type)
   journal.md         # append only history, current month
-  docs/              # runbooks, environment notes, agent rosters; INDEX.md lists them
+  docs/              # runbooks, environment notes, checklists; INDEX.md lists them
   archive/           # closed work and past journal months; INDEX.md lists them
   integrations/      # workspace local capability modules
 ```
@@ -97,8 +96,8 @@ Context is tiered (see core, "Context tiers"): the prompt and a short session-st
 
 Core fixes the shape of the tracking files (see core, "Work tracking"), so every workspace keeps them the same way and tools can read them:
 
-- `CURRENT.md` is the index and the handoff, rewritten whole: an `Updated: YYYY-MM-DD HH:MM` line with the session name, a Next session block, one entry per item led by a status word (NEXT, SCHEDULED, WAITING, ASK or CANDIDATE), and the Live sessions.
-- Each item is a directory under `work/` with a `STATUS.md`: frontmatter (`state`, `opened`, `closed`, `blocked_on`) and the sections What and origin, State, Next, and Next session must know. `CURRENT.md` is updated in the same turn as the `STATUS.md` it points to.
+- `CURRENT.md` is the index and the handoff, rewritten whole at handoff: an `Updated: YYYY-MM-DD HH:MM` line with the session name, then `## Next session`, `## Items` (one entry each, led by a status word in bold: NEXT, SCHEDULED, WAITING, ASK or CANDIDATE; the line `No NEXT is set.` when there is none) and `## Live sessions` (name, harness, model, the item served).
+- An item with more to it than its line is a directory under `work/` with a `STATUS.md`: frontmatter (`state`, `opened`, `closed`, `blocked_on`) and the sections What and origin, State, Next, and Next session must know. `CURRENT.md` is updated in the same turn as the `STATUS.md` it points to.
 - `journal.md` is history, not handoff: one `## YYYY-MM-DD` heading per day, with one line bullets that start with the local `HH:MM`.
 - `docs/INDEX.md` has one line per doc: `- [title](path): when to read it`.
 
