@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { utimesSync } from "node:fs";
 import { join } from "node:path";
-import { fakeToolEnv, jsonCommandResult, makeTree } from "../../test-support";
 import type { Config } from "./config";
 import {
 	claudeSessions,
@@ -10,6 +9,7 @@ import {
 	latestClaudeTranscriptMtime,
 	runningSessions,
 } from "./sessions";
+import { fakeToolEnv, jsonCommandResult, makeTree } from "./test-support";
 
 const cleanups: Array<() => void> = [];
 

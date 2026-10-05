@@ -8,8 +8,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { CommandResult } from "./lib/agent-format/types";
-import type { ToolEnv } from "./lib/shepherd/sessions";
+import type { CommandResult } from "../agent-format/types";
+import type { ToolEnv } from "./sessions";
 
 export interface MakeTreeOptions {
 	symlinks?: Record<string, string>;

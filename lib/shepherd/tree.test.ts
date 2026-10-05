@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { makeTree } from "../../test-support";
+import { makeTree } from "./test-support";
 import {
 	discoverTree,
 	selectWorkspaces,

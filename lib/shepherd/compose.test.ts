@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { prepare } from "../../agents/shepherd";
 import { loadAgentDefinition } from "../../scripts/agent-compiler";
-import { fakeToolEnv } from "../../test-support";
 import { parseCli } from "../agent-format/cli";
 import { previewAgent } from "../agent-format/run";
 import { promptWords } from "./compose";
+import { fakeToolEnv } from "./test-support";
 import { words } from "./text";
 
 test("promptWords counts the system prompt produced by previewAgent", async () => {

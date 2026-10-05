@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { type MakeTreeOptions, makeTree } from "../../test-support";
 import { checkWorkspace, type Finding } from "./check";
 import { checkWork } from "./check-work";
 import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import { type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
 const TODAY = new Date(2026, 9, 5);

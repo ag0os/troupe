@@ -32,13 +32,13 @@ import type {
 	PrepareContext,
 } from "../lib/agent-format/types";
 import type { ToolEnv } from "../lib/shepherd/sessions";
+import { fakeToolEnv, makeTree } from "../lib/shepherd/test-support";
 import {
 	generateEntry,
 	type LoadedAgent,
 	loadAgentDefinition,
 	planBuild,
 } from "../scripts/agent-compiler";
-import { fakeToolEnv, makeTree } from "../test-support";
 import * as shepherd from "./shepherd";
 
 const repo = resolve(import.meta.dir, "..");
