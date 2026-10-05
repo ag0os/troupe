@@ -101,7 +101,7 @@ describe("planArchive", () => {
 
 	test("uses the local month before and after its boundary", () => {
 		inTimezone("America/Argentina/Buenos_Aires", () => {
-			const { workspace } = fixture({
+			const { tree, workspace } = fixture({
 				"root/.shepherd/journal.md":
 					"Preface\n\n## 2026-10-30\n- One\n\n## 2026-10-31\n- Two\n",
 			});
@@ -116,7 +116,7 @@ describe("planArchive", () => {
 				config(),
 				new Date(2026, 10, 1, 0, 10),
 			);
-			const applied = applyArchive(november);
+			const applied = applyArchive(november, tree);
 			expect(
 				readFileSync(
 					join(workspace.state, "archive/journal/2026-10.md"),
@@ -188,7 +188,7 @@ describe("planArchive", () => {
 
 describe("applyArchive", () => {
 	test("moves both kinds, preserves current journal entries and creates the index", () => {
-		const { workspace } = fixture({
+		const { tree, workspace } = fixture({
 			"root/.shepherd/journal.md":
 				"# Notes\n\n## 2026-09-30\n- Old\n\n## 2026-10-01\n- Current\n",
 			"root/.shepherd/work/done/release/STATUS.md":
@@ -197,6 +197,7 @@ describe("applyArchive", () => {
 
 		const applied = applyArchive(
 			planArchive([workspace], config(45), new Date(2026, 9, 5)),
+			tree,
 		);
 
 		expect(applied.workspaces[0]?.moves.map(({ status }) => status)).toEqual([
@@ -221,7 +222,7 @@ describe("applyArchive", () => {
 	});
 
 	test("appends to existing journal and index files", () => {
-		const { workspace } = fixture({
+		const { tree, workspace } = fixture({
 			"root/.shepherd/journal.md": "## 2026-09-30\n- New day\n",
 			"root/.shepherd/archive/journal/2026-09.md":
 				"# Journal 2026-09\n\n## 2026-09-01\n- Existing day\n",
@@ -231,7 +232,10 @@ describe("applyArchive", () => {
 				"---\nclosed: 2026-08-01\n---\n# release: New\n",
 		});
 
-		applyArchive(planArchive([workspace], config(), new Date(2026, 9, 5)));
+		applyArchive(
+			planArchive([workspace], config(), new Date(2026, 9, 5)),
+			tree,
+		);
 
 		const journal = readFileSync(
 			join(workspace.state, "archive/journal/2026-09.md"),
@@ -249,7 +253,7 @@ describe("applyArchive", () => {
 	});
 
 	test("uses an approximate file date and links an item without STATUS to its directory", () => {
-		const { workspace } = fixture(
+		const { tree, workspace } = fixture(
 			{
 				"root/.shepherd/work/done/legacy/note.md": "Legacy\n",
 			},
@@ -258,7 +262,10 @@ describe("applyArchive", () => {
 			},
 		);
 
-		applyArchive(planArchive([workspace], config(), new Date(2026, 9, 5)));
+		applyArchive(
+			planArchive([workspace], config(), new Date(2026, 9, 5)),
+			tree,
+		);
 
 		expect(
 			readFileSync(join(workspace.state, "archive/INDEX.md"), "utf8"),
@@ -266,22 +273,25 @@ describe("applyArchive", () => {
 	});
 
 	test("a second apply has no moves", () => {
-		const { workspace } = fixture({
+		const { tree, workspace } = fixture({
 			"root/.shepherd/journal.md": "## 2026-09-30\n- Old\n",
 			"root/.shepherd/work/done/release/STATUS.md":
 				"---\nclosed: 2026-08-01\n---\n# Release\n",
 		});
-		applyArchive(planArchive([workspace], config(), new Date(2026, 9, 5)));
+		applyArchive(
+			planArchive([workspace], config(), new Date(2026, 9, 5)),
+			tree,
+		);
 
 		const second = planArchive([workspace], config(), new Date(2026, 9, 5));
 		expect(second.workspaces[0]?.moves).toEqual([]);
-		expect(renderArchive(applyArchive(second))).toBe(
+		expect(renderArchive(applyArchive(second, tree))).toBe(
 			"\nroot: nothing to archive",
 		);
 	});
 
 	test("rechecks a target before moving", () => {
-		const { workspace } = fixture({
+		const { tree, workspace } = fixture({
 			"root/.shepherd/work/done/release/STATUS.md":
 				"---\nclosed: 2026-08-01\n---\n# Release\n",
 		});
@@ -290,7 +300,7 @@ describe("applyArchive", () => {
 		mkdirSync(target, { recursive: true });
 		writeFileSync(join(target, "STATUS.md"), "Appeared later\n");
 
-		const applied = applyArchive(plan);
+		const applied = applyArchive(plan, tree);
 
 		expect(applied.workspaces[0]?.moves[0]?.status).toBe("skipped");
 		expect(archiveExitCode(applied)).toBe(1);
@@ -304,7 +314,7 @@ describe("applyArchive", () => {
 });
 
 test("renderArchive shows dry-run and applied output", () => {
-	const { workspace } = fixture({
+	const { tree, workspace } = fixture({
 		"root/.shepherd/journal.md": "## 2026-09-30\n- Old\n",
 	});
 	const plan = planArchive([workspace], config(), new Date(2026, 9, 5));
@@ -312,7 +322,7 @@ test("renderArchive shows dry-run and applied output", () => {
 	expect(renderArchive(plan)).toBe(
 		"\nroot: 1 move(s) (dry run)\n  journal: 1 day(s) of 2026-09 -> archive/journal/2026-09.md\n\nDry run. Add --apply to move.",
 	);
-	expect(renderArchive(applyArchive(plan))).toBe(
+	expect(renderArchive(applyArchive(plan, tree))).toBe(
 		"\nroot: 1 move(s)\n  journal: 1 day(s) of 2026-09 -> archive/journal/2026-09.md",
 	);
 });

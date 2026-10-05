@@ -8,10 +8,11 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { type ArchivedItem, rewriteArchiveReferences } from "./archive-rewrite";
 import type { Config } from "./config";
 import { dayOf, daysBetween, monthOf } from "./dates";
 import { closedDate, journalSections, read, summaryLine } from "./text";
-import type { Workspace } from "./tree";
+import type { Workspace, WorkspaceTree } from "./tree";
 
 export type ArchiveMoveStatus = "planned" | "moved" | "skipped";
 
@@ -50,6 +51,7 @@ export type ArchivePlan = {
 	applied: boolean;
 	doneDays: number;
 	workspaces: ArchiveWorkspacePlan[];
+	rewrittenFiles: string[];
 };
 
 function journalMoves(workspace: Workspace, today: Date): JournalArchiveMove[] {
@@ -118,6 +120,7 @@ export function planArchive(
 	return {
 		applied: false,
 		doneDays: config.windows.doneDays,
+		rewrittenFiles: [],
 		workspaces: workspaces.map((workspace) => ({
 			name: workspace.name,
 			state: workspace.state,
@@ -197,7 +200,10 @@ function applyItemMoves(
 }
 
 /** Perform a previously built plan and return it with final move statuses. */
-export function applyArchive(plan: ArchivePlan): ArchivePlan {
+export function applyArchive(
+	plan: ArchivePlan,
+	tree: WorkspaceTree,
+): ArchivePlan {
 	const applied: ArchivePlan = {
 		...plan,
 		applied: true,
@@ -210,6 +216,22 @@ export function applyArchive(plan: ArchivePlan): ArchivePlan {
 		applyJournalMoves(workspace);
 		applyItemMoves(workspace, applied.doneDays);
 	}
+	const moves: ArchivedItem[] = applied.workspaces.flatMap((workspace) =>
+		workspace.moves.flatMap((move) =>
+			move.kind === "item" && move.status === "moved"
+				? [
+						{
+							workspace: workspace.name,
+							slug: move.slug,
+							month: move.month,
+							from: join(workspace.state, move.from),
+							to: join(workspace.state, move.to),
+						},
+					]
+				: [],
+		),
+	);
+	applied.rewrittenFiles = rewriteArchiveReferences(tree.workspaces, moves);
 	return applied;
 }
 
@@ -252,6 +274,20 @@ export function renderArchive(plan: ArchivePlan): string {
 	);
 	if (!plan.applied && moves) {
 		lines.push("", "Dry run. Add --apply to move.");
+	}
+	if (
+		plan.applied &&
+		plan.workspaces.some((workspace) =>
+			workspace.moves.some(
+				(move) => move.kind === "item" && move.status === "moved",
+			),
+		)
+	) {
+		lines.push(
+			"",
+			`Rewrote references in ${plan.rewrittenFiles.length} file(s):`,
+			...plan.rewrittenFiles.map((file) => `  ${file}`),
+		);
 	}
 	return lines.join("\n");
 }
