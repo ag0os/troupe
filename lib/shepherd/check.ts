@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { checkWork } from "./check-work";
 import type { Config } from "./config";
 import { daysBetween, localDate } from "./dates";
 import { frontmatter, mdFiles, proseLines, read, words, wordsIn } from "./text";
@@ -318,6 +319,8 @@ export function checkWorkspace(
 			}
 		}
 	}
+
+	findings.push(...checkWork(workspace, config, today));
 
 	return findings;
 }

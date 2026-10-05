@@ -158,20 +158,31 @@ describe("checkWorkspace", () => {
 		});
 	});
 
-	test("reports current-stale using the configured window", () => {
+	test("reports current-stale only after the configured window", () => {
+		const previousTimezone = process.env.TZ;
+		process.env.TZ = "America/Argentina/Buenos_Aires";
 		const { workspace, tree } = fixture({
 			"root/.shepherd/CURRENT.md": "Updated: 2026-09-27",
 		});
-
-		expect(
-			finding(
-				checkWorkspace(workspace, tree, config(), TODAY),
-				"current-stale",
-			),
-		).toMatchObject({
-			level: "warn",
-			message: "last updated 2026-09-27, 8 days ago",
-		});
+		try {
+			expect(
+				checkWorkspace(workspace, tree, config(), new Date(2026, 9, 4)).some(
+					({ code }) => code === "current-stale",
+				),
+			).toBeFalse();
+			expect(
+				finding(
+					checkWorkspace(workspace, tree, config(), new Date(2026, 9, 5)),
+					"current-stale",
+				),
+			).toMatchObject({
+				level: "warn",
+				message: "last updated 2026-09-27, 8 days ago",
+			});
+		} finally {
+			if (previousTimezone === undefined) delete process.env.TZ;
+			else process.env.TZ = previousTimezone;
+		}
 	});
 
 	test("reports handoff-file", () => {
