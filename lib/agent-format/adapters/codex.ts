@@ -82,8 +82,9 @@ export const codexAdapter: BackendAdapter = {
 
 		const model = inv.model ?? spec.model?.codex;
 		if (model !== undefined) out.push("-m", model);
-		if (spec.effort?.codex !== undefined) {
-			out.push("-c", `model_reasoning_effort=${tomlString(spec.effort.codex)}`);
+		const effort = inv.effort ?? spec.effort?.codex;
+		if (effort !== undefined) {
+			out.push("-c", `model_reasoning_effort=${tomlString(effort)}`);
 		}
 		if (spec.access !== undefined) out.push(...ACCESS_FLAGS[spec.access]);
 

@@ -53,6 +53,10 @@ export interface Invocation {
 	cwd: string;
 	/** Framework `--model` override; otherwise the spec's model for the backend applies. */
 	model?: string;
+	/** Prepared effort override; otherwise the spec's effort for the backend applies. */
+	effort?: string;
+	/** Prepared Claude interactive session name. */
+	sessionName?: string;
 	flags: Readonly<Record<string, string | boolean>>;
 	extraAllowRules?: ExtraAllowRules;
 	mcp: Record<string, ResolvedMcpServer>;

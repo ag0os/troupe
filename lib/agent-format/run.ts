@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { constants as osConstants, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { Subprocess } from "bun";
 import { z } from "zod";
 import { adapterFor } from "./adapters";
@@ -93,7 +93,7 @@ export function createPrepareContext(
 	invocation: ParsedInvocation,
 	options: { signal: AbortSignal; runCommand?: RunCommand },
 ): PrepareContext {
-	return Object.freeze({
+	const context = {
 		flags: Object.freeze({ ...invocation.flags }),
 		args: Object.freeze([...invocation.args]),
 		cwd: invocation.cwd,
@@ -106,7 +106,15 @@ export function createPrepareContext(
 		runCommand:
 			options.runCommand ??
 			createRunCommand({ cwd: invocation.cwd, signal: options.signal }),
+	};
+	Object.defineProperties(context, {
+		passthrough: {
+			value: Object.freeze([...invocation.passthrough]),
+			enumerable: false,
+		},
+		modelFromFlag: { value: invocation.modelFromFlag, enumerable: false },
 	});
+	return Object.freeze(context);
 }
 
 /**
@@ -192,6 +200,10 @@ export interface Prepared {
 	/** Parsed flags with revalidated `flagOverrides` applied. */
 	flags: Readonly<Record<string, string | boolean>>;
 	extraAllowRules?: { rules: string[]; additionalDirectories?: string[] };
+	sessionName?: string;
+	model?: string;
+	effort?: string;
+	codexHome?: string;
 	beforeRunMessages: string[];
 	afterRunMessages: string[];
 }
@@ -230,6 +242,10 @@ const PREPARE_RESULT = z.union([
 				additionalDirectories: stringList.optional(),
 			})
 			.optional(),
+		sessionName: z.string().optional(),
+		model: z.string().optional(),
+		effort: z.string().regex(/^[a-z]+$/).optional(),
+		codexHome: z.string().optional(),
 		cwd: z.string().min(1).optional(),
 		flagOverrides: z
 			.record(z.string(), z.union([z.string(), z.boolean()]))
@@ -310,6 +326,25 @@ export async function runPrepare(
 		beforeRunMessages,
 		afterRunMessages,
 	};
+	if (result.sessionName !== undefined) {
+		if (ctx.backend !== "claude" || ctx.mode !== "interactive") {
+			throw new Error(
+				"sessionName is allowed only for interactive Claude launches",
+			);
+		}
+		prepared.sessionName = result.sessionName;
+	}
+	if (result.model !== undefined) prepared.model = result.model;
+	if (result.effort !== undefined) prepared.effort = result.effort;
+	if (result.codexHome !== undefined) {
+		if (ctx.backend !== "codex") {
+			throw new Error("codexHome is allowed only for Codex launches");
+		}
+		if (!isAbsolute(result.codexHome)) {
+			throw new Error("codexHome must be an absolute path");
+		}
+		prepared.codexHome = result.codexHome;
+	}
 	const rules = result.extraAllowRules;
 	if (
 		rules &&
@@ -497,7 +532,14 @@ async function previewInScope(
 						)
 					: true,
 		};
-		if (invocation.model !== undefined) inv.model = invocation.model;
+		const model = invocation.modelFromFlag
+			? invocation.model
+			: (prepared.model ?? invocation.model);
+		if (model !== undefined) inv.model = model;
+		if (prepared.effort !== undefined) inv.effort = prepared.effort;
+		if (prepared.sessionName !== undefined) {
+			inv.sessionName = prepared.sessionName;
+		}
 		if (prepared.extraAllowRules)
 			inv.extraAllowRules = prepared.extraAllowRules;
 		const plan = adapter.build(
@@ -966,7 +1008,14 @@ async function lifecycle(
 			passthrough: invocation.passthrough,
 			insideGitWorktree: true,
 		};
-		if (invocation.model !== undefined) inv.model = invocation.model;
+		const model = invocation.modelFromFlag
+			? invocation.model
+			: (prepared.model ?? invocation.model);
+		if (model !== undefined) inv.model = model;
+		if (prepared.effort !== undefined) inv.effort = prepared.effort;
+		if (prepared.sessionName !== undefined) {
+			inv.sessionName = prepared.sessionName;
+		}
 		if (prepared.extraAllowRules) {
 			inv.extraAllowRules = prepared.extraAllowRules;
 		}
@@ -1003,7 +1052,14 @@ async function lifecycle(
 			io.stdout(message.endsWith("\n") ? message : `${message}\n`);
 		}
 		await io.flush?.();
-		const env = definedEnv({ ...io.env, ...interpolated.env, ...plan.env });
+		const env = definedEnv({
+			...io.env,
+			...(prepared.codexHome === undefined
+				? {}
+				: { CODEX_HOME: prepared.codexHome }),
+			...interpolated.env,
+			...plan.env,
+		});
 		// Spec Migration drops CLAUDE_PROJECT_DIR: a value inherited from an
 		// enclosing Claude Code session would name the wrong project.
 		if (backend === "claude") delete env.CLAUDE_PROJECT_DIR;

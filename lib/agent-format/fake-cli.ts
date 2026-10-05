@@ -49,6 +49,8 @@ export interface FakeRecord {
 	troupeEnv: Record<string, string>;
 	/** `CLAUDE_PROJECT_DIR` in the child's environment; absent when unset. */
 	claudeProjectDir?: string;
+	/** `CODEX_HOME` in the child's environment; absent when unset. */
+	codexHome?: string;
 }
 
 function fakeSource(name: "claude" | "codex"): string {
@@ -69,6 +71,7 @@ const record = {
 	tmpdirEntries: tmp && existsSync(tmp) ? readdirSync(tmp) : null,
 	troupeEnv: Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith("TROUPE_"))),
 	...(env.CLAUDE_PROJECT_DIR === undefined ? {} : { claudeProjectDir: env.CLAUDE_PROJECT_DIR }),
+	...(env.CODEX_HOME === undefined ? {} : { codexHome: env.CODEX_HOME }),
 };
 const configs = argv.filter((_, i) => argv[i - 1] === "-c");
 const promptConfig = configs.find((value) => value.startsWith("model_instructions_file="));

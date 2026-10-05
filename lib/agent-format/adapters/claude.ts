@@ -59,9 +59,11 @@ export const claudeAdapter: BackendAdapter = {
 
 		const model = inv.model ?? spec.model?.claude;
 		if (model !== undefined) out.push("--model", model);
-		if (spec.effort?.claude !== undefined) {
-			out.push("--effort", spec.effort.claude);
+		const effort = inv.effort ?? spec.effort?.claude;
+		if (effort !== undefined) {
+			out.push("--effort", effort);
 		}
+		if (inv.sessionName !== undefined) out.push("-n", inv.sessionName);
 		if (spec.access !== undefined) {
 			out.push("--permission-mode", PERMISSION_MODES[spec.access]);
 		}

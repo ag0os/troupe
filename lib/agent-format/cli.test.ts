@@ -86,6 +86,7 @@ describe("B-002 declared and framework flags (AC #1)", () => {
 			backend: "claude",
 			mode: "interactive",
 			model: "sonnet",
+			modelFromFlag: false,
 			cwd: root,
 			flags: { quick: false, task: "none", verbose: false },
 			args: [],

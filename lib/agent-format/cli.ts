@@ -22,6 +22,8 @@ export interface ParsedInvocation {
 	mode: AgentMode;
 	/** `--model`, else the spec's model for the selected backend. */
 	model?: string;
+	/** True only when `model` came from the framework's `--model` flag. */
+	modelFromFlag: boolean;
 	/** Absolute effective working directory; `resolveCli` checks it exists. */
 	cwd: string;
 	/** Declared agent flags with defaults applied; booleans default to false. */
@@ -159,6 +161,7 @@ export function parseCli(
 		typeof framework.model === "string"
 			? framework.model
 			: spec.model?.[backend];
+	const modelFromFlag = typeof framework.model === "string";
 
 	const flags: Record<string, string | boolean> = {};
 	for (const [name, flag] of Object.entries(spec.flags)) {
@@ -170,6 +173,7 @@ export function parseCli(
 	const invocation: ParsedInvocation = {
 		backend,
 		mode: framework.print ? "print" : spec.mode,
+		modelFromFlag,
 		cwd,
 		flags,
 		args,
