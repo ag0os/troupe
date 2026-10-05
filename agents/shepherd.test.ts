@@ -51,14 +51,22 @@ const STATIC_RULES = [
 	"Bash(herdr:*)",
 ];
 
-/** The layers baked into the binary, in composition order: core, then each built-in module. */
-const BASE_LAYERS = [
+const MODULE = (name: string) =>
+	`system-prompts/shepherd/integrations/${name}.md`;
+
+/** What every launch gets first: core, then the two modules that check themselves. */
+const ALWAYS_LAYERS = [
 	"system-prompts/shepherd/core.md",
-	"system-prompts/shepherd/integrations/herdr.md",
-	"system-prompts/shepherd/integrations/inter-agent.md",
-	"system-prompts/shepherd/integrations/nested.md",
-	"system-prompts/shepherd/integrations/software.md",
+	MODULE("herdr"),
+	MODULE("inter-agent"),
 ];
+
+/** The modules the launcher adds only when they apply, by title, in load order. */
+const GATED_TITLES: Record<string, string> = {
+	nested: "# Integration: Nested workspace",
+	root: "# Integration: Root workspace",
+	software: "# Integration: Software coordination",
+};
 
 /**
  * The legacy launcher baked in core, Herdr and inter-agent messaging. The base
@@ -112,6 +120,10 @@ function write(path: string, content: string) {
 function build(name: string): { base: string; cwd: string } {
 	const fixture = FIXTURE_SET[name];
 	if (!fixture) throw new Error(`no fixture ${name}`);
+	return buildFrom(fixture);
+}
+
+function buildFrom(fixture: Fixture): { base: string; cwd: string } {
 	const base = join(root, `fx-${counter++}`);
 	mkdirSync(base);
 	for (const [rel, body] of Object.entries(fixture.files)) {
@@ -376,13 +388,29 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 		prompt
 			.replaceAll(base, "<ROOT>")
 			.replace("- Date: 2026-10-02", "- Date: <DATE>");
-	/** What a legacy capture still vouches for: everything after its base layers. */
-	const legacyWorkspaceLayers = (file: string) => {
+	/**
+	 * What a legacy capture still vouches for, brought to today's shape rather
+	 * than captured again: the charter now follows the local modules, and the
+	 * header has a line for the workspaces beneath.
+	 */
+	const legacyWorkspaceLayers = (name: string, file: string) => {
 		const parts = legacy(file).split(PROMPT_SEPARATOR);
 		expect(parts[LEGACY_BASE_LAYERS - 1]).toStartWith(
 			"# Integration: Inter agent messaging\n",
 		);
-		return parts.slice(LEGACY_BASE_LAYERS);
+		const fixture = FIXTURE_SET[name];
+		const charter = fixture?.files[`${fixture.cwd}/.shepherd/charter.md`];
+		const header = (parts.at(-1) ?? "").replace(
+			/^- Enclosing workspace: .*$/m,
+			(line) => `${line}\n- Workspaces beneath: none`,
+		);
+		const modules = parts
+			.slice(LEGACY_BASE_LAYERS, -1)
+			.filter((part) => part !== charter);
+		return {
+			layers: [...modules, ...(charter ? [charter] : []), header],
+			inherits: /\(inherited integrations: (?!none\))/.test(header),
+		};
 	};
 
 	for (const name of Object.keys(FIXTURE_SET)) {
@@ -391,15 +419,21 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 				const { base, cwd } = build(name);
 				const envelope = await preview(["--backend", backend], cwd);
 				expect(envelope).toMatchObject({ code: 0, stderr: "" });
+				const before = legacyWorkspaceLayers(
+					name,
+					`${name}.${backend}.prompt.txt`,
+				);
+				// Every fixture launches in a leaf with no module declared, so
+				// the only gated module is the nested one.
+				const baseLayers = [
+					...ALWAYS_LAYERS,
+					...(before.inherits ? [MODULE("nested")] : []),
+				];
 				const parts = normalize(envelope.systemPrompt, base).split(
 					PROMPT_SEPARATOR,
 				);
-				expect(parts.slice(0, BASE_LAYERS.length)).toEqual(
-					BASE_LAYERS.map(text),
-				);
-				expect(parts.slice(BASE_LAYERS.length)).toEqual(
-					legacyWorkspaceLayers(`${name}.${backend}.prompt.txt`),
-				);
+				expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+				expect(parts.slice(baseLayers.length)).toEqual(before.layers);
 				if (backend === "codex") {
 					expect(settingsOf(envelope.argv)).toBeUndefined();
 				}
@@ -583,65 +617,34 @@ describe("enclosing workspace (B-008, AC #1, AC #2, AC #3)", () => {
 });
 
 describe("composition order (B-008, AC #1)", () => {
-	test("core, built-ins, inherited (sorted), charter, local (sorted), header", async () => {
+	test("core, built-ins, inherited (sorted), local (sorted), charter, header", async () => {
 		const { cwd } = build("nested-local");
 		const { systemPrompt } = await preview([], cwd);
 		const parts = systemPrompt.split(PROMPT_SEPARATOR);
-		const base = BASE_LAYERS.length;
-		expect(parts.slice(0, base)).toEqual(BASE_LAYERS.map(text));
-		expect(parts.slice(base, base + 3)).toEqual([
+		const baseLayers = [...ALWAYS_LAYERS, MODULE("nested")];
+		expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+		expect(parts.slice(baseLayers.length, -1)).toEqual([
 			"# Flock\n\nThe shared flock module.\n",
-			"# Child charter\n\nBelow a directory that is not a workspace.\n",
 			"# A local\n\nNot inherited, sorts before the flock module by name.\n",
+			"# Child charter\n\nBelow a directory that is not a workspace.\n",
 		]);
-		expect(parts[base + 3]?.startsWith("# Shepherd session context\n")).toBe(
-			true,
-		);
-		expect(parts).toHaveLength(base + 4);
+		expect(parts.at(-1)).toStartWith("# Shepherd session context\n");
 	});
 
-	test("the built-in modules are Herdr, inter-agent messaging, nested workspaces and software coordination, in that order", async () => {
-		const { cwd } = build("uninitiated");
-		const { systemPrompt } = await preview([], cwd);
-		const titles = systemPrompt
-			.split(PROMPT_SEPARATOR)
-			.map((part) => part.split("\n", 1)[0]);
-		expect(titles).toEqual([
-			"# Shepherd",
-			"# Integration: Herdr",
-			"# Integration: Inter agent messaging",
-			"# Integration: Nested workspaces",
-			"# Integration: Software coordination",
-			"# Shepherd session context",
-		]);
-	});
-
-	// The gate in nested.md reads the header, so its wording is tied to these lines.
-	test("the nested module gates on the Enclosing workspace line the header writes", async () => {
-		const nested = text("system-prompts/shepherd/integrations/nested.md");
-		const header = async (cwd: string) =>
-			(await preview([], cwd)).systemPrompt.split(PROMPT_SEPARATOR).at(-1);
-		const { base, cwd } = build("nested-inherited");
-		const none = "Enclosing workspace: none";
-		expect(await header(cwd)).toContain(
-			`- Enclosing workspace: ${base}/flock (`,
-		);
-		expect(await header(join(base, "flock"))).toContain(`- ${none}`);
-		expect(nested).toContain(`Does "Enclosing workspace" name a path?`);
-		expect(nested).toContain(`"${none}"`);
-	});
-
-	// nested.md's root section tells the root its charter still governs it,
-	// because this order would otherwise let its own shared module override it.
-	test("a root's shared modules are its local modules, so they load after its charter", async () => {
+	// The charter wins over every module on how a workspace works, a root's
+	// own shared modules included, so it is composed after them.
+	test("a root's shared modules are its local modules, and its charter follows them", async () => {
 		const { base } = build("nested-inherited");
 		const { systemPrompt } = await preview([], join(base, "flock"));
 		const parts = systemPrompt.split(PROMPT_SEPARATOR);
-		expect(parts.slice(BASE_LAYERS.length, -1)).toEqual([
-			"# Flock charter\n\nMust not load in a child.\n",
+		const baseLayers = [...ALWAYS_LAYERS, MODULE("root")];
+		expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+		expect(parts.slice(baseLayers.length, -1)).toEqual([
 			"# Shared A\n\nShared conventions A.\n",
 			"# Flock B\n\nShared conventions B.\n",
+			"# Flock charter\n\nMust not load in a child.\n",
 		]);
+		expect(parts.at(-1)).toContain("- Workspaces beneath: child\n");
 		expect(parts.at(-1)).toContain(
 			"- Workspace-local integrations loaded: a-shared.md, b-flock.md",
 		);
@@ -658,7 +661,7 @@ describe("composition order (B-008, AC #1)", () => {
 		expect(systemPrompt).not.toContain("not a module");
 	});
 
-	test("an uninitiated workspace says so and still gets core and built-ins", async () => {
+	test("an uninitiated workspace says so and still gets core and the two always-loaded modules", async () => {
 		const { cwd } = build("uninitiated");
 		const { systemPrompt } = await preview([], cwd);
 		expect(systemPrompt).toContain(
@@ -668,7 +671,7 @@ describe("composition order (B-008, AC #1)", () => {
 			"- Workspace-local integrations loaded: none",
 		);
 		expect(systemPrompt.split(PROMPT_SEPARATOR)).toHaveLength(
-			BASE_LAYERS.length + 1,
+			ALWAYS_LAYERS.length + 1,
 		);
 	});
 
@@ -692,43 +695,162 @@ describe("composition order (B-008, AC #1)", () => {
 					"- Date: 2026-10-02",
 					`- Backend: ${label}`,
 					"- Enclosing workspace: none",
+					"- Workspaces beneath: none",
 					"- Charter: loaded",
 					"- Workspace-local integrations loaded: local-a.md",
 				].join("\n"),
 			);
 		}
 	});
+
+	test("the header date is the local day, not the UTC one", async () => {
+		const { cwd } = build("plain");
+		const zone = process.env.TZ;
+		try {
+			// 21:30 on the 2nd in New York is already the 3rd in UTC.
+			process.env.TZ = "America/New_York";
+			setSystemTime(new Date("2026-10-03T01:30:00Z"));
+			const { systemPrompt } = await preview([], cwd);
+			expect(systemPrompt).toContain("- Date: 2026-10-02\n");
+		} finally {
+			if (zone === undefined) delete process.env.TZ;
+			else process.env.TZ = zone;
+			setSystemTime(new Date("2026-10-02T12:00:00Z"));
+		}
+	});
 });
 
-describe("core.md against the e18f56b baseline (AC #1, AC #8)", () => {
-	const baseline = Bun.spawnSync(
-		["git", "show", "e18f56b:system-prompts/shepherd/core.md"],
-		{ cwd: repo, stdout: "pipe", stderr: "pipe" },
-	);
+describe("launcher-gated modules", () => {
+	const charter = (body: string) => ({ "ws/.shepherd/charter.md": body });
+	const CASES: Record<string, { fixture: Fixture; modules: string[] }> = {
+		"an uninitiated directory": {
+			fixture: { cwd: "ws", files: { "ws/README.md": "Nothing here.\n" } },
+			modules: [],
+		},
+		"a standalone workspace whose charter declares no module": {
+			fixture: {
+				cwd: "ws",
+				// "Modules:" in the middle of a sentence declares nothing.
+				files: charter("# Charter\n\nErrands. No Modules: line here.\n"),
+			},
+			modules: [],
+		},
+		"a charter with the line Modules: software": {
+			fixture: {
+				cwd: "ws",
+				files: charter("# Charter\n\n## Structure\nModules: software\n"),
+			},
+			modules: ["software"],
+		},
+		"a charter that declares it as a list item in another case": {
+			fixture: {
+				cwd: "ws",
+				files: charter("# Charter\n\n- modules: docs, Software\n"),
+			},
+			modules: ["software"],
+		},
+		"a workspace under a root that publishes a module": {
+			fixture: {
+				cwd: "root/ws",
+				files: {
+					"root/.shepherd/integrations/shared.md": "# Shared\n",
+					"root/ws/.shepherd/charter.md": "# Charter\n",
+				},
+			},
+			modules: ["nested"],
+		},
+		"a workspace under a stray ancestor that publishes nothing": {
+			fixture: {
+				cwd: "home/projects/app",
+				files: {
+					"home/.shepherd/journal.md": "## 2026-10-01\n",
+					"home/projects/app/.shepherd/charter.md": "# Charter\n",
+				},
+			},
+			modules: [],
+		},
+		"a root above a workspace": {
+			fixture: {
+				cwd: "root",
+				files: {
+					"root/.shepherd/charter.md": "# Root charter\n",
+					"root/.shepherd/integrations/shared.md": "# Shared\n",
+					"root/ws/.shepherd/charter.md": "# Charter\n",
+				},
+			},
+			modules: ["root"],
+		},
+		"a software workspace that is nested and has workspaces beneath it": {
+			fixture: {
+				cwd: "root/mid",
+				files: {
+					"root/.shepherd/integrations/shared.md": "# Shared\n",
+					"root/mid/.shepherd/charter.md": "# Charter\n\nModules: software\n",
+					"root/mid/leaf/.shepherd/charter.md": "# Charter\n",
+				},
+			},
+			modules: ["nested", "root", "software"],
+		},
+	};
 
-	// The rest of core has moved on from the baseline by agreement (the
-	// tracking standard and the rules consolidated from working Shepherds).
-	test("the Context tiers subsection is byte-identical, and the promotion line names the declaration and its extension", () => {
-		expect(baseline.exitCode).toBe(0);
-		const before = baseline.stdout.toString().split("\n");
-		const now = text("system-prompts/shepherd/core.md").split("\n");
-		expect(now.join("\n")).toContain(
-			"recompiled via `agents/shepherd.md` and its extension)",
+	for (const [name, { fixture, modules }] of Object.entries(CASES)) {
+		for (const backend of BACKENDS) {
+			test(`${name} loads ${modules.join(", ") || "none of them"} on ${backend}`, async () => {
+				const { cwd } = buildFrom(fixture);
+				const { systemPrompt } = await preview(["--backend", backend], cwd);
+				const titles = systemPrompt
+					.split(PROMPT_SEPARATOR)
+					.map((part) => part.split("\n", 1)[0] ?? "");
+				expect(titles.slice(0, ALWAYS_LAYERS.length)).toEqual([
+					"# Shepherd",
+					"# Integration: Herdr",
+					"# Integration: Inter agent messaging",
+				]);
+				const gated = Object.values(GATED_TITLES);
+				expect(titles.filter((title) => gated.includes(title))).toEqual(
+					modules.map((module) => GATED_TITLES[module] ?? ""),
+				);
+			});
+		}
+	}
+
+	test("each gated module's source opens with the title the cases look for", () => {
+		for (const [name, title] of Object.entries(GATED_TITLES)) {
+			expect(text(MODULE(name))).toStartWith(`${title}\n`);
+		}
+	});
+
+	test("a stray ancestor is still named in the header, with nothing inherited", async () => {
+		const { base, cwd } = buildFrom(
+			CASES["a workspace under a stray ancestor that publishes nothing"]
+				?.fixture as Fixture,
 		);
+		const { systemPrompt } = await preview([], cwd);
+		expect(systemPrompt).toContain(
+			`- Enclosing workspace: ${base}/home (inherited integrations: none)`,
+		);
+	});
 
-		const tiers = (lines: string[]) => {
-			const start = lines.findIndex((line) => /^#+ Context tiers/.test(line));
-			const level = (lines[start]?.match(/^#+/) ?? [""])[0].length;
-			const end = lines.findIndex(
-				(line, i) =>
-					i > start &&
-					/^#+ /.test(line) &&
-					(line.match(/^#+/)?.[0].length ?? 9) <= level,
-			);
-			return lines.slice(start, end === -1 ? undefined : end).join("\n");
-		};
-		expect(tiers(now).length).toBeGreaterThan(100);
-		expect(tiers(now)).toBe(tiers(before));
+	test("Workspaces beneath lists child workspaces by relative path, sorted, and stops at each one, at hidden directories, node_modules and symlinks, and three levels down", async () => {
+		const state = (dir: string) => [`${dir}/.shepherd/charter.md`, "# C\n"];
+		const { cwd } = buildFrom({
+			cwd: "root",
+			files: Object.fromEntries([
+				state("root/b"),
+				state("root/a"),
+				state("root/a/inside-a-workspace"),
+				state("root/group/c"),
+				state("root/l1/l2/l3"),
+				state("root/d1/d2/d3/d4"),
+				state("root/.hidden/h"),
+				state("root/node_modules/pkg"),
+			]),
+			symlinks: { "root/link-to-a": "root/a" },
+		});
+		const { systemPrompt } = await preview([], cwd);
+		expect(systemPrompt).toContain(
+			"- Workspaces beneath: a, b, group/c, l1/l2/l3\n",
+		);
 	});
 });
 

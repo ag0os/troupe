@@ -7,16 +7,21 @@
  *
  * The session prompt is composed from layers:
  *   1. core.md                — identity, workspace protocol, init, self-evolution
- *   2. integrations/*.md      — built-in modules (Herdr, inter-agent messaging,
- *                               nested workspaces, software coordination), each
- *                               self-gated by an availability check
+ *   2. integrations/*.md      — built-in modules. Herdr and inter-agent messaging
+ *                               always load and check their own availability. The
+ *                               launcher adds the rest only when they apply: nested
+ *                               under an enclosing workspace that publishes modules,
+ *                               root above child workspaces, software when the
+ *                               charter declares it
  *   3. inherited modules      — the integrations/*.md of the nearest enclosing
  *                               workspace (a parent directory with its own
  *                               .shepherd/), shared by every workspace beneath it
- *   4. .shepherd/charter.md   — the workspace's agreed mission and way of working,
- *                               written during the init conversation
- *   5. .shepherd/integrations/*.md — workspace-local modules appended at launch,
+ *   4. .shepherd/integrations/*.md — workspace-local modules appended at launch,
  *                               so a directory can extend Shepherd without a recompile
+ *   5. .shepherd/charter.md   — the workspace's agreed mission and way of working,
+ *                               written during the init conversation. It comes last
+ *                               because it wins over every module on how the
+ *                               workspace works
  *
  * The declaration is `shepherd.md`; this extension's `prepare` does the
  * composition at launch (D-016). The built-in layers are text imports rather
@@ -37,7 +42,13 @@
  *   shepherd -- --resume <id>         # backend flags follow `--`
  */
 
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+	type Dirent,
+	existsSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
 import coreDoc from "../system-prompts/shepherd/core.md" with { type: "text" };
@@ -50,14 +61,40 @@ import interAgentDoc from "../system-prompts/shepherd/integrations/inter-agent.m
 import nestedDoc from "../system-prompts/shepherd/integrations/nested.md" with {
 	type: "text",
 };
+import rootDoc from "../system-prompts/shepherd/integrations/root.md" with {
+	type: "text",
+};
 import softwareDoc from "../system-prompts/shepherd/integrations/software.md" with {
 	type: "text",
 };
 
 const STATE_DIR = ".shepherd";
 
-function builtInIntegrations(): string[] {
-	return [herdrDoc, interAgentDoc, nestedDoc, softwareDoc];
+/**
+ * Child workspaces are looked for this many levels below the launch
+ * directory. The walk runs on every launch, and a launch in a home directory
+ * or a large repository must stay fast.
+ */
+const CHILD_DEPTH = 3;
+
+/**
+ * Herdr and inter-agent messaging check their own availability at run time.
+ * The others depend on facts the launcher already has, so it leaves out the
+ * ones that cannot apply instead of spending prompt on a module that would
+ * only say to skip it.
+ */
+function builtInIntegrations(applies: {
+	nested: boolean;
+	root: boolean;
+	software: boolean;
+}): string[] {
+	return [
+		herdrDoc,
+		interAgentDoc,
+		...(applies.nested ? [nestedDoc] : []),
+		...(applies.root ? [rootDoc] : []),
+		...(applies.software ? [softwareDoc] : []),
+	];
 }
 
 /**
@@ -124,6 +161,50 @@ function loadCharter(cwd: string): string | undefined {
 	return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
 
+/**
+ * The optional built-in modules a charter asks for on a line of its own,
+ * `Modules: software`. Declared, not inferred: nothing on disk says what a
+ * workspace's work is.
+ */
+function declaredModules(charter: string | undefined): Set<string> {
+	const line = charter?.match(/^[ \t]*(?:[-*][ \t]+)?\**Modules:\**(.*)$/im);
+	return new Set(line?.[1]?.toLowerCase().match(/[a-z][a-z-]*/g) ?? []);
+}
+
+/**
+ * Workspaces beneath the launch directory, as paths relative to it. A
+ * directory with its own .shepherd/ is one, and the walk does not look
+ * inside it: what sits below belongs to that workspace. Hidden directories,
+ * node_modules and symlinks are not entered.
+ */
+function findChildWorkspaces(cwd: string): string[] {
+	const found: string[] = [];
+	const walk = (dir: string, prefix: string, depth: number) => {
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+			const path = join(dir, entry.name);
+			const name = `${prefix}${entry.name}`;
+			if (existsSync(join(path, STATE_DIR))) found.push(name);
+			else if (depth < CHILD_DEPTH) walk(path, `${name}/`, depth + 1);
+		}
+	};
+	walk(cwd, "", 1);
+	return found.sort();
+}
+
+/** The date where the user is; `toISOString` would give the UTC day. */
+function localDate(now: Date): string {
+	const pad = (part: number) => String(part).padStart(2, "0");
+	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 function composeFragments(
 	cwd: string,
 	backend: string,
@@ -137,16 +218,18 @@ function composeFragments(
 	const locals = loadIntegrations(cwd).filter(
 		(m) => !inheritedPaths.has(m.path),
 	);
+	const children = findChildWorkspaces(cwd);
 	const header = [
 		"# Shepherd session context",
 		"",
 		`- Launch directory: ${cwd}`,
 		`- State directory: ${join(cwd, STATE_DIR)}`,
-		`- Date: ${new Date().toISOString().slice(0, 10)}`,
+		`- Date: ${localDate(new Date())}`,
 		`- Backend: ${backend}`,
 		enclosing
 			? `- Enclosing workspace: ${enclosing} (inherited integrations: ${inherited.map((m) => m.name).join(", ") || "none"})`
 			: "- Enclosing workspace: none",
+		`- Workspaces beneath: ${children.join(", ") || "none"}`,
 		charter
 			? "- Charter: loaded"
 			: "- Charter: none, this workspace is uninitiated",
@@ -157,10 +240,15 @@ function composeFragments(
 
 	return [
 		coreDoc,
-		...builtInIntegrations(),
+		...builtInIntegrations({
+			// An ancestor that publishes no module shares no layer to live under.
+			nested: inherited.length > 0,
+			root: children.length > 0,
+			software: declaredModules(charter).has("software"),
+		}),
 		...inherited.map((m) => m.body),
-		...(charter ? [charter] : []),
 		...locals.map((l) => l.body),
+		...(charter ? [charter] : []),
 		header,
 	];
 }

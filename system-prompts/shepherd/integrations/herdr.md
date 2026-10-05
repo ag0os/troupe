@@ -43,7 +43,7 @@ Read and follow that output; it supersedes anything remembered from training. Fo
 
 If `herdr --skill` disagrees with one of these, the CLI wins.
 
-- A pane that was just created is not ready. Wait for its shell prompt before `herdr agent start`; started too early it fails as busy, sometimes silently. Confirm the agent is there before you prompt it.
-- `--timeout` works only together with `--wait`. For long work, send the prompt without waiting and run the wait on its own in the background.
+- A pane that was just created is not ready. Wait for its shell prompt before `herdr agent start`; started too early it fails as busy, sometimes silently.
+- On `agent prompt`, `--timeout` is accepted only together with `--wait`. For long work, send the prompt without `--wait` and run `herdr agent wait` on its own in the background.
 - Text after the prompt arrow in an agent's pane can be the harness's suggested next prompt (ghost text). It is not pending input: do not report it as typed, and do not submit it.
 - Pane IDs do not survive a reboot. Resume a session by its session name.
