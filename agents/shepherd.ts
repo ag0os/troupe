@@ -46,6 +46,10 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
+import {
+	codexDefaults,
+	passthroughModelToken,
+} from "../lib/shepherd/codex-defaults";
 import { composeFragments } from "../lib/shepherd/compose";
 import { loadConfig } from "../lib/shepherd/config";
 import { sessionNameFor } from "../lib/shepherd/session-name";
@@ -158,11 +162,40 @@ export function prepare(
 			exit: { message: `${naming.error}\n`, code: 2, stream: "stderr" },
 		};
 	}
+	const passthrough = ctx.passthrough ?? [];
+	const passthroughModel = passthroughModelToken(passthrough);
+	if (ctx.modelFromFlag && passthroughModel) {
+		return {
+			exit: {
+				message: `model given twice: --model and ${passthroughModel} after --\n`,
+				code: 2,
+				stream: "stderr",
+			},
+		};
+	}
+	const defaults =
+		ctx.backend === "codex"
+			? codexDefaults(
+					config,
+					toolEnv,
+					passthrough,
+					naming.kind,
+					ctx.modelFromFlag === true,
+				)
+			: undefined;
+	if (defaults?.error) {
+		return {
+			exit: { message: `${defaults.error}\n`, code: 2, stream: "stderr" },
+		};
+	}
 	const systemPromptFragments = composeFragments(
 		ctx.cwd,
 		BACKEND_LABELS[ctx.backend],
 		enclosing,
-		naming.headerLines,
+		[
+			...naming.headerLines,
+			...(defaults?.headerLine ? [defaults.headerLine] : []),
+		],
 	);
 
 	if (ctx.backend !== "claude" || !enclosing) {
@@ -170,6 +203,9 @@ export function prepare(
 			systemPromptFragments,
 			initialPrompt: prompt,
 			...(naming.sessionName ? { sessionName: naming.sessionName } : {}),
+			...(defaults?.codexHome ? { codexHome: defaults.codexHome } : {}),
+			...(defaults?.model !== undefined ? { model: defaults.model } : {}),
+			...(defaults?.effort !== undefined ? { effort: defaults.effort } : {}),
 		};
 	}
 	return {

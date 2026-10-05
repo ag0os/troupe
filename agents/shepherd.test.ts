@@ -250,6 +250,7 @@ function compact(envelope: Envelope, backend: Backend, base: string): string {
 	});
 	return envelope.text
 		.replace(/^- Session name:.*\n/m, "")
+		.replace(/^- Codex home:.*\n/m, "")
 		.replace(/--- Argv ---\n.*\n$/, () =>
 			["--- Argv ---", JSON.stringify(argv), ""].join("\n"),
 		)
@@ -411,7 +412,8 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 		prompt
 			.replaceAll(base, "<ROOT>")
 			.replace("- Date: 2026-10-02", "- Date: <DATE>")
-			.replace(/^- Session name:.*\n/m, "");
+			.replace(/^- Session name:.*\n/m, "")
+			.replace(/^- Codex home:.*\n/m, "");
 	/**
 	 * What a legacy capture still vouches for, brought to today's shape rather
 	 * than captured again: the charter now follows the local modules, and the
@@ -723,6 +725,9 @@ describe("composition order (B-008, AC #1)", () => {
 					backend === "claude"
 						? "- Session name: ws-1002 (set by the launcher)"
 						: "- Session name: not set (Codex takes no name at launch; suggested: ws-1002, through its rename dialog)",
+					...(backend === "codex"
+						? [`- Codex home: ${join(root, "home", ".codex")} (Codex default)`]
+						: []),
 					"- Enclosing workspace: none",
 					"- Workspaces beneath: none within 3 levels",
 					"- Gated modules loaded: none",
@@ -919,6 +924,176 @@ describe("print mode (B-008, AC #3)", () => {
 });
 
 describe("framework flags and passthrough (D-028, AC #6)", () => {
+	test("Codex config supplies home, model, effort, and the home header", async () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const codexHome = join(home, ".codex-work");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(codexHome, { recursive: true });
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(
+			configFile,
+			JSON.stringify({
+				codex: { home: codexHome, model: "gpt-5.6-sol", effort: "high" },
+			}),
+		);
+		try {
+			const envelope = await preview(["--backend", "codex"], cwd);
+			expect(envelope.systemPrompt).toContain(
+				`- Codex home: ${codexHome} (config)`,
+			);
+			expect(envelope.argv[envelope.argv.indexOf("-m") + 1]).toBe(
+				"gpt-5.6-sol",
+			);
+			expect(envelope.argv).toContain('model_reasoning_effort="high"');
+
+			const run = await execute(["--backend", "codex", "hello"], cwd);
+			expect(run.code).toBe(0);
+			expect(run.records[0]?.codexHome).toBe(codexHome);
+		} finally {
+			rmSync(configFile, { force: true });
+			rmSync(codexHome, { recursive: true, force: true });
+		}
+	});
+
+	test("explicit Codex launch values override config defaults", async () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const environmentHome = join(home, ".codex-environment");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(
+			configFile,
+			JSON.stringify({
+				codex: {
+					home: join(home, "missing-configured-home"),
+					model: "configured",
+					effort: "high",
+				},
+			}),
+		);
+		try {
+			const result = shepherd.prepare(
+				context("codex", cwd, {
+					passthrough: ["-m", "launch", "-c", "model_reasoning_effort=low"],
+				}),
+				{
+					...testToolEnv(context("codex", cwd)),
+					env: { CODEX_HOME: environmentHome },
+				},
+			);
+			expect(result).toMatchObject({ codexHome: environmentHome });
+			expect(result).not.toHaveProperty("model");
+			expect(result).not.toHaveProperty("effort");
+			expect(result).toHaveProperty("systemPromptFragments");
+			expect(JSON.stringify(result)).toContain(
+				`- Codex home: ${environmentHome} (environment)`,
+			);
+		} finally {
+			rmSync(configFile, { force: true });
+		}
+	});
+
+	test("Codex homeFile selects the first non-empty path", () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const codexHome = join(home, ".codex-file");
+		const homeFile = join(home, ".codex-active");
+		mkdirSync(codexHome, { recursive: true });
+		writeFileSync(homeFile, "\n~/.codex-file\nignored\n");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(configFile, JSON.stringify({ codex: { homeFile } }));
+		try {
+			expect(extension.prepare(context("codex", cwd))).toMatchObject({
+				codexHome,
+			});
+		} finally {
+			rmSync(configFile, { force: true });
+			rmSync(homeFile, { force: true });
+			rmSync(codexHome, { recursive: true, force: true });
+		}
+	});
+
+	test("resumes and forks keep Codex home and withhold configured defaults", async () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const codexHome = join(home, ".codex-history");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(codexHome, { recursive: true });
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(
+			configFile,
+			JSON.stringify({
+				codex: { home: codexHome, model: "configured", effort: "high" },
+			}),
+		);
+		try {
+			for (const passthrough of [["resume"], ["fork"]]) {
+				const result = extension.prepare(
+					context("codex", cwd, { passthrough }),
+				);
+				expect(result).toMatchObject({ codexHome });
+				expect(result).not.toHaveProperty("model");
+				expect(result).not.toHaveProperty("effort");
+			}
+			const explicit = extension.prepare(
+				context("codex", cwd, {
+					passthrough: ["resume"],
+					modelFromFlag: true,
+				}),
+			);
+			expect(explicit).not.toHaveProperty("model");
+			const envelope = await preview(
+				["--backend", "codex", "--model", "launch", "--", "resume"],
+				cwd,
+			);
+			expect(envelope.argv[envelope.argv.indexOf("-m") + 1]).toBe("launch");
+			expect(envelope.argv).not.toContain('model_reasoning_effort="high"');
+		} finally {
+			rmSync(configFile, { force: true });
+			rmSync(codexHome, { recursive: true, force: true });
+		}
+	});
+
+	test("a typed model plus a passthrough model exits 2 on both backends", async () => {
+		const { cwd } = build("plain");
+		for (const backend of BACKENDS) {
+			for (const tail of [["-m", "tail"], ["--model=tail"]]) {
+				const run = await execute(
+					["--backend", backend, "--model", "typed", "--", ...tail],
+					cwd,
+				);
+				expect(run.code).toBe(2);
+				expect(run.stderr).toContain("model given twice: --model and");
+				expect(run.records).toEqual([]);
+			}
+		}
+	});
+
+	test("a missing configured home fails only a Codex launch", () => {
+		const { cwd } = build("plain");
+		const home = join(root, "home");
+		const missing = join(home, "missing-codex-home");
+		const configFile = join(home, ".config", "shepherd", "config.json");
+		mkdirSync(dirname(configFile), { recursive: true });
+		writeFileSync(configFile, JSON.stringify({ codex: { home: missing } }));
+		try {
+			expect(extension.prepare(context("claude", cwd))).not.toHaveProperty(
+				"exit",
+			);
+			expect(extension.prepare(context("codex", cwd))).toEqual({
+				exit: {
+					message: `${configFile}: Codex home is not an existing directory: ${missing}\n`,
+					code: 2,
+					stream: "stderr",
+				},
+			});
+		} finally {
+			rmSync(configFile, { force: true });
+		}
+	});
+
 	test("a default interactive Claude launch returns and forwards its name", async () => {
 		const { cwd } = build("plain");
 		const prepared = extension.prepare(context("claude", cwd));
