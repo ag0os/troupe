@@ -216,6 +216,17 @@ describe("extension imports", () => {
 		expect(agent.extension?.exports).toEqual(["prepare"]);
 	});
 
+	test("accepts a value import from lib/shepherd/", async () => {
+		write("lib/shepherd/helper.ts", "export const HELP = 1;\n");
+		write("agents/a.md", `${header}---\nBody\n`);
+		write(
+			"agents/a.ts",
+			'import { HELP } from "../lib/shepherd/helper";\nexport function prepare() { return { initialPrompt: String(HELP) }; }\n',
+		);
+		const agent = await loadAgentDefinition(root, "agents/a.md");
+		expect(agent.extension?.exports).toEqual(["prepare"]);
+	});
+
 	test("a framework-looking path that resolves elsewhere is rejected", async () => {
 		write("lib/other/helper.ts", "export const HELP = 1;\n");
 		write("agents/a.md", `${header}---\n`);
@@ -230,6 +241,9 @@ describe("extension imports", () => {
 			field: "top-level",
 		});
 		expect(issue?.message).toContain('"../lib/other/helper"');
+		expect(issue?.message).toContain(
+			"only packages, builtins, lib/agent-format and lib/shepherd may be imported",
+		);
 	});
 
 	test.each([

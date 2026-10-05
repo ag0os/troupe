@@ -2,7 +2,7 @@
 	"$schema": "https://biomejs.dev/schemas/2.1.4/schema.json",
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["./agents/**/*", "!**/*.md"]
+		"includes": ["./agents/**/*", "./lib/shepherd/**/*", "!**/*.md"]
 	},
 	"vcs": {
 		"enabled": false,

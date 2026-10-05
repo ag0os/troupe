@@ -52,8 +52,8 @@ import { toBinaryName } from "./binary-name";
 /** Roots an include's realpath must stay under (D-027). */
 export const INCLUDE_ROOTS = ["agents", "system-prompts"] as const;
 
-/** Directory whose modules extensions may import by relative path. */
-export const FRAMEWORK_DIR = "lib/agent-format";
+/** Directories whose modules extensions may import by relative path. */
+export const FRAMEWORK_DIRS = ["lib/agent-format", "lib/shepherd"] as const;
 
 /** Directory whose files extensions may import as text. */
 export const TEXT_IMPORT_DIR = "system-prompts";
@@ -77,7 +77,7 @@ export interface ExtensionInspection {
 }
 
 export interface InspectOptions {
-	/** True when a relative specifier resolves under `lib/agent-format/`. */
+	/** True when a relative specifier resolves under an allowed library. */
 	isFrameworkImport?: (specifier: string) => boolean;
 	/**
 	 * Why a well-formed default text import of `specifier` is not allowed, or
@@ -132,17 +132,20 @@ export async function loadAgentDefinition(
 	// Bun resolves an extension's imports from its real location, so the
 	// checks do too; a symlinked extension is judged where it really lives.
 	const importBase = dirname(realpathSync(sibling));
-	const frameworkDir = join(repoRoot, FRAMEWORK_DIR);
+	const frameworkDirs = FRAMEWORK_DIRS.map((dir) => join(repoRoot, dir))
+		.filter((dir) => existsSync(dir))
+		.map((dir) => realpathSync(dir));
 	const inspection = inspectExtension(
 		siblingDisplay,
 		await readFile(sibling, "utf8"),
 		{
 			isFrameworkImport: (specifier) =>
-				existsSync(frameworkDir) &&
 				moduleCandidates(resolve(importBase, specifier)).some(
 					(candidate) =>
 						existsSync(candidate) &&
-						isInside(realpathSync(frameworkDir), realpathSync(candidate)),
+						frameworkDirs.some((dir) =>
+							isInside(dir, realpathSync(candidate)),
+						),
 				),
 			textImportProblem: (specifier) =>
 				textImportProblem(repoRoot, importBase, specifier),
@@ -557,7 +560,7 @@ function importProblem(
 	if (isBareSpecifier(specifier) || rules.isFrameworkImport(specifier)) {
 		return undefined;
 	}
-	return `value import from "${specifier}" (only packages, builtins and ${FRAMEWORK_DIR} may be imported)`;
+	return `value import from "${specifier}" (only packages, builtins, ${FRAMEWORK_DIRS[0]} and ${FRAMEWORK_DIRS[1]} may be imported)`;
 }
 
 /**
