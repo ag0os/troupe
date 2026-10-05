@@ -38,3 +38,12 @@ Read and follow that output; it supersedes anything remembered from training. Fo
 - Before running a command or prompting an agent in a pane, check that pane's state first. Input sent to a busy or unready pane arrives as garbage to whatever is running there, and an agent already working needs no second prompt.
 - If a wait returns `blocked`, inspect the agent's state and screen before deciding what to send. `unknown` does not prove completion.
 - When a long agent response cannot be recovered from scrollback (alternate screen), ask that agent to write its full answer to a file and read the file. Use this as a fallback, not in the initial prompt.
+
+## Traps the CLI does not warn about
+
+If `herdr --skill` disagrees with one of these, the CLI wins.
+
+- A pane that was just created is not ready. Wait for its shell prompt before `herdr agent start`; started too early it fails as busy, sometimes silently. Confirm the agent is there before you prompt it.
+- `--timeout` works only together with `--wait`. For long work, send the prompt without waiting and run the wait on its own in the background.
+- Text after the prompt arrow in an agent's pane can be the harness's suggested next prompt (ghost text). It is not pending input: do not report it as typed, and do not submit it.
+- Pane IDs do not survive a reboot. Resume a session by its session name.

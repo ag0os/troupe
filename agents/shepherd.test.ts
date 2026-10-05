@@ -51,12 +51,21 @@ const STATIC_RULES = [
 	"Bash(herdr:*)",
 ];
 
+/** The layers baked into the binary, in composition order: core, then each built-in module. */
+const BASE_LAYERS = [
+	"system-prompts/shepherd/core.md",
+	"system-prompts/shepherd/integrations/herdr.md",
+	"system-prompts/shepherd/integrations/inter-agent.md",
+	"system-prompts/shepherd/integrations/nested.md",
+	"system-prompts/shepherd/integrations/software.md",
+];
+
 /**
- * The one line AC #8 changes in core.md. The legacy fixtures were captured
- * before it changed, so the comparison applies it to them and nothing else.
+ * The legacy launcher baked in core, Herdr and inter-agent messaging. The base
+ * text has changed since its fixtures were captured, so they vouch only for
+ * what follows those three layers: the workspace layers and the header.
  */
-const AC8_OLD = "recompiled via `agents/shepherd.ts`)";
-const AC8_NEW = "recompiled via `agents/shepherd.md` and its extension)";
+const LEGACY_BASE_LAYERS = 3;
 
 // Runs launch the fake CLIs; a loaded machine needs more than the 5s default.
 setDefaultTimeout(60_000);
@@ -367,28 +376,35 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 		prompt
 			.replaceAll(base, "<ROOT>")
 			.replace("- Date: 2026-10-02", "- Date: <DATE>");
+	/** What a legacy capture still vouches for: everything after its base layers. */
+	const legacyWorkspaceLayers = (file: string) => {
+		const parts = legacy(file).split(PROMPT_SEPARATOR);
+		expect(parts[LEGACY_BASE_LAYERS - 1]).toStartWith(
+			"# Integration: Inter agent messaging\n",
+		);
+		return parts.slice(LEGACY_BASE_LAYERS);
+	};
 
 	for (const name of Object.keys(FIXTURE_SET)) {
-		test(`${name}: the Claude prompt differs from the legacy one only at the AC #8 line`, async () => {
-			const { base, cwd } = build(name);
-			const envelope = await preview(["--backend", "claude"], cwd);
-			expect(envelope).toMatchObject({ code: 0, stderr: "" });
-			const before = legacy(`${name}.claude.prompt.txt`);
-			expect(before).toContain(AC8_OLD);
-			expect(normalize(envelope.systemPrompt, base)).toBe(
-				before.replace(AC8_OLD, AC8_NEW),
-			);
-		});
-
-		test(`${name}: the Codex prompt differs from the legacy one only at the AC #8 line`, async () => {
-			const { base, cwd } = build(name);
-			const envelope = await preview(["--backend", "codex"], cwd);
-			expect(envelope).toMatchObject({ code: 0, stderr: "" });
-			expect(normalize(envelope.systemPrompt, base)).toBe(
-				legacy(`${name}.codex.prompt.txt`).replace(AC8_OLD, AC8_NEW),
-			);
-			expect(settingsOf(envelope.argv)).toBeUndefined();
-		});
+		for (const backend of BACKENDS) {
+			test(`${name}: the ${backend} prompt is the current base layers, then the legacy workspace layers and header`, async () => {
+				const { base, cwd } = build(name);
+				const envelope = await preview(["--backend", backend], cwd);
+				expect(envelope).toMatchObject({ code: 0, stderr: "" });
+				const parts = normalize(envelope.systemPrompt, base).split(
+					PROMPT_SEPARATOR,
+				);
+				expect(parts.slice(0, BASE_LAYERS.length)).toEqual(
+					BASE_LAYERS.map(text),
+				);
+				expect(parts.slice(BASE_LAYERS.length)).toEqual(
+					legacyWorkspaceLayers(`${name}.${backend}.prompt.txt`),
+				);
+				if (backend === "codex") {
+					expect(settingsOf(envelope.argv)).toBeUndefined();
+				}
+			});
+		}
 
 		test(`${name}: the Claude --settings are the legacy shepherdSettings minus defaultMode and the Write rule, with no MCP config`, async () => {
 			const { base, cwd } = build(name);
@@ -571,18 +587,64 @@ describe("composition order (B-008, AC #1)", () => {
 		const { cwd } = build("nested-local");
 		const { systemPrompt } = await preview([], cwd);
 		const parts = systemPrompt.split(PROMPT_SEPARATOR);
-		expect(parts.slice(0, 3)).toEqual([
-			text("system-prompts/shepherd/core.md"),
-			text("system-prompts/shepherd/integrations/herdr.md"),
-			text("system-prompts/shepherd/integrations/inter-agent.md"),
-		]);
-		expect(parts.slice(3, 6)).toEqual([
+		const base = BASE_LAYERS.length;
+		expect(parts.slice(0, base)).toEqual(BASE_LAYERS.map(text));
+		expect(parts.slice(base, base + 3)).toEqual([
 			"# Flock\n\nThe shared flock module.\n",
 			"# Child charter\n\nBelow a directory that is not a workspace.\n",
 			"# A local\n\nNot inherited, sorts before the flock module by name.\n",
 		]);
-		expect(parts[6]?.startsWith("# Shepherd session context\n")).toBe(true);
-		expect(parts).toHaveLength(7);
+		expect(parts[base + 3]?.startsWith("# Shepherd session context\n")).toBe(
+			true,
+		);
+		expect(parts).toHaveLength(base + 4);
+	});
+
+	test("the built-in modules are Herdr, inter-agent messaging, nested workspaces and software coordination, in that order", async () => {
+		const { cwd } = build("uninitiated");
+		const { systemPrompt } = await preview([], cwd);
+		const titles = systemPrompt
+			.split(PROMPT_SEPARATOR)
+			.map((part) => part.split("\n", 1)[0]);
+		expect(titles).toEqual([
+			"# Shepherd",
+			"# Integration: Herdr",
+			"# Integration: Inter agent messaging",
+			"# Integration: Nested workspaces",
+			"# Integration: Software coordination",
+			"# Shepherd session context",
+		]);
+	});
+
+	// The gate in nested.md reads the header, so its wording is tied to these lines.
+	test("the nested module gates on the Enclosing workspace line the header writes", async () => {
+		const nested = text("system-prompts/shepherd/integrations/nested.md");
+		const header = async (cwd: string) =>
+			(await preview([], cwd)).systemPrompt.split(PROMPT_SEPARATOR).at(-1);
+		const { base, cwd } = build("nested-inherited");
+		const none = "Enclosing workspace: none";
+		expect(await header(cwd)).toContain(
+			`- Enclosing workspace: ${base}/flock (`,
+		);
+		expect(await header(join(base, "flock"))).toContain(`- ${none}`);
+		expect(nested).toContain(`Does "Enclosing workspace" name a path?`);
+		expect(nested).toContain(`"${none}"`);
+	});
+
+	// nested.md's root section tells the root its charter still governs it,
+	// because this order would otherwise let its own shared module override it.
+	test("a root's shared modules are its local modules, so they load after its charter", async () => {
+		const { base } = build("nested-inherited");
+		const { systemPrompt } = await preview([], join(base, "flock"));
+		const parts = systemPrompt.split(PROMPT_SEPARATOR);
+		expect(parts.slice(BASE_LAYERS.length, -1)).toEqual([
+			"# Flock charter\n\nMust not load in a child.\n",
+			"# Shared A\n\nShared conventions A.\n",
+			"# Flock B\n\nShared conventions B.\n",
+		]);
+		expect(parts.at(-1)).toContain(
+			"- Workspace-local integrations loaded: a-shared.md, b-flock.md",
+		);
 	});
 
 	test("a plain workspace has no inherited layer, and only .md files are modules", async () => {
@@ -605,7 +667,9 @@ describe("composition order (B-008, AC #1)", () => {
 		expect(systemPrompt).toContain(
 			"- Workspace-local integrations loaded: none",
 		);
-		expect(systemPrompt.split(PROMPT_SEPARATOR)).toHaveLength(4);
+		expect(systemPrompt.split(PROMPT_SEPARATOR)).toHaveLength(
+			BASE_LAYERS.length + 1,
+		);
 	});
 
 	test("the header carries cwd, state dir, the fixed date and the legacy backend label", async () => {
@@ -642,17 +706,15 @@ describe("core.md against the e18f56b baseline (AC #1, AC #8)", () => {
 		{ cwd: repo, stdout: "pipe", stderr: "pipe" },
 	);
 
-	test("differs only in the source-reference line, and the Context tiers subsection is byte-identical", () => {
+	// The rest of core has moved on from the baseline by agreement (the
+	// tracking standard and the rules consolidated from working Shepherds).
+	test("the Context tiers subsection is byte-identical, and the promotion line names the declaration and its extension", () => {
 		expect(baseline.exitCode).toBe(0);
 		const before = baseline.stdout.toString().split("\n");
 		const now = text("system-prompts/shepherd/core.md").split("\n");
-		expect(now).toHaveLength(before.length);
-		const changed = now.flatMap((line, i) => (line === before[i] ? [] : [i]));
-		expect(changed).toHaveLength(1);
-		const [at] = changed;
-		expect(now[at ?? 0]).toContain(AC8_NEW);
-		// The same line also carries the Troupe rename (7202acf).
-		expect(before[at ?? 0]).toContain(AC8_OLD);
+		expect(now.join("\n")).toContain(
+			"recompiled via `agents/shepherd.md` and its extension)",
+		);
 
 		const tiers = (lines: string[]) => {
 			const start = lines.findIndex((line) => /^#+ Context tiers/.test(line));

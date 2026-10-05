@@ -7,8 +7,9 @@
  *
  * The session prompt is composed from layers:
  *   1. core.md                — identity, workspace protocol, init, self-evolution
- *   2. integrations/*.md      — built-in capability modules (Herdr, inter-agent
- *                               messaging), each self-gated by an availability check
+ *   2. integrations/*.md      — built-in modules (Herdr, inter-agent messaging,
+ *                               nested workspaces, software coordination), each
+ *                               self-gated by an availability check
  *   3. inherited modules      — the integrations/*.md of the nearest enclosing
  *                               workspace (a parent directory with its own
  *                               .shepherd/), shared by every workspace beneath it
@@ -46,11 +47,17 @@ import herdrDoc from "../system-prompts/shepherd/integrations/herdr.md" with {
 import interAgentDoc from "../system-prompts/shepherd/integrations/inter-agent.md" with {
 	type: "text",
 };
+import nestedDoc from "../system-prompts/shepherd/integrations/nested.md" with {
+	type: "text",
+};
+import softwareDoc from "../system-prompts/shepherd/integrations/software.md" with {
+	type: "text",
+};
 
 const STATE_DIR = ".shepherd";
 
 function builtInIntegrations(): string[] {
-	return [herdrDoc, interAgentDoc];
+	return [herdrDoc, interAgentDoc, nestedDoc, softwareDoc];
 }
 
 /**
