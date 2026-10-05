@@ -6,7 +6,7 @@ Formerly `claude-forge`; the repo was renamed in place on 2026-09-29.
 
 ## Origins
 
-This project was originally forked from [johnlindquist/claude-workshop-live](https://github.com/johnlindquist/claude-workshop-live). It has since evolved significantly with new features including agent namespacing and many new agents. See [CHANGELOG-FROM-FORK.md](CHANGELOG-FROM-FORK.md) for details on what has changed.
+This project was originally forked from [johnlindquist/claude-workshop-live](https://github.com/johnlindquist/claude-workshop-live), a workshop collection of Claude Code agents. It has since been reshaped into a backend-agnostic hub of declared agents; the git history records how.
 
 ## Prerequisites
 
