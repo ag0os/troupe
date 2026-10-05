@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { checkLinks } from "./check-links";
 import { checkWork } from "./check-work";
 import type { Config } from "./config";
+import { contextTiers } from "./context";
 import { daysBetween, localDate } from "./dates";
 import { frontmatter, mdFiles, proseLines, read, words, wordsIn } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
@@ -320,6 +321,27 @@ export function checkWorkspace(
 				add("warn", "doc-unlisted", doc, "not listed in docs/INDEX.md");
 			}
 		}
+	}
+
+	let promptProblem: string | undefined;
+	const tiers = contextTiers(workspace, config, (message) => {
+		promptProblem = message;
+	});
+	if (promptProblem) {
+		add(
+			"warn",
+			"prompt-uncountable",
+			workspace.state,
+			`could not compose the prompt (${promptProblem}); the opening count uses the charter and readable local modules`,
+		);
+	}
+	if (tiers.opens > config.marks.opening) {
+		add(
+			"warn",
+			"opening-over-mark",
+			workspace.state,
+			`a session opens with ${tiers.opens} words (prompt ${tiers.loaded}, session-start files ${tiers.start}), past the ${config.marks.opening}-word mark; see shepherd tool check --context`,
+		);
 	}
 
 	findings.push(...checkWork(workspace, config, today));
