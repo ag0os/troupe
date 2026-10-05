@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { checkLinks } from "./check-links";
 import { checkWork } from "./check-work";
 import type { Config } from "./config";
 import { daysBetween, localDate } from "./dates";
@@ -71,6 +72,7 @@ export function checkWorkspace(
 	tree: WorkspaceTree,
 	config: Config,
 	today: Date,
+	home?: string,
 ): Finding[] {
 	const findings: Finding[] = [];
 	const add = (
@@ -321,6 +323,7 @@ export function checkWorkspace(
 	}
 
 	findings.push(...checkWork(workspace, config, today));
+	findings.push(...checkLinks(workspace, tree, home));
 
 	return findings;
 }
