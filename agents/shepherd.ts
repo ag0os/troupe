@@ -62,6 +62,7 @@ import {
 	codexThreadNames,
 	type ToolEnv,
 } from "../lib/shepherd/sessions";
+import { runTool } from "../lib/shepherd/tool";
 import {
 	findChildWorkspaces,
 	findEnclosingWorkspace,
@@ -125,7 +126,59 @@ function processToolEnv(ctx: PrepareContext): ToolEnv {
 export function prepare(
 	ctx: PrepareContext,
 	toolEnv: ToolEnv = processToolEnv(ctx),
-): PrepareResult {
+): PrepareResult | Promise<PrepareResult> {
+	if (ctx.args[0] === "tool") {
+		if (ctx.preview) {
+			return {
+				exit: {
+					message:
+						"shepherd tool check does not launch a session; drop --show-prompt\n",
+					code: 1,
+					stream: "stderr",
+				},
+			};
+		}
+		if (ctx.modelFromFlag) {
+			return {
+				exit: {
+					message: "shepherd: --model applies only to launches\n",
+					code: 2,
+					stream: "stderr",
+				},
+			};
+		}
+		return runTool(ctx.args.slice(1), ctx.flags, toolEnv).then(
+			({ text, code, stream }) => ({
+				exit: { message: text, code, stream },
+			}),
+		);
+	}
+	for (const name of [
+		"all",
+		"status",
+		"context",
+		"json",
+		"today",
+		"apply",
+		"recursive",
+	]) {
+		const value = ctx.flags[name];
+		if (value !== undefined && value !== false) {
+			const owner =
+				name === "json" || name === "today"
+					? "tool check and tool archive"
+					: name === "apply" || name === "recursive"
+						? "tool archive"
+						: "tool check";
+			return {
+				exit: {
+					message: `shepherd: --${name} applies only to ${owner}\n`,
+					code: 2,
+					stream: "stderr",
+				},
+			};
+		}
+	}
 	const prompt = ctx.args.join(" ").trim();
 	const enclosing = findEnclosingWorkspace(ctx.cwd);
 	const config = loadConfig({

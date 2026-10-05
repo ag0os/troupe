@@ -337,10 +337,39 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		// Composition is all runtime, so the joins match the legacy launcher's.
 		expect(agent.spec.systemPrompt).toBe("");
 		expect(agent.spec.flags).toEqual({
+			all: {
+				type: "boolean",
+				description: "tool check: also show info findings",
+			},
+			status: {
+				type: "boolean",
+				description: "tool check: show work and live session status",
+			},
+			context: {
+				type: "boolean",
+				description: "tool check: show words per context tier",
+			},
+			json: {
+				type: "boolean",
+				description: "tool check and tool archive: emit machine-readable JSON",
+			},
+			today: {
+				type: "string",
+				description:
+					"tool check and tool archive: evaluate dates as of YYYY-MM-DD",
+			},
+			apply: {
+				type: "boolean",
+				description: "tool archive: apply planned moves and reference rewrites",
+			},
+			recursive: {
+				type: "boolean",
+				description: "tool archive: include nested workspaces",
+			},
 			name: {
 				type: "string",
 				short: "n",
-				description: "Name a new Claude session",
+				description: "launch: name a new Claude session",
 			},
 		});
 		expect(agent.spec.native).toEqual({
@@ -641,6 +670,70 @@ describe("enclosing workspace (B-008, AC #1, AC #2, AC #3)", () => {
 				additionalDirectories: [shared],
 			},
 		});
+	});
+});
+
+describe("tool surface", () => {
+	test("check exits through prepare, writes stdout, and starts no backend", async () => {
+		const { cwd } = build("plain");
+		const output = await execute(["tool", "check"], cwd);
+		expect(output.code).toBeOneOf([0, 1]);
+		expect(output.stdout).toContain("1 workspaces:");
+		expect(output.stderr).toBe("");
+		expect(output.records).toEqual([]);
+	});
+
+	test("tool usage and preview are diagnostics and start no backend", async () => {
+		const { cwd } = build("plain");
+		for (const argv of [["tool"], ["tool", "sweep"]]) {
+			const output = await execute(argv, cwd);
+			expect(output.code).toBe(2);
+			expect(output.stderr).toContain("shepherd tool check");
+			expect(output.stderr).toContain("shepherd tool archive");
+			expect(output.records).toEqual([]);
+		}
+		const previewResult = await preview(["tool", "check"], cwd);
+		expect(previewResult).toMatchObject({
+			code: 1,
+			stderr:
+				"shepherd tool check does not launch a session; drop --show-prompt\n",
+		});
+	});
+
+	test("every tool-shaped command line preserves the no-backend invariant", async () => {
+		const { cwd } = build("plain");
+		const cases = [
+			["tool"],
+			["tool", "sweep"],
+			["tool", "check"],
+			["tool", "archive"],
+			["tool", "check", "--all"],
+			["tool", "check", "--status"],
+			["tool", "check", "--context"],
+			["tool", "check", "--json"],
+			["tool", "check", "--today", "2026-10-05"],
+			["tool", "archive", "--apply"],
+			["tool", "archive", "--recursive"],
+			["tool", "check", "--name", "session"],
+			["tool", "check", "--print"],
+			["tool", "check", "--backend", "codex"],
+			["tool", "check", "--model", "x"],
+			["tool", "check", "--", "--resume", "notes"],
+		];
+		for (const argv of cases) {
+			const output = await execute(argv, cwd);
+			expect(output.records, argv.join(" ")).toEqual([]);
+		}
+	});
+
+	test("check and archive remain ordinary launch prompts without tool", async () => {
+		const { cwd } = build("plain");
+		for (const prompt of ["check the deploy", "archive old notes"]) {
+			const output = await execute(prompt.split(" "), cwd);
+			expect(output.code).toBe(0);
+			expect(output.records).toHaveLength(1);
+			expect(output.records[0]?.argv.at(-1)).toBe(prompt);
+		}
 	});
 });
 

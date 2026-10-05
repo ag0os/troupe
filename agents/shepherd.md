@@ -2,10 +2,31 @@
 description: Personal day to day assistant and agent coordinator that keeps its own state in .shepherd/ of the launch directory
 backends: [claude, codex]
 flags:
+  all:
+    type: boolean
+    description: "tool check: also show info findings"
+  status:
+    type: boolean
+    description: "tool check: show work and live session status"
+  context:
+    type: boolean
+    description: "tool check: show words per context tier"
+  json:
+    type: boolean
+    description: "tool check and tool archive: emit machine-readable JSON"
+  today:
+    type: string
+    description: "tool check and tool archive: evaluate dates as of YYYY-MM-DD"
+  apply:
+    type: boolean
+    description: "tool archive: apply planned moves and reference rewrites"
+  recursive:
+    type: boolean
+    description: "tool archive: include nested workspaces"
   name:
     type: string
     short: n
-    description: Name a new Claude session
+    description: "launch: name a new Claude session"
 native:
   claude:
     settings:
