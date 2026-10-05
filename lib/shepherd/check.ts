@@ -5,6 +5,7 @@ import { checkWork } from "./check-work";
 import type { Config } from "./config";
 import { contextTiers } from "./context";
 import { daysBetween, localDate } from "./dates";
+import { statusItems } from "./status-parse";
 import { frontmatter, mdFiles, proseLines, read, words, wordsIn } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
@@ -136,6 +137,17 @@ export function checkWorkspace(
 				current,
 				`${count} words, past the ${config.marks.current}-word review mark: check for closed items and duplicated facts; move live warnings up, never drop them`,
 			);
+		}
+		for (const item of statusItems(text)) {
+			if (!item.known) {
+				add(
+					"warn",
+					"status-word-unknown",
+					current,
+					`unknown status word \`${item.word}\``,
+					item.line,
+				);
+			}
 		}
 		const updated = text.match(/^Updated:\s*(\d{4}-\d{2}-\d{2})/m);
 		if (!updated?.[1]) {
