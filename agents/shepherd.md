@@ -1,6 +1,11 @@
 ---
 description: Personal day to day assistant and agent coordinator that keeps its own state in .shepherd/ of the launch directory
 backends: [claude, codex]
+flags:
+  name:
+    type: string
+    short: n
+    description: Name a new Claude session
 native:
   claude:
     settings:

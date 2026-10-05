@@ -19,6 +19,7 @@ import softwareDoc from "../../system-prompts/shepherd/integrations/software.md"
 };
 import { PROMPT_SEPARATOR } from "../agent-format/schema";
 import { dayOf } from "./dates";
+import { defaultSessionName } from "./session-name";
 import { words } from "./text";
 import {
 	CHILD_DEPTH,
@@ -54,6 +55,7 @@ export function composeFragments(
 	cwd: string,
 	backend: string,
 	enclosing: string | undefined,
+	headerLines: readonly string[] = [],
 ): string[] {
 	const charter = loadCharter(cwd);
 	const inherited = enclosing ? loadIntegrations(enclosing) : [];
@@ -80,6 +82,7 @@ export function composeFragments(
 		`- State directory: ${join(cwd, STATE_DIR)}`,
 		`- Date: ${dayOf(new Date())}`,
 		`- Backend: ${backend}`,
+		...headerLines,
 		enclosing
 			? `- Enclosing workspace: ${enclosing} (inherited integrations: ${inherited.map((m) => m.name).join(", ") || "none"})`
 			: "- Enclosing workspace: none",
@@ -105,8 +108,11 @@ export function composeFragments(
 
 /** The composed Claude system prompt's word count for a workspace. */
 export function promptWords(dir: string): number {
+	const name = defaultSessionName(dir, new Date(), undefined, false);
 	return words(
-		composeFragments(dir, "claude-cli", findEnclosingWorkspace(dir))
+		composeFragments(dir, "claude-cli", findEnclosingWorkspace(dir), [
+			`- Session name: ${name} (set by the launcher)`,
+		])
 			.filter((fragment) => fragment.length > 0)
 			.join(PROMPT_SEPARATOR),
 	);

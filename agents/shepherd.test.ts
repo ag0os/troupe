@@ -31,6 +31,7 @@ import type {
 	Backend,
 	PrepareContext,
 } from "../lib/agent-format/types";
+import type { ToolEnv } from "../lib/shepherd/sessions";
 import {
 	generateEntry,
 	type LoadedAgent,
@@ -43,7 +44,9 @@ const repo = resolve(import.meta.dir, "..");
 const SOURCE = "agents/shepherd.md";
 const EXTENSION_FILE = join(repo, "agents/shepherd.ts");
 const FIXTURES = join(repo, "agents/__fixtures__/shepherd");
-const extension = { prepare: shepherd.prepare };
+const extension = {
+	prepare: (ctx: PrepareContext) => shepherd.prepare(ctx, testToolEnv(ctx)),
+};
 const BACKENDS: Backend[] = ["claude", "codex"];
 const STATIC_RULES = [
 	"Read(.shepherd/**)",
@@ -80,6 +83,17 @@ setDefaultTimeout(60_000);
 
 let agent: LoadedAgent;
 let root: string;
+
+function testToolEnv(ctx: PrepareContext): ToolEnv {
+	return {
+		cwd: ctx.cwd,
+		home: join(root, "home"),
+		env: {},
+		now: new Date(),
+		runCommand: ctx.runCommand,
+		pidAlive: () => false,
+	};
+}
 
 beforeAll(async () => {
 	// The session header carries the date: pin it (fake time).
@@ -216,23 +230,26 @@ function settingsOf(argv: string[]): unknown {
  */
 function compact(envelope: Envelope, backend: Backend, base: string): string {
 	const marker = "<system prompt, as above>";
-	const argv = envelope.argv.map((arg, i) => {
+	const nameAt = backend === "claude" ? envelope.argv.indexOf("-n") : -1;
+	const argv = envelope.argv.flatMap((arg, i) => {
+		if (nameAt !== -1 && (i === nameAt || i === nameAt + 1)) return [];
 		if (
 			backend === "claude" &&
 			envelope.argv[i - 1] === "--append-system-prompt"
 		) {
 			expect(arg).toBe(envelope.systemPrompt);
-			return marker;
+			return [marker];
 		}
 		if (backend === "codex" && arg.startsWith("developer_instructions=")) {
 			expect(JSON.parse(arg.slice("developer_instructions=".length))).toBe(
 				envelope.systemPrompt,
 			);
-			return `developer_instructions=${marker}`;
+			return [`developer_instructions=${marker}`];
 		}
-		return arg;
+		return [arg];
 	});
 	return envelope.text
+		.replace(/^- Session name:.*\n/m, "")
 		.replace(/--- Argv ---\n.*\n$/, () =>
 			["--- Argv ---", JSON.stringify(argv), ""].join("\n"),
 		)
@@ -317,7 +334,13 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		expect(agent.spec.mode).toBe("interactive");
 		// Composition is all runtime, so the joins match the legacy launcher's.
 		expect(agent.spec.systemPrompt).toBe("");
-		expect(agent.spec.flags).toEqual({});
+		expect(agent.spec.flags).toEqual({
+			name: {
+				type: "string",
+				short: "n",
+				description: "Name a new Claude session",
+			},
+		});
 		expect(agent.spec.native).toEqual({
 			claude: { settings: { permissions: { allow: STATIC_RULES } } },
 		});
@@ -387,7 +410,8 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 	const normalize = (prompt: string, base: string) =>
 		prompt
 			.replaceAll(base, "<ROOT>")
-			.replace("- Date: 2026-10-02", "- Date: <DATE>");
+			.replace("- Date: 2026-10-02", "- Date: <DATE>")
+			.replace(/^- Session name:.*\n/m, "");
 	/**
 	 * What a legacy capture still vouches for, brought to today's shape rather
 	 * than captured again: the charter now follows the local modules, and the
@@ -527,13 +551,13 @@ describe("enclosing workspace (B-008, AC #1, AC #2, AC #3)", () => {
 			`"Read(${shared}/**)"`,
 		);
 
-		expect(shepherd.prepare(context("claude", cwd))).toMatchObject({
+		expect(extension.prepare(context("claude", cwd))).toMatchObject({
 			extraAllowRules: {
 				rules: [`Read(/${shared}/**)`],
 				additionalDirectories: [shared],
 			},
 		});
-		const onCodex = shepherd.prepare(context("codex", cwd));
+		const onCodex = extension.prepare(context("codex", cwd));
 		expect(onCodex).not.toHaveProperty("extraAllowRules");
 		expect(onCodex).toHaveProperty("systemPromptFragments");
 	});
@@ -541,13 +565,13 @@ describe("enclosing workspace (B-008, AC #1, AC #2, AC #3)", () => {
 	test("Codex never receives a rule object, and Claude gets none without an enclosing workspace", () => {
 		for (const name of Object.keys(FIXTURE_SET)) {
 			const { cwd } = build(name);
-			expect(shepherd.prepare(context("codex", cwd))).not.toHaveProperty(
+			expect(extension.prepare(context("codex", cwd))).not.toHaveProperty(
 				"extraAllowRules",
 			);
 			const enclosed = FIXTURE_SET[name]?.cwd.includes("/");
 			expect(
 				Object.hasOwn(
-					shepherd.prepare(context("claude", cwd)),
+					extension.prepare(context("claude", cwd)),
 					"extraAllowRules",
 				),
 			).toBe(enclosed === true);
@@ -696,6 +720,9 @@ describe("composition order (B-008, AC #1)", () => {
 					`- State directory: ${cwd}/.shepherd`,
 					"- Date: 2026-10-02",
 					`- Backend: ${label}`,
+					backend === "claude"
+						? "- Session name: ws-1002 (set by the launcher)"
+						: "- Session name: not set (Codex takes no name at launch; suggested: ws-1002, through its rename dialog)",
 					"- Enclosing workspace: none",
 					"- Workspaces beneath: none within 3 levels",
 					"- Gated modules loaded: none",
@@ -892,6 +919,93 @@ describe("print mode (B-008, AC #3)", () => {
 });
 
 describe("framework flags and passthrough (D-028, AC #6)", () => {
+	test("a default interactive Claude launch returns and forwards its name", async () => {
+		const { cwd } = build("plain");
+		const prepared = extension.prepare(context("claude", cwd));
+		expect(prepared).toMatchObject({ sessionName: "ws-1002" });
+		const envelope = await preview([], cwd);
+		expect(envelope.systemPrompt).toContain(
+			"- Session name: ws-1002 (set by the launcher)",
+		);
+		expect(envelope.argv.filter((token) => token === "-n")).toHaveLength(1);
+		expect(envelope.argv[envelope.argv.indexOf("-n") + 1]).toBe("ws-1002");
+	});
+
+	test("a typed Claude name reaches the argv once and a passthrough name is not added", async () => {
+		const { cwd } = build("plain");
+		const typed = await preview(["-n", "forge-1002"], cwd);
+		expect(typed.code).toBe(0);
+		expect(typed.argv.filter((token) => token === "-n")).toHaveLength(1);
+		expect(typed.argv[typed.argv.indexOf("-n") + 1]).toBe("forge-1002");
+		expect(typed.systemPrompt).toContain(
+			"- Session name: forge-1002 (set by the launcher)",
+		);
+
+		const passthrough = await preview(["--", "-n", "tail-1002"], cwd);
+		expect(passthrough.code).toBe(0);
+		expect(passthrough.argv.filter((token) => token === "-n")).toHaveLength(1);
+		expect(passthrough.systemPrompt).toContain(
+			"- Session name: tail-1002 (given at launch)",
+		);
+	});
+
+	test("invalid, duplicate, resumed, and Codex names exit 2", async () => {
+		const { cwd } = build("plain");
+		for (const [argv, message] of [
+			[["-n", "invalid"], "session name must start with a letter"],
+			[
+				["-n", "forge-1002", "--", "--name=other-1002"],
+				"session name given twice",
+			],
+			[
+				["-n", "forge-1002", "--", "--resume"],
+				"a resumed session keeps its name",
+			],
+			[
+				["--backend", "codex", "-n", "forge-1002"],
+				"Codex takes no session name at launch",
+			],
+		] as const) {
+			const run = await execute([...argv], cwd);
+			expect(run.code).toBe(2);
+			expect(run.stderr).toContain(message);
+			expect(run.records).toEqual([]);
+		}
+	});
+
+	test("resumes keep their names, forks get names, and print mode gets no name", async () => {
+		const { cwd } = build("plain");
+		const resumed = await preview(["--", "--resume", "abc"], cwd);
+		expect(resumed.systemPrompt).toContain(
+			"- Session name: kept from the resumed session",
+		);
+		expect(resumed.argv).not.toContain("-n");
+
+		const forked = await preview(
+			["--", "--resume", "abc", "--fork-session"],
+			cwd,
+		);
+		expect(forked.systemPrompt).toContain(
+			"- Session name: ws-1002 (set by the launcher)",
+		);
+		expect(forked.argv[forked.argv.indexOf("-n") + 1]).toBe("ws-1002");
+
+		const printed = await preview(["--print", "summary"], cwd);
+		expect(printed.systemPrompt).not.toContain("- Session name:");
+		expect(printed.argv).not.toContain("-n");
+	});
+
+	test("Codex suggests a name for new sessions and forks", async () => {
+		const { cwd } = build("plain");
+		for (const tail of [[], ["--", "fork"]]) {
+			const envelope = await preview(["--backend", "codex", ...tail], cwd);
+			expect(envelope.systemPrompt).toContain(
+				"- Session name: not set (Codex takes no name at launch; suggested: ws-1002, through its rename dialog)",
+			);
+			expect(envelope.argv).not.toContain("-n");
+		}
+	});
+
 	test("an interactive launch starts in the requested --cwd with the composed prompt", async () => {
 		const { cwd } = build("nested-inherited");
 		const elsewhere = build("plain").cwd;
