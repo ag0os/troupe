@@ -100,7 +100,7 @@ Shepherd maintains `.shepherd/` in the launch directory:
   integrations/      # workspace local capability modules
 ```
 
-Core names the memory frontmatter keys and the four types; the full format is in the `memory` guide (`shepherd tool guide memory`). `shepherd tool archive` moves items closed about a month and past journal months into `archive/`, with their index lines and link rewrites.
+Core names the memory frontmatter keys and the four types; the full format is in the `memory` guide (`shepherd tool guide memory`).
 
 Context is tiered (see core, "Context tiers"): the prompt and a short session-start list (`CURRENT.md`, `MEMORY.md`, `docs/INDEX.md`, the journal's last two days) are always read; everything else is reached through those indexes when needed, and history moves to `archive/`.
 

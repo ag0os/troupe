@@ -1,7 +1,5 @@
 # Guide: the init conversation and the charter
 
-A fresh Shepherd is deliberately generic. What a workspace is for is decided with the user, once, in an init conversation, and recorded as `.shepherd/charter.md`. A workspace can be anything, one software project or recurring chores on the internet. Do not assume a shape; ask.
-
 Cover these in order, and give the charter a section for each:
 
 1. Mission: what this workspace is for, and what good looks like.
