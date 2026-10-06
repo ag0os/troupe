@@ -104,10 +104,15 @@ export function liveReports(
 		hasChildren.has(workspace.name)
 			? cwd === workspace.dir
 			: within(workspace.dir, cwd);
-	const references = tree.workspaces.map((workspace) => ({
-		workspace,
-		paths: mentionedPaths(workspace, home, tree.root.dir),
-	}));
+	const references = tree.workspaces
+		.filter(
+			(workspace) =>
+				workspace !== tree.root || !hasChildren.has(workspace.name),
+		)
+		.map((workspace) => ({
+			workspace,
+			paths: mentionedPaths(workspace, home, tree.root.dir),
+		}));
 	const owner = (cwd: string): Workspace | undefined => {
 		const direct = tree.workspaces
 			.filter((workspace) => ownsDirectory(workspace, cwd))

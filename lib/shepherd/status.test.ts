@@ -106,7 +106,8 @@ describe("liveReports", () => {
 
 	test("attributes only complete mentioned paths under the injected home", () => {
 		const result = makeTree({
-			"root/.shepherd/CURRENT.md": "",
+			"root/.shepherd/CURRENT.md":
+				"Owns ~/Projects/app and ~/Projects/root-only.",
 			"root/a/.shepherd/CURRENT.md": "",
 		});
 		cleanups.push(result.cleanup);
@@ -116,20 +117,21 @@ describe("liveReports", () => {
 		const home = join(result.root, "home");
 		const projects = join(home, "Projects");
 		const app = join(projects, "app");
+		const rootOnly = join(projects, "root-only");
 		const arbitrary = join(result.root, "outside-home");
 		const insideRoot = join(tree.root.dir, "other");
 		writeFileSync(
 			join(tree.root.state, "charter.md"),
-			`Owns ${projects}. Also ${arbitrary} and ${insideRoot}.`,
+			`Also ${arbitrary} and ${insideRoot}.`,
 		);
-		writeFileSync(join(child.state, "charter.md"), "Owns ~/Projects/app.");
+		writeFileSync(join(child.state, "charter.md"), `Owns ${app}.`);
 
 		const reports = liveReports(
 			tree.workspaces,
 			tree,
 			running([
 				session("tilde-one", join(app, "src")),
-				session("absolute-one", join(projects, "other")),
+				session("root-only-reference", join(rootOnly, "src")),
 				session("absolute-outside-home", join(arbitrary, "repo")),
 				session("inside-root-reference", join(insideRoot, "repo")),
 			]),
@@ -139,10 +141,8 @@ describe("liveReports", () => {
 		expect(
 			reports.byWorkspace.get(child.name)?.unlisted.map(({ name }) => name),
 		).toEqual(["tilde-one"]);
-		expect(
-			reports.byWorkspace.get(tree.root.name)?.unlisted.map(({ name }) => name),
-		).toEqual(["absolute-one"]);
 		expect(reports.unattributed.map(({ name }) => name)).toEqual([
+			"root-only-reference",
 			"absolute-outside-home",
 			"inside-root-reference",
 		]);
