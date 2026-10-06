@@ -81,7 +81,11 @@ function shellWords(command: string): string[] {
 	let wordStarted = false;
 	for (let i = 0; i < command.length; i++) {
 		const char = command[i] ?? "";
-		if (!quoted && char === "#" && !wordStarted) break;
+		if (!quoted && char === "#" && !wordStarted) {
+			while (i < command.length && command[i] !== "\n") i++;
+			i--;
+			continue;
+		}
 		if (char === "\\" && quoted !== "'") {
 			const next = command[i + 1] ?? "";
 			if (!quoted || /["\\$`\n]/.test(next)) {

@@ -126,6 +126,23 @@ describe("doctor filesystem checks", () => {
 			);
 		}
 	});
+	test("hook script words survive comments on other lines", () => {
+		const f = fixture();
+		const script = f.put(".claude/herdr-agent-state.sh", "");
+		for (const command of [
+			`# Herdr SessionStart hook\n${script}`,
+			`${script}\n# Herdr SessionStart hook`,
+			`true # Herdr SessionStart hook\n${script}`,
+		]) {
+			f.put(".claude/settings.json", JSON.stringify(hooks(command)));
+			f.put(".codex/hooks.json", JSON.stringify(hooks(command)));
+			const result = f.run();
+			expect(check(result, "claude:herdr-hook").status).toBe("ok");
+			expect(
+				check(result, `codex:herdr-hook:${join(f.home, ".codex")}`).status,
+			).toBe("ok");
+		}
+	});
 	test("missing absolute configured home gets a home gap rather than config gap", () => {
 		const f = fixture({ homeName: "home '$" });
 		const path = join(f.home, "missing-home");
