@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -310,6 +311,85 @@ describe("applyArchive", () => {
 				"utf8",
 			),
 		).toContain("closed:");
+	});
+
+	test("skips a journal move when its destination is a symlink", () => {
+		const result = makeTree(
+			{
+				"root/.shepherd/charter.md": "Charter",
+				"root/.shepherd/journal.md": "## 2026-09-30\n- Old\n",
+				"journal-target.md": "Do not change\n",
+			},
+			{
+				symlinks: {
+					"root/.shepherd/archive/journal/2026-09.md": "journal-target.md",
+				},
+			},
+		);
+		cleanups.push(result.cleanup);
+		const tree = discoverTree(join(result.root, "root"));
+
+		const applied = applyArchive(
+			planArchive([tree.root], config(), new Date(2026, 9, 5)),
+			tree,
+		);
+
+		expect(applied.workspaces[0]?.moves[0]).toMatchObject({
+			status: "skipped",
+			detail: "archive/journal/2026-09.md is a symlink",
+		});
+		expect(archiveExitCode(applied)).toBe(1);
+		expect(readFileSync(join(tree.root.state, "journal.md"), "utf8")).toBe(
+			"## 2026-09-30\n- Old\n",
+		);
+		expect(readFileSync(join(result.root, "journal-target.md"), "utf8")).toBe(
+			"Do not change\n",
+		);
+	});
+
+	test("skips item moves before changing anything when the index is not a file", () => {
+		const { tree, workspace } = fixture({
+			"root/.shepherd/archive/INDEX.md/keep": "directory marker",
+			"root/.shepherd/work/done/release/STATUS.md":
+				"---\nclosed: 2026-08-01\n---\n# Release\n",
+		});
+
+		const applied = applyArchive(
+			planArchive([workspace], config(), new Date(2026, 9, 5)),
+			tree,
+		);
+
+		expect(applied.workspaces[0]?.moves[0]).toMatchObject({
+			status: "skipped",
+			detail: "archive/INDEX.md is not a regular file",
+		});
+		expect(archiveExitCode(applied)).toBe(1);
+		expect(
+			readFileSync(
+				join(workspace.state, "work/done/release/STATUS.md"),
+				"utf8",
+			),
+		).toContain("closed:");
+		expect(
+			existsSync(join(workspace.state, "archive/2026-08/release")),
+		).toBeFalse();
+	});
+
+	test("skips dangling work item symlinks", () => {
+		const result = makeTree(
+			{ "root/.shepherd/charter.md": "Charter" },
+			{
+				symlinks: {
+					"root/.shepherd/work/done/missing": "does-not-exist",
+				},
+			},
+		);
+		cleanups.push(result.cleanup);
+		const tree = discoverTree(join(result.root, "root"));
+
+		expect(() =>
+			planArchive([tree.root], config(), new Date(2026, 9, 5)),
+		).not.toThrow();
 	});
 });
 

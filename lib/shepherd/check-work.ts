@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Finding, FindingLevel } from "./check";
+import { decodedLinkTarget } from "./check-links";
 import type { Config } from "./config";
 import { daysBetween, monthOf } from "./dates";
 import {
@@ -18,7 +19,7 @@ function linkTargets(file: string): Set<string> {
 	const targets = new Set<string>();
 	for (const { line } of proseLines(read(file))) {
 		for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-			const target = decodeURIComponent(match[1]?.split("#")[0] ?? "");
+			const target = decodedLinkTarget(match[1]?.split("#")[0] ?? "");
 			if (target && !/^[a-z]+:/i.test(target)) {
 				targets.add(resolve(dirname(file), target));
 			}
@@ -56,9 +57,12 @@ export function checkWork(
 	for (const state of STATES) {
 		const dir = join(workDir, state);
 		if (!existsSync(dir)) continue;
-		for (const slug of readdirSync(dir).sort()) {
+		for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+			a.name.localeCompare(b.name),
+		)) {
+			if (!entry.isDirectory()) continue;
+			const slug = entry.name;
 			const itemDir = join(dir, slug);
-			if (!statSync(itemDir).isDirectory()) continue;
 			const priorState = items.get(slug);
 			if (priorState) {
 				add(
@@ -133,14 +137,15 @@ export function checkWork(
 	const archiveDir = join(workspace.state, "archive");
 	const archiveIndex = join(archiveDir, "INDEX.md");
 	if (existsSync(archiveDir)) {
-		const archived = readdirSync(archiveDir)
-			.filter((month) => /^\d{4}-\d{2}$/.test(month))
-			.flatMap((month) =>
-				readdirSync(join(archiveDir, month)).map((slug) =>
-					join(archiveDir, month, slug),
-				),
+		const archived = readdirSync(archiveDir, { withFileTypes: true })
+			.filter(
+				(month) => month.isDirectory() && /^\d{4}-\d{2}$/.test(month.name),
 			)
-			.filter((path) => statSync(path).isDirectory());
+			.flatMap((month) =>
+				readdirSync(join(archiveDir, month.name), { withFileTypes: true })
+					.filter((entry) => entry.isDirectory())
+					.map((entry) => join(archiveDir, month.name, entry.name)),
+			);
 		if (archived.length > 0 && !existsSync(archiveIndex)) {
 			add(
 				"warn",

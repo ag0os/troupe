@@ -110,3 +110,36 @@ test("rewrites all four reference forms throughout the tree", () => {
 		expect(renderArchive(applied)).toContain(`  ${file}`);
 	}
 });
+
+test("does not rewrite workspace names that only end with the moved name", () => {
+	const result = makeTree({
+		"root/.shepherd/charter.md": "Root",
+		"root/.shepherd/CURRENT.md": [
+			"a/.shepherd/work/done/release",
+			"qa/.shepherd/work/done/release",
+			"x/a/.shepherd/work/done/release",
+		].join("\n"),
+		"root/a/.shepherd/charter.md": "A",
+		"root/a/.shepherd/CURRENT.md": "A",
+		"root/a/.shepherd/work/done/release/STATUS.md":
+			"---\nclosed: 2026-08-01\n---\n# Release\n",
+		"root/qa/.shepherd/charter.md": "QA",
+		"root/qa/.shepherd/CURRENT.md": "QA",
+		"root/x/a/.shepherd/charter.md": "Nested A",
+		"root/x/a/.shepherd/CURRENT.md": "Nested A",
+	});
+	cleanups.push(result.cleanup);
+	const tree = discoverTree(join(result.root, "root"));
+	const child = tree.workspaces.find(({ name }) => name === "a");
+	if (!child) throw new Error("missing child fixture");
+
+	applyArchive(planArchive([child], config(), new Date(2026, 9, 5)), tree);
+
+	expect(readFileSync(join(tree.root.state, "CURRENT.md"), "utf8")).toBe(
+		[
+			"a/.shepherd/archive/2026-08/release",
+			"qa/.shepherd/work/done/release",
+			"x/a/.shepherd/work/done/release",
+		].join("\n"),
+	);
+});

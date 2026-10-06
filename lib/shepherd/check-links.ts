@@ -24,7 +24,8 @@ function isWithin(parent: string, child: string): boolean {
 	);
 }
 
-function decoded(target: string): string {
+/** Decode a Markdown link target, keeping malformed percent escapes literal. */
+export function decodedLinkTarget(target: string): string {
 	try {
 		return decodeURIComponent(target);
 	} catch {
@@ -143,7 +144,7 @@ export function checkLinks(
 			for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
 				const source = match[1];
 				if (!source) continue;
-				const target = decoded(source.split("#")[0] ?? "");
+				const target = decodedLinkTarget(source.split("#")[0] ?? "");
 				if (!target || /^[a-z]+:/i.test(target)) continue;
 				const resolved = target.startsWith("~/")
 					? home

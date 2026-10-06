@@ -1,10 +1,10 @@
 import {
 	appendFileSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	renameSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -44,15 +44,33 @@ export type ArchiveMove = JournalArchiveMove | ItemArchiveMove;
 export type ArchiveWorkspacePlan = {
 	name: string;
 	state: string;
+	doneDays: number;
 	moves: ArchiveMove[];
 };
 
 export type ArchivePlan = {
 	applied: boolean;
-	doneDays: number;
 	workspaces: ArchiveWorkspacePlan[];
 	rewrittenFiles: string[];
 };
+
+type ConfigSource = Config | ((workspace: Workspace) => Config);
+
+function configFor(source: ConfigSource, workspace: Workspace): Config {
+	return typeof source === "function" ? source(workspace) : source;
+}
+
+function unsafeFile(path: string, display: string): string | undefined {
+	try {
+		const stat = lstatSync(path);
+		if (stat.isSymbolicLink()) return `${display} is a symlink`;
+		if (!stat.isFile()) return `${display} is not a regular file`;
+		return undefined;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		return `${display} cannot be inspected`;
+	}
+}
 
 function journalMoves(workspace: Workspace, today: Date): JournalArchiveMove[] {
 	const journal = join(workspace.state, "journal.md");
@@ -86,21 +104,27 @@ function itemMoves(
 	if (!existsSync(done)) return [];
 
 	const moves: ItemArchiveMove[] = [];
-	for (const slug of readdirSync(done).sort()) {
+	for (const entry of readdirSync(done, { withFileTypes: true }).sort((a, b) =>
+		a.name.localeCompare(b.name),
+	)) {
+		if (!entry.isDirectory()) continue;
+		const slug = entry.name;
 		const item = join(done, slug);
-		if (!statSync(item).isDirectory()) continue;
 		const { date, approximate } = closedDate(item);
 		const age = daysBetween(date, today);
 		if (age <= doneDays) continue;
 		const month = monthOf(date);
 		const day = dayOf(date);
 		const to = `archive/${month}/${slug}`;
+		const targetExists = existsSync(join(workspace.state, to));
 		moves.push({
 			kind: "item",
 			from: `work/done/${slug}`,
 			to,
-			detail: `closed ${day}${approximate ? ", by file date" : ""}, ${age} days`,
-			status: existsSync(join(workspace.state, to)) ? "skipped" : "planned",
+			detail: targetExists
+				? `${to} already exists`
+				: `closed ${day}${approximate ? ", by file date" : ""}, ${age} days`,
+			status: targetExists ? "skipped" : "planned",
 			slug,
 			month,
 			day,
@@ -114,21 +138,49 @@ function itemMoves(
 /** Inspect the selected workspaces and describe every archive operation. */
 export function planArchive(
 	workspaces: readonly Workspace[],
-	config: Config,
+	configs: ConfigSource,
 	today: Date,
 ): ArchivePlan {
 	return {
 		applied: false,
-		doneDays: config.windows.doneDays,
 		rewrittenFiles: [],
-		workspaces: workspaces.map((workspace) => ({
-			name: workspace.name,
-			state: workspace.state,
-			moves: [
+		workspaces: workspaces.map((workspace) => {
+			const config = configFor(configs, workspace);
+			const moves: ArchiveMove[] = [
 				...journalMoves(workspace, today),
 				...itemMoves(workspace, config.windows.doneDays, today),
-			],
-		})),
+			];
+			for (const move of moves) {
+				if (move.kind !== "journal") continue;
+				const problem = unsafeFile(join(workspace.state, move.to), move.to);
+				if (problem) {
+					move.status = "skipped";
+					move.detail = problem;
+				}
+			}
+			const indexProblem = moves.some(
+				(move) => move.kind === "item" && move.status === "planned",
+			)
+				? unsafeFile(
+						join(workspace.state, "archive", "INDEX.md"),
+						"archive/INDEX.md",
+					)
+				: undefined;
+			if (indexProblem) {
+				for (const move of moves) {
+					if (move.kind === "item" && move.status === "planned") {
+						move.status = "skipped";
+						move.detail = indexProblem;
+					}
+				}
+			}
+			return {
+				name: workspace.name,
+				state: workspace.state,
+				doneDays: config.windows.doneDays,
+				moves,
+			};
+		}),
 	};
 }
 
@@ -143,9 +195,16 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 	if (!moves.length) return;
 
 	const archive = join(workspace.state, "archive", "journal");
-	mkdirSync(archive, { recursive: true });
 	for (const move of moves) {
+		if (move.status === "skipped") continue;
 		const target = join(workspace.state, move.to);
+		const problem = unsafeFile(target, move.to);
+		if (problem) {
+			move.status = "skipped";
+			move.detail = problem;
+			continue;
+		}
+		mkdirSync(archive, { recursive: true });
 		const heading = existsSync(target) ? "" : `# Journal ${move.month}\n\n`;
 		appendFileSync(
 			target,
@@ -153,10 +212,13 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 		);
 		move.status = "moved";
 	}
+	if (!moves.some(({ status }) => status === "moved")) return;
 
 	const journal = join(workspace.state, "journal.md");
 	const { preamble, days } = journalSections(read(journal));
-	const movedMonths = new Set(moves.map(({ month }) => month));
+	const movedMonths = new Set(
+		moves.filter(({ status }) => status === "moved").map(({ month }) => month),
+	);
 	const keep = days
 		.filter(({ date }) => !movedMonths.has(date.slice(0, 7)))
 		.map(({ body }) => body.trimEnd());
@@ -166,10 +228,24 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 	);
 }
 
-function applyItemMoves(
-	workspace: ArchiveWorkspacePlan,
-	doneDays: number,
-): void {
+function applyItemMoves(workspace: ArchiveWorkspacePlan): void {
+	const pending = workspace.moves.filter(
+		(move): move is ItemArchiveMove =>
+			move.kind === "item" && move.status !== "skipped",
+	);
+	if (!pending.length) return;
+	const indexProblem = unsafeFile(
+		join(workspace.state, "archive", "INDEX.md"),
+		"archive/INDEX.md",
+	);
+	if (indexProblem) {
+		for (const move of pending) {
+			move.status = "skipped";
+			move.detail = indexProblem;
+		}
+		return;
+	}
+
 	const lines: string[] = [];
 	for (const move of workspace.moves) {
 		if (move.kind !== "item" || move.status === "skipped") continue;
@@ -177,6 +253,7 @@ function applyItemMoves(
 		const target = join(workspace.state, move.to);
 		if (existsSync(target)) {
 			move.status = "skipped";
+			move.detail = `${move.to} already exists`;
 			continue;
 		}
 		mkdirSync(join(workspace.state, "archive", move.month), {
@@ -195,7 +272,7 @@ function applyItemMoves(
 
 	if (!lines.length) return;
 	const index = join(workspace.state, "archive", "INDEX.md");
-	if (!existsSync(index)) writeFileSync(index, indexHeader(doneDays));
+	if (!existsSync(index)) writeFileSync(index, indexHeader(workspace.doneDays));
 	appendFileSync(index, `${lines.join("\n")}\n`);
 }
 
@@ -203,6 +280,7 @@ function applyItemMoves(
 export function applyArchive(
 	plan: ArchivePlan,
 	tree: WorkspaceTree,
+	home?: string,
 ): ArchivePlan {
 	const applied: ArchivePlan = {
 		...plan,
@@ -214,7 +292,7 @@ export function applyArchive(
 	};
 	for (const workspace of applied.workspaces) {
 		applyJournalMoves(workspace);
-		applyItemMoves(workspace, applied.doneDays);
+		applyItemMoves(workspace);
 	}
 	const moves: ArchivedItem[] = applied.workspaces.flatMap((workspace) =>
 		workspace.moves.flatMap((move) =>
@@ -231,7 +309,11 @@ export function applyArchive(
 				: [],
 		),
 	);
-	applied.rewrittenFiles = rewriteArchiveReferences(tree.workspaces, moves);
+	applied.rewrittenFiles = rewriteArchiveReferences(
+		tree.workspaces,
+		moves,
+		home,
+	);
 	return applied;
 }
 
@@ -259,8 +341,10 @@ export function renderArchive(plan: ArchivePlan): string {
 			`${workspace.name}: ${nothing ? "nothing to archive" : `${count} move(s)${plan.applied ? "" : " (dry run)"}`}`,
 		);
 		for (const move of workspace.moves) {
-			if (move.status === "skipped" && move.kind === "item") {
-				lines.push(`  skip ${move.slug}: ${move.to} already exists`);
+			if (move.status === "skipped") {
+				lines.push(
+					`  skip ${move.kind === "item" ? move.slug : "journal"}: ${move.detail}`,
+				);
 			} else if (move.kind === "journal") {
 				lines.push(`  journal: ${move.detail} -> ${move.to}`);
 			} else {

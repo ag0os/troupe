@@ -181,4 +181,125 @@ describe("runTool output", () => {
 			existsSync(join(cwd, ".shepherd/archive/journal/2026-09.md")),
 		).toBeTrue();
 	});
+
+	test("uses each workspace config for recursive archive planning", async () => {
+		const tree = makeTree({
+			"root/.shepherd/charter.md": "Root",
+			"root/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+			"root/.shepherd/work/done/root-item/STATUS.md":
+				"---\nclosed: 2026-08-06\n---\n# Root item\n",
+			"root/child/.shepherd/config.json": JSON.stringify({
+				windows: { doneDays: 365 },
+			}),
+			"root/child/.shepherd/charter.md": "Child",
+			"root/child/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+			"root/child/.shepherd/work/done/child-item/STATUS.md":
+				"---\nclosed: 2026-08-06\n---\n# Child item\n",
+		});
+		cleanups.push(tree.cleanup);
+		const cwd = join(tree.root, "root");
+
+		const output = await runTool(
+			["archive"],
+			{ recursive: true, apply: true, json: true, today: "2026-10-05" },
+			fakeToolEnv({ home: tree.root, cwd }),
+		);
+		const json = JSON.parse(output.text);
+
+		expect(json.workspaces[0].moves).toHaveLength(1);
+		expect(json.workspaces[1].moves).toHaveLength(0);
+		expect(
+			existsSync(join(cwd, ".shepherd/archive/2026-08/root-item")),
+		).toBeTrue();
+		expect(
+			existsSync(join(cwd, "child/.shepherd/work/done/child-item")),
+		).toBeTrue();
+	});
+
+	test("reports an invalid child config from the root", async () => {
+		const tree = makeTree({
+			"root/.shepherd/charter.md": "Root",
+			"root/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+			"root/child/.shepherd/config.json": JSON.stringify({ extra: true }),
+			"root/child/.shepherd/charter.md": "Child",
+			"root/child/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+		});
+		cleanups.push(tree.cleanup);
+		const cwd = join(tree.root, "root");
+
+		const output = await runTool(
+			["check"],
+			{ json: true },
+			fakeToolEnv({ home: tree.root, cwd }),
+		);
+		const json = JSON.parse(output.text);
+		const child = json.workspaces.find(
+			(workspace: { name: string }) => workspace.name === "child",
+		);
+
+		expect(output.code).toBe(1);
+		expect(child.findings).toContainEqual(
+			expect.objectContaining({ code: "config-invalid", file: "config.json" }),
+		);
+	});
+
+	test("uses child marks for context rows", async () => {
+		const tree = makeTree({
+			"root/.shepherd/charter.md": "Root",
+			"root/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+			"root/child/.shepherd/config.json": JSON.stringify({
+				marks: { current: 2 },
+			}),
+			"root/child/.shepherd/charter.md": "Child",
+			"root/child/.shepherd/CURRENT.md": "Updated: 2026-10-05 extra words",
+		});
+		cleanups.push(tree.cleanup);
+		const cwd = join(tree.root, "root");
+
+		const output = await runTool(
+			["check"],
+			{ context: true, json: true },
+			fakeToolEnv({ home: tree.root, cwd }),
+		);
+		const json = JSON.parse(output.text);
+		const child = json.workspaces.find(
+			(workspace: { name: string }) => workspace.name === "child",
+		);
+
+		expect(child.over).toContain("CURRENT > 2");
+	});
+
+	test("resolves tilde links against the user home", async () => {
+		const tree = makeTree({
+			"home/.shepherd/charter.md": "Home",
+			"home/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+			"home/Projects/existing.md": "Exists",
+			"home/work/.shepherd/charter.md": "Work",
+			"home/work/.shepherd/CURRENT.md": [
+				"Updated: 2026-10-05",
+				"[Existing](~/Projects/existing.md)",
+				"[Missing](~/Projects/missing.md)",
+			].join("\n"),
+		});
+		cleanups.push(tree.cleanup);
+		const home = join(tree.root, "home");
+		const cwd = join(home, "work");
+
+		const output = await runTool(
+			["check"],
+			{ json: true },
+			fakeToolEnv({ home, cwd }),
+		);
+		const json = JSON.parse(output.text);
+		const links = json.workspaces[0].findings.filter(
+			(finding: { code: string }) => finding.code === "link-broken",
+		);
+
+		expect(links).toEqual([
+			expect.objectContaining({
+				line: 3,
+				message: "link to ~/Projects/missing.md does not resolve",
+			}),
+		]);
+	});
 });

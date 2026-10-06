@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { checkLinks } from "./check-links";
+import { checkLinks, decodedLinkTarget } from "./check-links";
 import { checkWork } from "./check-work";
 import type { Config } from "./config";
 import { contextTiers } from "./context";
@@ -36,7 +36,7 @@ function linkTargets(file: string): Set<string> {
 	const targets = new Set<string>();
 	for (const { line } of proseLines(read(file))) {
 		for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-			const target = decodeURIComponent(match[1]?.split("#")[0] ?? "");
+			const target = decodedLinkTarget(match[1]?.split("#")[0] ?? "");
 			if (target && !/^[a-z]+:/i.test(target)) {
 				targets.add(resolve(dirname(file), target));
 			}

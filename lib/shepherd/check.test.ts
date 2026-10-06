@@ -271,6 +271,37 @@ describe("checkWorkspace", () => {
 		});
 	});
 
+	test("reports a dangling work item symlink without crashing", () => {
+		const { workspace, tree } = fixture(
+			{},
+			{
+				symlinks: {
+					"root/.shepherd/work/done/missing": "does-not-exist",
+				},
+			},
+		);
+
+		expect(
+			finding(
+				checkWorkspace(workspace, tree, config(), TODAY),
+				"broken-symlink",
+			),
+		).toMatchObject({ file: "work/done/missing" });
+	});
+
+	test("keeps malformed percent escapes literal in the docs index", () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/docs/INDEX.md": "[Listed](bad%ZZ.md)",
+			"root/.shepherd/docs/bad%ZZ.md": "Listed",
+		});
+
+		expect(
+			checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "doc-unlisted",
+			),
+		).toEqual([]);
+	});
+
 	test("reports memory-index-missing", () => {
 		const { workspace, tree } = fixture({
 			"root/.shepherd/memories/note.md": MEMORY,

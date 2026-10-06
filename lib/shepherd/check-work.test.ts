@@ -196,6 +196,27 @@ describe("checkWork", () => {
 		]);
 	});
 
+	test("keeps malformed percent escapes literal in the archive index", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/archive/INDEX.md": "[Listed](2026-09/bad%ZZ/STATUS.md)",
+			"root/.shepherd/archive/2026-09/bad%ZZ/STATUS.md": "Listed",
+		});
+
+		expect(
+			checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "archive-unlisted",
+			),
+		).toEqual([]);
+	});
+
+	test("skips a stray archive month file", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/archive/2026-09": "not a directory",
+		});
+
+		expect(() => checkWork(workspace, config(), TODAY)).not.toThrow();
+	});
+
 	test("reports journal-rotation-due for sections before the local month", () => {
 		const { workspace } = fixture({
 			"root/.shepherd/journal.md":

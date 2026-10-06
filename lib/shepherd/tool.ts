@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	applyArchive,
 	archiveExitCode,
@@ -7,7 +7,12 @@ import {
 	renderArchive,
 } from "./archive";
 import { checkWorkspace, type Finding, type FindingLevel } from "./check";
-import { type ConfigProblem, loadConfig, splitConfigProblems } from "./config";
+import {
+	type Config,
+	type ConfigProblem,
+	loadConfig,
+	splitConfigProblems,
+} from "./config";
 import { contextTiers, renderContextTable } from "./context";
 import { dayOf, localDate } from "./dates";
 import { runningSessions, type ToolEnv } from "./sessions";
@@ -76,13 +81,27 @@ function invalidFlag(
 	return undefined;
 }
 
-function workspaceChain(cwd: string): string[] {
-	const chain: string[] = [];
-	for (let dir = resolve(cwd); ; dir = dirname(dir)) {
-		if (existsSync(join(dir, STATE_DIR))) chain.push(dir);
-		if (dir === dirname(dir)) break;
-	}
-	return chain.reverse();
+function isWithin(parent: string, child: string): boolean {
+	const path = relative(parent, child);
+	return (
+		path === "" ||
+		(!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path))
+	);
+}
+
+function configForWorkspace(
+	workspace: Workspace,
+	tree: WorkspaceTree,
+	toolEnv: ToolEnv,
+): Config {
+	return loadConfig({
+		home: toolEnv.home,
+		env: toolEnv.env,
+		workspaceChain: tree.workspaces
+			.filter((candidate) => isWithin(candidate.dir, workspace.dir))
+			.sort((left, right) => left.dir.length - right.dir.length)
+			.map(({ dir }) => dir),
+	});
 }
 
 function configProblemLine(problem: ConfigProblem): string {
@@ -133,11 +152,14 @@ function counts(findings: readonly Finding[]): Counts {
 function findingReports(
 	workspaces: readonly Workspace[],
 	tree: WorkspaceTree,
-	config: ReturnType<typeof loadConfig>,
+	configs: ReadonlyMap<string, Config>,
 	today: Date,
+	home: string,
 ) {
 	return workspaces.map((workspace) => {
-		const findings = checkWorkspace(workspace, tree, config, today, tree.home);
+		const config = configs.get(workspace.dir);
+		if (!config) throw new Error(`missing config for ${workspace.dir}`);
+		const findings = checkWorkspace(workspace, tree, config, today, home);
 		return {
 			name: workspace.name,
 			dir: workspace.dir,
@@ -209,7 +231,8 @@ async function runCheck(
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
 	tree: WorkspaceTree,
-	config: ReturnType<typeof loadConfig>,
+	config: Config,
+	configs: ReadonlyMap<string, Config>,
 	today: Date,
 ): Promise<ToolResult> {
 	if (flags.status === true && flags.context === true) {
@@ -221,7 +244,12 @@ async function runCheck(
 	}
 	const workspaces = selectWorkspaces(tree, selectors, "check");
 	if (flags.context === true) {
-		const rows = workspaces.map((workspace) => contextTiers(workspace, config));
+		const rows = workspaces.map((workspace) => {
+			const workspaceConfig = configs.get(workspace.dir);
+			if (!workspaceConfig)
+				throw new Error(`missing config for ${workspace.dir}`);
+			return contextTiers(workspace, workspaceConfig);
+		});
 		return flags.json === true
 			? result(
 					JSON.stringify(
@@ -254,7 +282,13 @@ async function runCheck(
 				)
 			: result(renderStatus(report, toolEnv.home), 0);
 	}
-	const reports = findingReports(workspaces, tree, config, today);
+	const reports = findingReports(
+		workspaces,
+		tree,
+		configs,
+		today,
+		toolEnv.home,
+	);
 	const total = totals(reports);
 	return flags.json === true
 		? result(
@@ -294,13 +328,22 @@ function runArchive(
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
 	tree: WorkspaceTree,
-	config: ReturnType<typeof loadConfig>,
+	configs: ReadonlyMap<string, Config>,
 	today: Date,
 ): ToolResult {
 	const scope = flags.recursive === true ? "archive-recursive" : "archive";
 	const workspaces = selectWorkspaces(tree, selectors, scope);
-	const planned = planArchive(workspaces, config, today);
-	const plan = flags.apply === true ? applyArchive(planned, tree) : planned;
+	const planned = planArchive(
+		workspaces,
+		(workspace) => {
+			const config = configs.get(workspace.dir);
+			if (!config) throw new Error(`missing config for ${workspace.dir}`);
+			return config;
+		},
+		today,
+	);
+	const plan =
+		flags.apply === true ? applyArchive(planned, tree, toolEnv.home) : planned;
 	const code = archiveExitCode(plan);
 	return flags.json === true
 		? result(
@@ -329,11 +372,11 @@ export async function runTool(
 
 	try {
 		const tree = discoverTree(toolEnv.cwd);
-		const config = loadConfig({
-			home: toolEnv.home,
-			env: toolEnv.env,
-			workspaceChain: workspaceChain(toolEnv.cwd),
-		});
+		const homeWorkspace = tree.workspaces.find(
+			(workspace) => workspace.dir === tree.home,
+		);
+		if (!homeWorkspace) throw new Error(`missing home workspace ${tree.home}`);
+		const config = configForWorkspace(homeWorkspace, tree, toolEnv);
 		const userProblems = splitConfigProblems(config.problems, toolEnv).user;
 		if (userProblems.length > 0) {
 			return result(
@@ -342,9 +385,25 @@ export async function runTool(
 				"stderr",
 			);
 		}
+		const configs = new Map(
+			tree.workspaces.map((workspace) => [
+				workspace.dir,
+				workspace.dir === homeWorkspace.dir
+					? config
+					: configForWorkspace(workspace, tree, toolEnv),
+			]),
+		);
 		return command === "check"
-			? await runCheck(args.slice(1), flags, toolEnv, tree, config, today)
-			: runArchive(args.slice(1), flags, toolEnv, tree, config, today);
+			? await runCheck(
+					args.slice(1),
+					flags,
+					toolEnv,
+					tree,
+					config,
+					configs,
+					today,
+				)
+			: runArchive(args.slice(1), flags, toolEnv, tree, configs, today);
 	} catch (error) {
 		if (error instanceof WorkspaceTreeError) {
 			return treeError(toolEnv.cwd, error);

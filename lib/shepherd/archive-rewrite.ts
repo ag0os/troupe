@@ -51,16 +51,31 @@ function rewriteFile(
 	file: string,
 	target: Workspace,
 	moves: readonly ArchivedItem[],
+	home?: string,
 ): boolean {
 	const before = read(file);
 	let text = before;
 	for (const move of moves) {
 		const slug = escapeRegExp(move.slug);
 		const end = "(?![A-Za-z0-9_-])";
-		const workspace = escapeRegExp(move.workspace);
+		const workspaceDir = dirname(dirname(dirname(dirname(move.from))));
 		text = text.replace(
-			new RegExp(`${workspace}/\\.shepherd/work/done/${slug}${end}`, "g"),
-			`${move.workspace}/.shepherd/archive/${move.month}/${move.slug}`,
+			new RegExp(
+				`(?<![A-Za-z0-9._-])((?:~\\/|\\/)?[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)/\\.shepherd/work/done/${slug}${end}`,
+				"g",
+			),
+			(all, reference: string) => {
+				const resolves = reference.startsWith("~/")
+					? home !== undefined &&
+						resolve(home, reference.slice(2)) === workspaceDir
+					: reference.startsWith("/")
+						? resolve(reference) === workspaceDir
+						: reference === move.workspace ||
+							resolve(dirname(file), reference) === workspaceDir;
+				return resolves
+					? `${reference}/.shepherd/archive/${move.month}/${move.slug}`
+					: all;
+			},
 		);
 		if (target.name !== move.workspace) continue;
 		text = text.replace(
@@ -90,12 +105,13 @@ function rewriteFile(
 export function rewriteArchiveReferences(
 	workspaces: readonly Workspace[],
 	moves: readonly ArchivedItem[],
+	home?: string,
 ): string[] {
 	if (moves.length === 0) return [];
 	const rewritten: string[] = [];
 	for (const workspace of workspaces) {
 		for (const file of liveFiles(workspace)) {
-			if (rewriteFile(file, workspace, moves)) rewritten.push(file);
+			if (rewriteFile(file, workspace, moves, home)) rewritten.push(file);
 		}
 	}
 	return rewritten;
