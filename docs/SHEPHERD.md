@@ -114,6 +114,9 @@ Maintenance commands run without starting an agent backend:
 ```bash
 shepherd tool check   [<workspace>...] [--all] [--status | --context] [--json] [--today YYYY-MM-DD]
 shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]
+shepherd tool init    [--master] [--json]
+shepherd tool doctor  [--json]
+shepherd tool guide   [<name>]
 ```
 
 `tool check` checks this workspace and every workspace beneath it. Name one or more workspaces to limit the check. By default it hides informational findings; `--all` shows them, `--status` reports tracked work and live sessions, `--context` reports words by context tier, and `--json` produces machine readable output. `--status` and `--context` cannot be combined.
@@ -121,6 +124,75 @@ shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today
 `tool archive` shows a dry run for the current workspace. Name workspaces to select them, or use `--recursive` to include this workspace and every workspace beneath it. `--apply` performs the planned item and journal moves and rewrites live references. `--json` produces machine readable output. Both commands accept `--today YYYY-MM-DD` for a repeatable date during diagnosis or testing.
 
 Exit code 0 means the command completed without an error. For the default check, exit code 1 means at least one error finding; for archive, it means at least one move was skipped. Exit code 2 means invalid usage, an invalid date or selector, an invalid user configuration, or a directory that is not a workspace. Status and context reports use exit code 0 when they run successfully.
+
+For a fresh machine, follow [SETUP.md](SETUP.md).
+
+### Init
+
+`tool init` creates `.shepherd/` in the launch directory. Use `--cwd <dir>` to select another root. Nothing that exists is overwritten: existing files, directories and symlinks are kept. Required parent directories are created as needed; symlinked parent directories are supported. A file blocking a required directory or another write error stops the run, reports the failed entry and keeps completed writes. `--json` reports `created`, `kept` and `failed` entries, with paths relative to `.shepherd/`.
+
+Every workspace gets these entries, in order:
+
+| Path | Content |
+|------|---------|
+| `CURRENT.md` | Work index and first move: run the init conversation |
+| `MEMORY.md` | Memory index |
+| `journal.md` | Journal with the current date |
+| `docs/INDEX.md` | Documentation index |
+| `docs/STATUS-template.md` | Work item status template |
+| `archive/INDEX.md` | Archive index |
+| `work/todo/`, `work/in-progress/`, `work/done/` | Empty directories |
+
+`--master` adds the shared layer for a root with workspaces beneath it:
+
+| Path | Content |
+|------|---------|
+| `shared/user.md` | User context skeleton |
+| `shared/machine.md` | Machine context skeleton |
+| `shared/roster.md` | Workspace roster skeleton |
+| `shared/tools.md` | Tool notes skeleton |
+| `integrations/shared.md` | Shared module inherited by workspaces beneath the root |
+
+Init writes no `charter.md`. Launch Shepherd afterwards to agree the charter; `shepherd tool guide charter` supplies its questions and shape. Running init again fills only missing entries; adding `--master` to an existing workspace adds the shared layer.
+
+### Doctor
+
+`tool doctor` checks the machine from the launch directory, which need not be a workspace. It reads files and runs no external commands. Each check reports `ok`, `gap` with an edit to apply by hand, or `skip` when a dependency is absent. It never changes settings. `--json` reports check ids, statuses, edits and totals.
+
+| Check id | What it checks |
+|----------|----------------|
+| `path:claude` | Claude Code is executable on PATH |
+| `path:codex` | Codex is executable on PATH; skipped when Codex is not configured |
+| `path:herdr` | Herdr is executable on PATH; absence skips this and its hook checks |
+| `path:jq` | `jq` is executable on PATH for the status line |
+| `path:shepherd` | Shepherd on PATH resolves to this binary, comparing realpaths |
+| `config:user` | User config is absent or valid; a configured `codex.homeFile` is readable and names an absolute existing directory; `CODEX_HOME`, if set, is absolute |
+| `claude:settings` | Claude settings are absent or a readable JSON object |
+| `claude:cross-session-inbound` | `crossSessionInbound` is `"accept"` |
+| `claude:status-line` | A command status line mentions `used_percentage` |
+| `claude:herdr-hook` | A SessionStart hook names an existing `herdr-agent-state.sh` at an absolute path |
+| `codex:home:<path>` | Each Codex home exists and contains `auth.json` |
+| `codex:herdr-hook:<path>` | Each home's `hooks.json` has a SessionStart hook naming an existing `herdr-agent-state.sh` at an absolute path |
+
+Claude settings come from `~/.claude/settings.json`, or an absolute `CLAUDE_CONFIG_DIR`. Bad settings skip the dependent Claude checks. Codex homes come from user config, an absolute `CODEX_HOME`, and existing `~/.codex*` directories, deduplicated by realpath. With no Codex configuration or homes, its home check is skipped. If HOME cannot be listed, `codex:home` reports a skip while explicitly selected homes are still checked. An `auth.json` file records a login; it does not prove the token is live.
+
+Printed edits cover installation, PATH, JSON settings, logins and Herdr hooks. Herdr installs Codex hooks into `~/.codex`; for another home, link its `hooks.json` and `herdr-agent-state.sh`. Doctor reports bad user config as gaps; init and guide never read it.
+
+### Guides and exit codes
+
+`tool guide` lists three shipped guides. `tool guide <name>` prints one to stdout:
+
+| Name | Purpose |
+|------|---------|
+| `charter` | The init conversation's questions and the charter's shape |
+| `memory` | The memory file format and what each type holds |
+| `tools` | Generic traps in Claude Code delegates, the Codex CLI and the shell |
+
+Guide accepts no command flags. Init accepts only `--master` and `--json`; doctor accepts only `--json`. These three commands run without an existing workspace and use the launch directory, selected with `--cwd` if needed. `--model` applies only to launches and is refused with exit 2.
+
+For init, doctor and guide, exit 0 means done. Doctor exits 1 when it finds at least one gap; init exits 1 on a write failure and lists completed writes without rolling them back. Exit 2 means invalid usage, an unknown guide name or a flag belonging to another command. Under `--show-prompt`, a tool refusal exits 1, not 2.
+
+### Configuration
 
 Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, and the noninherited `sessionPrefix`. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
 
