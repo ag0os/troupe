@@ -1,24 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexDefaults, passthroughModelToken } from "./codex-defaults";
 import type { Config } from "./config";
+import { launchKind } from "./session-name";
 import type { ToolEnv } from "./sessions";
+import { fakeToolEnv, makeTree } from "./test-support";
 
-const fixtures: string[] = [];
+const fixtures: ReturnType<typeof makeTree>[] = [];
 
 afterEach(() => {
 	for (const fixture of fixtures.splice(0)) {
-		rmSync(fixture, { recursive: true, force: true });
+		fixture.cleanup();
 	}
 });
 
 function fixture(): string {
-	const root = mkdtempSync(
-		join(process.env.TMPDIR ?? "/tmp", "shepherd-codex-defaults-"),
-	);
-	fixtures.push(root);
-	return root;
+	const tree = makeTree({}, { prefix: "shepherd-codex-defaults-" });
+	fixtures.push(tree);
+	return tree.root;
 }
 
 function config(codex: Config["codex"] = {}): Config {
@@ -34,14 +34,7 @@ function environment(
 	home: string,
 	env: Readonly<Record<string, string | undefined>> = {},
 ): ToolEnv {
-	return {
-		cwd: home,
-		home,
-		env,
-		now: new Date(2026, 9, 5),
-		runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-		pidAlive: () => false,
-	};
+	return fakeToolEnv({ home, env });
 }
 
 describe("codexDefaults", () => {
@@ -101,15 +94,22 @@ describe("codexDefaults", () => {
 		const home = fixture();
 		const codexHome = join(home, "account");
 		mkdirSync(codexHome);
-		for (const kind of ["resume", "fork"] as const) {
+		for (const [backend, passthrough] of [
+			["codex", ["resume", "id"]],
+			["codex", ["fork", "id"]],
+			["claude", ["--resume", "x", "--fork-session"]],
+		] as const) {
+			const kind = launchKind(backend, passthrough);
+			expect(kind).toBe("resume");
 			const result = codexDefaults(
 				config({ home: codexHome, model: "configured", effort: "high" }),
 				environment(home),
-				[],
+				passthrough,
 				kind,
 				false,
 			);
 			expect(result.codexHome).toBe(codexHome);
+			expect(result.headerLine).toBe(`- Codex home: ${codexHome} (config)`);
 			expect(result).not.toHaveProperty("model");
 			expect(result).not.toHaveProperty("effort");
 		}

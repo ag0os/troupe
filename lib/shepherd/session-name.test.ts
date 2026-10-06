@@ -43,19 +43,20 @@ describe("launchKind", () => {
 			"--teleport=task",
 		]) {
 			expect(launchKind("claude", [token])).toBe("resume");
+			expect(launchKind("claude", [token, "--fork-session"])).toBe("resume");
 		}
 	});
 
-	test("distinguishes Claude forks and ignores fork-session on its own", () => {
+	test("classifies Claude forks as resumes and ignores fork-session on its own", () => {
 		expect(launchKind("claude", ["--resume", "x", "--fork-session"])).toBe(
-			"fork",
+			"resume",
 		);
 		expect(launchKind("claude", ["--fork-session"])).toBe("new");
 	});
 
 	test("recognizes Codex subcommands without treating Claude tokens as Codex", () => {
 		expect(launchKind("codex", ["resume"])).toBe("resume");
-		expect(launchKind("codex", ["fork"])).toBe("fork");
+		expect(launchKind("codex", ["fork", "id"])).toBe("resume");
 		expect(launchKind("codex", ["-c"])).toBe("new");
 	});
 
@@ -73,7 +74,9 @@ describe("sessionNameFor", () => {
 		expect(naming()).toEqual({
 			kind: "new",
 			sessionName: "forge-1005",
-			headerLines: ["- Session name: forge-1005 (set by the launcher)"],
+			headerLines: [
+				"- Session name: forge-1005 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
+			],
 		});
 	});
 
@@ -97,7 +100,9 @@ describe("sessionNameFor", () => {
 		]) {
 			expect(naming({ passthrough })).toEqual({
 				kind: "new",
-				headerLines: ["- Session name: forge-1005 (given at launch)"],
+				headerLines: [
+					"- Session name: forge-1005 (given at launch: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
+				],
 			});
 		}
 	});
@@ -125,20 +130,41 @@ describe("sessionNameFor", () => {
 		});
 	});
 
-	test("a resume keeps its name while a fork receives a new name", () => {
-		expect(naming({ passthrough: ["--resume"] })).toEqual({
-			kind: "resume",
-			headerLines: ["- Session name: kept from the resumed session"],
-		});
-		expect(
-			naming({ passthrough: ["--resume", "x", "--fork-session"] }),
-		).toMatchObject({ kind: "fork", sessionName: "forge-1005" });
-		expect(
-			naming({
-				passthrough: ["--continue", "--fork-session"],
-				requestedName: "forked-1005",
-			}),
-		).toMatchObject({ kind: "fork", sessionName: "forked-1005" });
+	test("resumes and forks emit no line and refuse launch names", () => {
+		for (const [backend, passthrough] of [
+			["claude", ["--resume"]],
+			["claude", ["--resume", "x"]],
+			["claude", ["--resume", "x", "--fork-session"]],
+			["claude", ["--continue", "--fork-session"]],
+			["codex", ["resume"]],
+			["codex", ["resume", "id"]],
+			["codex", ["fork", "id"]],
+		] as const) {
+			expect(naming({ backend, passthrough: [...passthrough] })).toEqual({
+				kind: "resume",
+				headerLines: [],
+			});
+			expect(
+				naming({
+					backend,
+					passthrough: [...passthrough],
+					requestedName: "forge-1005",
+				}),
+			).toEqual({
+				kind: "resume",
+				headerLines: [],
+				error:
+					"a resumed session keeps its name; rename it from inside the session",
+			});
+			if (backend === "claude") {
+				expect(
+					naming({ backend, passthrough: [...passthrough, "-n", "forge-1005"] })
+						.error,
+				).toBe(
+					"a resumed session keeps its name; rename it from inside the session",
+				);
+			}
+		}
 	});
 
 	test("applies prefix sanitation, reserved prefix, config, and suffix rules", () => {
@@ -173,24 +199,14 @@ describe("sessionNameFor", () => {
 		expect(naming({ backend: "codex" })).toEqual({
 			kind: "new",
 			headerLines: [
-				"- Session name: not set (Codex takes no name at launch; suggested: forge-1005, through its rename dialog)",
+				"- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested forge-1005, then record the name the host reports)",
 			],
 		});
 		expect(
 			naming({ backend: "codex", takenNames: new Set(["forge-1005"]) }),
 		).toMatchObject({
 			headerLines: [
-				"- Session name: not set (Codex takes no name at launch; suggested: forge-1005b, through its rename dialog)",
-			],
-		});
-		expect(naming({ backend: "codex", passthrough: ["resume"] })).toEqual({
-			kind: "resume",
-			headerLines: ["- Session name: kept from the resumed session"],
-		});
-		expect(naming({ backend: "codex", passthrough: ["fork"] })).toMatchObject({
-			kind: "fork",
-			headerLines: [
-				"- Session name: not set (Codex takes no name at launch; suggested: forge-1005, through its rename dialog)",
+				"- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested forge-1005b, then record the name the host reports)",
 			],
 		});
 		expect(

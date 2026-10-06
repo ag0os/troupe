@@ -36,7 +36,13 @@ The session prompt is layered, in order:
 | Workspace charter | `.shepherd/charter.md` in the launch directory | no, read at launch |
 | Session context header | generated (cwd, state dir, local date, backend, session name, Codex home when selected, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
 
-On interactive launches the header has a `Session name` line. Interactive Codex launches also have a `Codex home` line.
+On new interactive launches the header has a `Session name` line; resumes emit no such line. The line uses these wordings (with `forge-1006` as the example name):
+
+- Launcher-named: `- Session name: forge-1006 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)`
+- `-n` after `--`: `- Session name: forge-1006 (given at launch: use it as it stands in CURRENT.md and in messages, do not rename yourself)`
+- Codex: `- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested forge-1006, then record the name the host reports)`
+
+Interactive Codex launches also have a `Codex home` line.
 
 The charter comes after every module because it is the contract: where it and a module disagree about how the workspace works, the charter wins. Modules stay authoritative about what a capability can do and about their safety rules.
 

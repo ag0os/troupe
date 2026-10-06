@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { AgentMode, Backend } from "../agent-format/types";
 
-export type LaunchKind = "new" | "resume" | "fork";
+export type LaunchKind = "new" | "resume";
 
 export type SessionNameOptions = {
 	backend: Backend;
@@ -52,12 +52,11 @@ export function launchKind(
 ): LaunchKind {
 	const options = backendOptions(passthrough);
 	if (backend === "codex") {
-		if (options.includes("fork")) return "fork";
-		return options.includes("resume") ? "resume" : "new";
+		return options.includes("resume") || options.includes("fork")
+			? "resume"
+			: "new";
 	}
-	const resumes = options.some(isClaudeResume);
-	if (!resumes) return "new";
-	return options.includes("--fork-session") ? "fork" : "resume";
+	return options.some(isClaudeResume) ? "resume" : "new";
 }
 
 function claudePassthroughName(
@@ -156,12 +155,8 @@ export function sessionNameFor(options: SessionNameOptions): SessionNameResult {
 		if (error) return { kind, headerLines: [], error };
 	}
 
-	if (options.mode !== "interactive") return { kind, headerLines: [] };
-	if (kind === "resume") {
-		return {
-			kind,
-			headerLines: ["- Session name: kept from the resumed session"],
-		};
+	if (options.mode !== "interactive" || kind !== "new") {
+		return { kind, headerLines: [] };
 	}
 
 	if (options.requestedName) {
@@ -169,14 +164,16 @@ export function sessionNameFor(options: SessionNameOptions): SessionNameResult {
 			kind,
 			sessionName: options.requestedName,
 			headerLines: [
-				`- Session name: ${options.requestedName} (set by the launcher)`,
+				`- Session name: ${options.requestedName} (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)`,
 			],
 		};
 	}
 	if (passthroughName !== undefined) {
 		return {
 			kind,
-			headerLines: [`- Session name: ${passthroughName} (given at launch)`],
+			headerLines: [
+				`- Session name: ${passthroughName} (given at launch: use it as it stands in CURRENT.md and in messages, do not rename yourself)`,
+			],
 		};
 	}
 
@@ -191,13 +188,15 @@ export function sessionNameFor(options: SessionNameOptions): SessionNameResult {
 		return {
 			kind,
 			headerLines: [
-				`- Session name: not set (Codex takes no name at launch; suggested: ${name}, through its rename dialog)`,
+				`- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested ${name}, then record the name the host reports)`,
 			],
 		};
 	}
 	return {
 		kind,
 		sessionName: name,
-		headerLines: [`- Session name: ${name} (set by the launcher)`],
+		headerLines: [
+			`- Session name: ${name} (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)`,
+		],
 	};
 }

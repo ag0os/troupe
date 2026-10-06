@@ -1074,6 +1074,9 @@ describe("composition order (B-008, AC #1)", () => {
 				cwd,
 			);
 			const header = systemPrompt.split(PROMPT_SEPARATOR).at(-1);
+			expect(
+				header?.replaceAll(cwd, "<cwd>").replaceAll(root, "<root>"),
+			).toMatchSnapshot(`new ${backend} header`);
 			expect(header).toBe(
 				[
 					"# Shepherd session context",
@@ -1083,8 +1086,8 @@ describe("composition order (B-008, AC #1)", () => {
 					"- Date: 2026-10-02",
 					`- Backend: ${label}`,
 					backend === "claude"
-						? "- Session name: ws-1002 (set by the launcher)"
-						: "- Session name: not set (Codex takes no name at launch; suggested: ws-1002, through its rename dialog)",
+						? "- Session name: ws-1002 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)"
+						: "- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested ws-1002, then record the name the host reports)",
 					...(backend === "codex"
 						? [`- Codex home: ${join(root, "home", ".codex")} (Codex default)`]
 						: []),
@@ -1493,13 +1496,18 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 			}),
 		);
 		try {
-			for (const passthrough of [["resume"], ["fork"]]) {
+			for (const passthrough of [
+				["resume", "id"],
+				["fork", "id"],
+			]) {
 				const result = extension.prepare(
 					context("codex", cwd, { passthrough }),
 				);
 				expect(result).toMatchObject({ codexHome });
 				expect(result).not.toHaveProperty("model");
 				expect(result).not.toHaveProperty("effort");
+				expect(result).not.toHaveProperty("sessionName");
+				expect(JSON.stringify(result)).not.toMatch(/- Session name:/);
 			}
 			const explicit = extension.prepare(
 				context("codex", cwd, {
@@ -1564,7 +1572,7 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 		expect(prepared).toMatchObject({ sessionName: "ws-1002" });
 		const envelope = await preview([], cwd);
 		expect(envelope.systemPrompt).toContain(
-			"- Session name: ws-1002 (set by the launcher)",
+			"- Session name: ws-1002 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
 		);
 		expect(envelope.argv.filter((token) => token === "-n")).toHaveLength(1);
 		expect(envelope.argv[envelope.argv.indexOf("-n") + 1]).toBe("ws-1002");
@@ -1580,7 +1588,7 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 		expect(result).toMatchObject({ sessionName: "ws-1107" });
 		expect(JSON.stringify(result)).toContain("- Date: 2026-11-07");
 		expect(JSON.stringify(result)).toContain(
-			"- Session name: ws-1107 (set by the launcher)",
+			"- Session name: ws-1107 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
 		);
 	});
 
@@ -1606,7 +1614,7 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 			);
 			expect(result).toMatchObject({ sessionName: "workspace-1005b" });
 			expect(JSON.stringify(result)).toContain(
-				"- Session name: workspace-1005b (set by the launcher)",
+				"- Session name: workspace-1005b (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
 			);
 		} finally {
 			tree.cleanup();
@@ -1626,7 +1634,7 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 			);
 			expect(result).not.toHaveProperty("sessionName");
 			expect(JSON.stringify(result)).toContain(
-				"suggested: workspace-1005b, through its rename dialog",
+				"suggested workspace-1005b, then record the name the host reports",
 			);
 		} finally {
 			tree.cleanup();
@@ -1640,14 +1648,14 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 		expect(typed.argv.filter((token) => token === "-n")).toHaveLength(1);
 		expect(typed.argv[typed.argv.indexOf("-n") + 1]).toBe("forge-1002");
 		expect(typed.systemPrompt).toContain(
-			"- Session name: forge-1002 (set by the launcher)",
+			"- Session name: forge-1002 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
 		);
 
 		const passthrough = await preview(["--", "-n", "tail-1002"], cwd);
 		expect(passthrough.code).toBe(0);
 		expect(passthrough.argv.filter((token) => token === "-n")).toHaveLength(1);
 		expect(passthrough.systemPrompt).toContain(
-			"- Session name: tail-1002 (given at launch)",
+			"- Session name: tail-1002 (given at launch: use it as it stands in CURRENT.md and in messages, do not rename yourself)",
 		);
 	});
 
@@ -1664,6 +1672,18 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 				"a resumed session keeps its name",
 			],
 			[
+				["-n", "forge-1002", "--", "--resume", "x", "--fork-session"],
+				"a resumed session keeps its name",
+			],
+			[
+				["--", "--resume", "x", "--fork-session", "-n", "forge-1002"],
+				"a resumed session keeps its name",
+			],
+			[
+				["--backend", "codex", "-n", "forge-1002", "--", "fork", "id"],
+				"a resumed session keeps its name",
+			],
+			[
 				["--backend", "codex", "-n", "forge-1002"],
 				"Codex takes no session name at launch",
 			],
@@ -1675,37 +1695,38 @@ describe("framework flags and passthrough (D-028, AC #6)", () => {
 		}
 	});
 
-	test("resumes keep their names, forks get names, and print mode gets no name", async () => {
+	test("resumes and forks emit no Session name line, and print mode gets no name", async () => {
 		const { cwd } = build("plain");
-		const resumed = await preview(["--", "--resume", "abc"], cwd);
-		expect(resumed.systemPrompt).toContain(
-			"- Session name: kept from the resumed session",
-		);
-		expect(resumed.argv).not.toContain("-n");
-
-		const forked = await preview(
-			["--", "--resume", "abc", "--fork-session"],
-			cwd,
-		);
-		expect(forked.systemPrompt).toContain(
-			"- Session name: ws-1002 (set by the launcher)",
-		);
-		expect(forked.argv[forked.argv.indexOf("-n") + 1]).toBe("ws-1002");
+		for (const argv of [
+			["--", "--resume", "x"],
+			["--", "--resume", "x", "--fork-session"],
+			["--backend", "codex", "--", "resume", "id"],
+			["--backend", "codex", "--", "fork", "id"],
+		]) {
+			const envelope = await preview(argv, cwd);
+			expect({ code: envelope.code, stderr: envelope.stderr }).toEqual({
+				code: 0,
+				stderr: "",
+			});
+			expect(envelope.systemPrompt).not.toMatch(/^- Session name:/m);
+			expect(envelope.argv).not.toContain("-n");
+			for (const token of argv.slice(argv.indexOf("--") + 1)) {
+				expect(envelope.argv).toContain(token);
+			}
+		}
 
 		const printed = await preview(["--print", "summary"], cwd);
 		expect(printed.systemPrompt).not.toContain("- Session name:");
 		expect(printed.argv).not.toContain("-n");
 	});
 
-	test("Codex suggests a name for new sessions and forks", async () => {
+	test("Codex suggests a name for new sessions", async () => {
 		const { cwd } = build("plain");
-		for (const tail of [[], ["--", "fork"]]) {
-			const envelope = await preview(["--backend", "codex", ...tail], cwd);
-			expect(envelope.systemPrompt).toContain(
-				"- Session name: not set (Codex takes no name at launch; suggested: ws-1002, through its rename dialog)",
-			);
-			expect(envelope.argv).not.toContain("-n");
-		}
+		const envelope = await preview(["--backend", "codex"], cwd);
+		expect(envelope.systemPrompt).toContain(
+			"- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested ws-1002, then record the name the host reports)",
+		);
+		expect(envelope.argv).not.toContain("-n");
 	});
 
 	test("an interactive launch starts in the requested --cwd with the composed prompt", async () => {

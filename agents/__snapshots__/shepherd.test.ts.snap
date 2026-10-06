@@ -2218,3 +2218,34 @@ The child's mission.
 ["codex","-c","developer_instructions=<system prompt, as above>"]
 "
 `;
+
+exports[`composition order (B-008, AC #1) the header carries cwd, state dir, the fixed date and the legacy backend label: new claude header 1`] = `
+"# Shepherd session context
+
+- Launch directory: <cwd>
+- State directory: <cwd>/.shepherd
+- Date: 2026-10-02
+- Backend: claude-cli
+- Session name: ws-1002 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)
+- Enclosing workspace: none
+- Workspaces beneath: none within 3 levels
+- Gated modules loaded: none
+- Charter: loaded
+- Workspace-local integrations loaded: local-a.md"
+`;
+
+exports[`composition order (B-008, AC #1) the header carries cwd, state dir, the fixed date and the legacy backend label: new codex header 1`] = `
+"# Shepherd session context
+
+- Launch directory: <cwd>
+- State directory: <cwd>/.shepherd
+- Date: 2026-10-02
+- Backend: codex-cli
+- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested ws-1002, then record the name the host reports)
+- Codex home: <root>/home/.codex (Codex default)
+- Enclosing workspace: none
+- Workspaces beneath: none within 3 levels
+- Gated modules loaded: none
+- Charter: loaded
+- Workspace-local integrations loaded: local-a.md"
+`;

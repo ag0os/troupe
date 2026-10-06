@@ -115,7 +115,9 @@ export function promptWords(dir: string, now: Date = new Date()): number {
 			dir,
 			"claude-cli",
 			findEnclosingWorkspace(dir),
-			[`- Session name: ${name} (set by the launcher)`],
+			[
+				`- Session name: ${name} (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)`,
+			],
 			now,
 		)
 			.filter((fragment) => fragment.length > 0)
