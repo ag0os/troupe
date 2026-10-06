@@ -205,5 +205,11 @@ describe("sessionNameFor", () => {
 			kind: "new",
 			headerLines: [],
 		});
+		expect(naming({ mode: "print", requestedName: "invalid" })).toEqual({
+			kind: "new",
+			headerLines: [],
+			error:
+				"session name must start with a letter and contain at least one hyphen-separated letters-or-digits segment",
+		});
 	});
 });

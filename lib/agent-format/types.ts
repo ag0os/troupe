@@ -120,11 +120,11 @@ export interface PrepareContext {
 	readonly flags: Readonly<Record<string, string | boolean>>;
 	readonly args: readonly string[];
 	/** Verbatim backend tail after the user's standalone `--`; always set by the runner. */
-	readonly passthrough?: readonly string[];
+	readonly passthrough: readonly string[];
 	readonly cwd: string;
 	readonly backend: Backend;
 	/** Whether `model` came from `--model`; always set by the runner. */
-	readonly modelFromFlag?: boolean;
+	readonly modelFromFlag: boolean;
 	/** Effective mode after `--print`, not `spec.mode`. */
 	readonly mode: AgentMode;
 	/** True under `--show-prompt`. */

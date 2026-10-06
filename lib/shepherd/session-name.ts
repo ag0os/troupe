@@ -151,6 +151,10 @@ export function sessionNameFor(options: SessionNameOptions): SessionNameResult {
 			error: "session name given twice: --name and a name after --",
 		};
 	}
+	if (options.requestedName) {
+		const error = validateRequestedName(options.requestedName);
+		if (error) return { kind, headerLines: [], error };
+	}
 
 	if (options.mode !== "interactive") return { kind, headerLines: [] };
 	if (kind === "resume") {
@@ -161,8 +165,6 @@ export function sessionNameFor(options: SessionNameOptions): SessionNameResult {
 	}
 
 	if (options.requestedName) {
-		const error = validateRequestedName(options.requestedName);
-		if (error) return { kind, headerLines: [], error };
 		return {
 			kind,
 			sessionName: options.requestedName,

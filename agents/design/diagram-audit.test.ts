@@ -509,8 +509,10 @@ describe("preview is side-effect free (D-012, AC #3)", () => {
 				const ctx = (preview: boolean) => ({
 					flags: {},
 					args: subject(id).args,
+					passthrough: [],
 					cwd,
 					backend: "claude" as const,
+					modelFromFlag: false,
 					mode,
 					preview,
 					spec: spec(id),

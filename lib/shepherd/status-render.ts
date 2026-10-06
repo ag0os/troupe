@@ -50,7 +50,7 @@ export function statusReport(
 	running: RunningSessionsResult,
 	home: string,
 ): StatusReport {
-	const reports = liveReports(workspaces, tree, running);
+	const reports = liveReports(workspaces, tree, running, home);
 	return {
 		workspaces: workspaces.map((workspace) => {
 			const text = currentText(workspace);
@@ -129,7 +129,13 @@ function liveLines(live: StatusLiveReport, home: string): string[] {
 			`  unchecked ${live.unchecked.map((session) => session.name).join(", ")} (subagent, or unavailable session adapter: can't be checked)`,
 		);
 	}
-	if (live.record) lines.push(`  ${live.record}`);
+	if (live.record) {
+		lines.push(
+			live.record.startsWith("record up to date")
+				? `  record    ${live.record.slice("record ".length)}`
+				: `  STALE?    ${live.record.slice("STALE? ".length)}`,
+		);
+	}
 	return lines;
 }
 

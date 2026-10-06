@@ -41,7 +41,7 @@ function fixture(files: Record<string, string>) {
 
 describe("liveReports", () => {
 	test("classifies every listed and running state", () => {
-		const { tree } = fixture({
+		const { result, tree } = fixture({
 			"root/.shepherd/CURRENT.md": `## Live sessions
 - ok-one
 - gone-one
@@ -60,6 +60,7 @@ describe("liveReports", () => {
 				session("loose-one", join(tree.root.dir, "repo")),
 				session("codex-one", tree.root.dir, "codex"),
 			]),
+			result.root,
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.ok).toEqual(["ok-one", "duplicate-one", "codex-one"]);
@@ -75,7 +76,7 @@ describe("liveReports", () => {
 	});
 
 	test("uses exact ownership for parents and containment for leaves", () => {
-		const { tree } = fixture({
+		const { result, tree } = fixture({
 			"root/.shepherd/CURRENT.md": "",
 			"root/a/.shepherd/CURRENT.md": "",
 		});
@@ -89,6 +90,7 @@ describe("liveReports", () => {
 				session("child-one", join(child.dir, "repo")),
 				session("between-one", join(tree.root.dir, "other")),
 			]),
+			result.root,
 		);
 
 		expect(
@@ -102,7 +104,7 @@ describe("liveReports", () => {
 		]);
 	});
 
-	test("attributes an external directory by the longest mentioned path", () => {
+	test("attributes only complete mentioned paths under the injected home", () => {
 		const result = makeTree({
 			"root/.shepherd/CURRENT.md": "",
 			"root/a/.shepherd/CURRENT.md": "",
@@ -111,32 +113,59 @@ describe("liveReports", () => {
 		const tree = discoverTree(join(result.root, "root"));
 		const child = tree.workspaces[1];
 		if (!child) throw new Error("child workspace missing");
-		const external = join(result.root, "projects", "app");
+		const home = join(result.root, "home");
+		const projects = join(home, "Projects");
+		const app = join(projects, "app");
+		const arbitrary = join(result.root, "outside-home");
+		const insideRoot = join(tree.root.dir, "other");
 		writeFileSync(
 			join(tree.root.state, "charter.md"),
-			`Owns ${join(result.root, "projects")}`,
+			`Owns ${projects}. Also ${arbitrary} and ${insideRoot}.`,
 		);
-		writeFileSync(join(child.state, "charter.md"), `Owns ${external}`);
+		writeFileSync(join(child.state, "charter.md"), "Owns ~/Projects/app.");
 
 		const reports = liveReports(
 			tree.workspaces,
 			tree,
 			running([
-				session("external-one", join(external, "src")),
-				session("unknown-one", join(result.root, "elsewhere")),
+				session("tilde-one", join(app, "src")),
+				session("absolute-one", join(projects, "other")),
+				session("absolute-outside-home", join(arbitrary, "repo")),
+				session("inside-root-reference", join(insideRoot, "repo")),
 			]),
+			home,
 		);
 
 		expect(
 			reports.byWorkspace.get(child.name)?.unlisted.map(({ name }) => name),
-		).toEqual(["external-one"]);
+		).toEqual(["tilde-one"]);
+		expect(
+			reports.byWorkspace.get(tree.root.name)?.unlisted.map(({ name }) => name),
+		).toEqual(["absolute-one"]);
 		expect(reports.unattributed.map(({ name }) => name)).toEqual([
-			"unknown-one",
+			"absolute-outside-home",
+			"inside-root-reference",
 		]);
 	});
 
+	test("matches a running session by name regardless of its harness", () => {
+		const { result, tree } = fixture({
+			"root/.shepherd/CURRENT.md":
+				"## Live sessions\n- delegate-one codex, coordinated elsewhere",
+		});
+		const report = liveReports(
+			tree.workspaces,
+			tree,
+			running([session("delegate-one", tree.root.dir, "claude")]),
+			result.root,
+		).byWorkspace.get(tree.root.name);
+
+		expect(report?.ok).toEqual(["delegate-one"]);
+		expect(report?.gone).toEqual([]);
+	});
+
 	test("marks sessions unchecked when their adapter is unavailable", () => {
-		const { tree } = fixture({
+		const { result, tree } = fixture({
 			"root/.shepherd/CURRENT.md":
 				"## Live sessions\n- claude-one\n- codex-one codex",
 		});
@@ -148,6 +177,7 @@ describe("liveReports", () => {
 				{ available: false, reason: "Claude session registry not found" },
 				{ available: false, reason: "not inside Herdr" },
 			),
+			result.root,
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.gone).toEqual([]);
@@ -167,6 +197,7 @@ describe("liveReports", () => {
 			tree.workspaces,
 			tree,
 			running([session("delegate-one", join(result.root, "external", "repo"))]),
+			result.root,
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.ok).toEqual(["delegate-one"]);

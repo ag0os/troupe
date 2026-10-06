@@ -85,7 +85,7 @@ export function statusItems(text: string): StatusItem[] {
 	const knownPattern = new RegExp(
 		`^(?:[-*]\\s+)?\\*\\*(${STATUS_PATTERN})\\b[^*]*?(?:\\*\\*)?\\s*[:(—-]?\\s*(.*)$`,
 	);
-	const unknownPattern = /^[-*]\s+\*\*([A-Z]{3,})\*\*/;
+	const unknownPattern = /^[-*]\s+\*\*([A-Z]{3,})\b[:\s]*\*\*/;
 	const items: StatusItem[] = [];
 
 	for (const { n, line } of lines) {

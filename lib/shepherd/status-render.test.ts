@@ -17,7 +17,7 @@ function available(sessions: Running[] = []): AdapterResult {
 
 test("renders complete workspace blocks and the footer", () => {
 	const fixture = makeTree({
-		"home/root/.shepherd/charter.md": "Owns /projects/app",
+		"home/root/.shepherd/charter.md": "Owns ~/projects/app",
 		"home/root/.shepherd/CURRENT.md": `Updated: 2026-10-05, 09:00
 ## Items
 - **ASK**: choose an approach
@@ -38,7 +38,7 @@ No NEXT is set
 	};
 	const loose: Running = {
 		name: "loose-one",
-		cwd: "/projects/app/repo",
+		cwd: join(home, "projects/app/repo"),
 		status: "idle",
 		harness: "claude",
 	};
@@ -62,7 +62,7 @@ root  (updated 2026-10-05)
   live      delegate-one
   ORPHANED  delegate-one running, but no Shepherd session runs in this workspace
   GONE      gone-one is listed (CURRENT.md:8) but not running
-  UNLISTED  loose-one is running (idle, /projects/app/repo) but no CURRENT lists it
+  UNLISTED  loose-one is running (idle, ~/projects/app/repo) but no CURRENT lists it
 
 1 item(s) waiting on the user's decision (ASK).
 1 item(s) use an unknown status word.
@@ -132,4 +132,39 @@ test("returns the status JSON shape", () => {
 			codex: unavailable,
 		},
 	});
+});
+
+test("aligns record freshness labels without changing the stored value", () => {
+	const fixture = makeTree({
+		"home/root/.shepherd/CURRENT.md": "Updated: today",
+	});
+	cleanups.push(fixture.cleanup);
+	const home = join(fixture.root, "home");
+	const tree = discoverTree(join(home, "root"));
+	const unavailable: AdapterResult = {
+		available: false,
+		reason: "not available",
+	};
+	const base = statusReport(
+		tree.workspaces,
+		tree,
+		{
+			sessions: [],
+			claude: unavailable,
+			herdr: unavailable,
+			codex: unavailable,
+		},
+		home,
+	);
+	const live = base.workspaces[0]?.live;
+	if (!live) throw new Error("workspace report missing");
+
+	for (const [record, line] of [
+		["record up to date (timestamps)", "  record    up to date (timestamps)"],
+		["STALE? 45 min behind", "  STALE?    45 min behind"],
+	] as const) {
+		live.record = record;
+		expect(renderStatus(base, home)).toContain(`\n${line}\n`);
+		expect(live.record).toBe(record);
+	}
 });

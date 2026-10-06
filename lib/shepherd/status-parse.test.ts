@@ -61,6 +61,17 @@ No NEXT is set`;
 		]);
 	});
 
+	test("detects an unknown word whose colon is inside the bold markers", () => {
+		expect(statusItems("## Items\n- **BLOCKED:** needs access")).toEqual([
+			{
+				word: "BLOCKED",
+				known: false,
+				text: "needs access",
+				line: 2,
+			},
+		]);
+	});
+
 	test("cleans links and bold markers and cuts text to 150 characters", () => {
 		const long = "x".repeat(160);
 		const items = statusItems(

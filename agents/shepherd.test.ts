@@ -310,8 +310,10 @@ function context(
 	return {
 		flags: {},
 		args: [],
+		passthrough: [],
 		cwd,
 		backend,
+		modelFromFlag: false,
 		mode: "interactive",
 		preview: true,
 		spec: spec(),
@@ -692,12 +694,27 @@ describe("tool surface", () => {
 			expect(output.stderr).toContain("shepherd tool archive");
 			expect(output.records).toEqual([]);
 		}
-		const previewResult = await preview(["tool", "check"], cwd);
-		expect(previewResult).toMatchObject({
-			code: 1,
-			stderr:
-				"shepherd tool check does not launch a session; drop --show-prompt\n",
-		});
+		for (const [argv, code, stderr] of [
+			[
+				["tool", "sweep"],
+				1,
+				"shepherd tool check   [<workspace>...] [--all] [--status | --context] [--json] [--today YYYY-MM-DD]",
+			],
+			[
+				["tool"],
+				1,
+				"shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]",
+			],
+			[
+				["tool", "archive"],
+				1,
+				"shepherd tool archive does not launch a session; drop --show-prompt\n",
+			],
+		] as const) {
+			const previewResult = await preview([...argv], cwd);
+			expect(previewResult.code).toBe(code);
+			expect(previewResult.stderr).toContain(stderr);
+		}
 	});
 
 	test("every tool-shaped command line preserves the no-backend invariant", async () => {
@@ -833,17 +850,39 @@ describe("composition order (B-008, AC #1)", () => {
 	});
 
 	test("the header date is the local day, not the UTC one", async () => {
+		if (process.env.SHEPHERD_TZ_CHILD !== "1") {
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"test",
+					"./agents/shepherd.test.ts",
+					"--test-name-pattern",
+					"the header date is the local day",
+				],
+				{
+					cwd: repo,
+					env: {
+						...process.env,
+						TZ: "America/New_York",
+						SHEPHERD_TZ_CHILD: "1",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			if (child.exitCode !== 0) {
+				throw new Error(child.stderr.toString());
+			}
+			return;
+		}
+
 		const { cwd } = build("plain");
-		const zone = process.env.TZ;
 		try {
 			// 21:30 on the 2nd in New York is already the 3rd in UTC.
-			process.env.TZ = "America/New_York";
 			setSystemTime(new Date("2026-10-03T01:30:00Z"));
 			const { systemPrompt } = await preview([], cwd);
 			expect(systemPrompt).toContain("- Date: 2026-10-02\n");
 		} finally {
-			if (zone === undefined) delete process.env.TZ;
-			else process.env.TZ = zone;
 			setSystemTime(new Date("2026-10-02T12:00:00Z"));
 		}
 	});

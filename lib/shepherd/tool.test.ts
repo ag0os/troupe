@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fakeToolEnv, makeTree } from "./test-support";
 import { runTool } from "./tool";
@@ -75,6 +75,22 @@ describe("runTool usage and validation", () => {
 		expect(output.text).toContain(
 			`the nearest one is ${join(tree.root, "root")}`,
 		);
+	});
+
+	test("rejects an invalid user config from XDG_CONFIG_HOME", async () => {
+		const { tree, env } = fixture();
+		const xdg = join(tree.root, "xdg");
+		const configFile = join(xdg, "shepherd", "config.json");
+		mkdirSync(join(xdg, "shepherd"), { recursive: true });
+		writeFileSync(configFile, JSON.stringify({ extra: true }));
+
+		expect(
+			await runTool(["check"], {}, { ...env, env: { XDG_CONFIG_HOME: xdg } }),
+		).toEqual({
+			text: `shepherd: ${configFile}: extra: unknown key\n`,
+			code: 2,
+			stream: "stderr",
+		});
 	});
 });
 
@@ -162,16 +178,23 @@ describe("runTool output", () => {
 			fakeToolEnv({ home: join(tree.root, "home"), cwd }),
 		);
 		const json = JSON.parse(output.text);
-		expect(json).toMatchObject({
+		expect(json).toEqual({
 			schema: 1,
 			command: "archive",
 			root: cwd,
+			today: "2026-10-05",
 			applied: true,
 			workspaces: [
 				{
 					name: "ws",
 					moves: [
-						expect.objectContaining({ kind: "journal", status: "moved" }),
+						{
+							kind: "journal",
+							from: "journal.md",
+							to: "archive/journal/2026-09.md",
+							detail: "1 day(s) of 2026-09",
+							status: "moved",
+						},
 					],
 				},
 			],
@@ -180,6 +203,35 @@ describe("runTool output", () => {
 		expect(
 			existsSync(join(cwd, ".shepherd/archive/journal/2026-09.md")),
 		).toBeTrue();
+	});
+
+	test("prints unattributed sessions only when no selector was given", async () => {
+		const tree = makeTree({
+			"home/.claude/sessions/101.json": JSON.stringify({
+				name: "loose-one",
+				cwd: "/outside/workspace",
+				status: "working",
+				pid: 101,
+			}),
+			"root/.shepherd/charter.md": "Root",
+			"root/.shepherd/CURRENT.md": "Updated: 2026-10-05",
+		});
+		cleanups.push(tree.cleanup);
+		const home = join(tree.root, "home");
+		const cwd = join(tree.root, "root");
+		const env = fakeToolEnv({ home, cwd, alivePids: [101] });
+
+		const all = await runTool(["check"], { status: true }, env);
+		const selected = await runTool(["check", "root"], { status: true }, env);
+
+		expect(all.text).toContain(
+			"Running sessions no workspace lists or contains:",
+		);
+		expect(all.text).toContain("loose-one (working, /outside/workspace)");
+		expect(selected.text).not.toContain(
+			"Running sessions no workspace lists or contains:",
+		);
+		expect(selected.text).not.toContain("loose-one");
 	});
 
 	test("uses each workspace config for recursive archive planning", async () => {

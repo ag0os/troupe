@@ -62,7 +62,7 @@ import {
 	codexThreadNames,
 	type ToolEnv,
 } from "../lib/shepherd/sessions";
-import { runTool } from "../lib/shepherd/tool";
+import { isToolCommand, runTool } from "../lib/shepherd/tool";
 import {
 	findChildWorkspaces,
 	findEnclosingWorkspace,
@@ -128,11 +128,18 @@ export function prepare(
 	toolEnv: ToolEnv = processToolEnv(ctx),
 ): PrepareResult | Promise<PrepareResult> {
 	if (ctx.args[0] === "tool") {
+		const command = ctx.args[1];
+		if (!isToolCommand(command)) {
+			return runTool(ctx.args.slice(1), ctx.flags, toolEnv).then(
+				({ text, code, stream }) => ({
+					exit: { message: text, code, stream },
+				}),
+			);
+		}
 		if (ctx.preview) {
 			return {
 				exit: {
-					message:
-						"shepherd tool check does not launch a session; drop --show-prompt\n",
+					message: `shepherd tool ${command} does not launch a session; drop --show-prompt\n`,
 					code: 1,
 					stream: "stderr",
 				},
@@ -220,7 +227,7 @@ export function prepare(
 				: new Set<string>();
 	const naming = sessionNameFor({
 		backend: ctx.backend,
-		passthrough: ctx.passthrough ?? [],
+		passthrough: ctx.passthrough,
 		mode: ctx.mode,
 		cwd: ctx.cwd,
 		requestedName:
@@ -235,7 +242,7 @@ export function prepare(
 			exit: { message: `${naming.error}\n`, code: 2, stream: "stderr" },
 		};
 	}
-	const passthrough = ctx.passthrough ?? [];
+	const passthrough = ctx.passthrough;
 	const passthroughModel = passthroughModelToken(passthrough);
 	if (ctx.modelFromFlag && passthroughModel) {
 		return {
@@ -253,7 +260,7 @@ export function prepare(
 					toolEnv,
 					passthrough,
 					naming.kind,
-					ctx.modelFromFlag === true,
+					ctx.modelFromFlag,
 				)
 			: undefined;
 	if (defaults?.error) {

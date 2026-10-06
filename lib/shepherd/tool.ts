@@ -44,6 +44,13 @@ const ARCHIVE_FLAGS = new Set(["recursive", "apply", "json", "today"]);
 const TOOL_FLAGS = new Set([...CHECK_FLAGS, ...ARCHIVE_FLAGS]);
 const LEVELS: FindingLevel[] = ["error", "warn", "info"];
 
+/** Whether a positional names a Shepherd maintenance command. */
+export function isToolCommand(
+	command: string | undefined,
+): command is "check" | "archive" {
+	return command === "check" || command === "archive";
+}
+
 function result(
 	text: string,
 	code: number,
@@ -280,7 +287,7 @@ async function runCheck(
 					),
 					0,
 				)
-			: result(renderStatus(report, toolEnv.home), 0);
+			: result(renderStatus(report, toolEnv.home, selectors.length === 0), 0);
 	}
 	const reports = findingReports(
 		workspaces,
@@ -364,7 +371,7 @@ export async function runTool(
 	toolEnv: ToolEnv,
 ): Promise<ToolResult> {
 	const command = args[0];
-	if (command !== "check" && command !== "archive") return usage();
+	if (!isToolCommand(command)) return usage();
 	const badFlag = invalidFlag(command, flags);
 	if (badFlag) return result(badFlag, 2, "stderr");
 	const today = todayFrom(flags, toolEnv.now);

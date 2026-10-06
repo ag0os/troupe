@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
-	statSync,
+	readlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join, relative } from "node:path";
@@ -46,17 +47,36 @@ function fixture(
 	return { root: result.root, tree, workspace: tree.root };
 }
 
-function filesUnder(root: string): Record<string, string> {
-	const files: Record<string, string> = {};
+function entriesUnder(
+	root: string,
+): Record<string, { type: "directory" | "file" | "symlink"; value: string }> {
+	const entries: Record<
+		string,
+		{ type: "directory" | "file" | "symlink"; value: string }
+	> = {};
 	const walk = (dir: string): void => {
 		for (const entry of readdirSync(dir)) {
 			const path = join(dir, entry);
-			if (statSync(path).isDirectory()) walk(path);
-			else files[relative(root, path)] = readFileSync(path, "utf8");
+			const relativePath = relative(root, path);
+			const stat = lstatSync(path);
+			if (stat.isDirectory()) {
+				entries[relativePath] = { type: "directory", value: "" };
+				walk(path);
+			} else if (stat.isSymbolicLink()) {
+				entries[relativePath] = {
+					type: "symlink",
+					value: readlinkSync(path),
+				};
+			} else {
+				entries[relativePath] = {
+					type: "file",
+					value: readFileSync(path, "utf8"),
+				};
+			}
 		}
 	};
 	walk(root);
-	return files;
+	return entries;
 }
 
 function inTimezone(zone: string, run: () => void): void {
@@ -78,7 +98,7 @@ describe("planArchive", () => {
 			"root/.shepherd/work/done/release/STATUS.md":
 				"---\nclosed: 2026-08-01\n---\n# release: Shipped safely\n",
 		});
-		const before = filesUnder(workspace.dir);
+		const before = entriesUnder(workspace.dir);
 
 		const plan = planArchive([workspace], config(), new Date(2026, 9, 5));
 
@@ -96,7 +116,7 @@ describe("planArchive", () => {
 				status: "planned",
 			},
 		]);
-		expect(filesUnder(workspace.dir)).toEqual(before);
+		expect(entriesUnder(workspace.dir)).toEqual(before);
 		expect(archiveExitCode(plan)).toBe(0);
 	});
 

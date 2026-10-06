@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	latestClaudeTranscriptMtime,
 	type Running,
@@ -41,17 +41,26 @@ function within(parent: string, child: string): boolean {
 	);
 }
 
-function mentionedPaths(workspace: Workspace, home: string): string[] {
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function mentionedPaths(
+	workspace: Workspace,
+	home: string,
+	root: string,
+): string[] {
 	const paths = new Set<string>();
+	const pattern = new RegExp(
+		`(?:~|${escapeRegExp(home)})/[A-Za-z0-9._/-]+`,
+		"g",
+	);
 	for (const file of ["charter.md", "CURRENT.md"]) {
 		const text = read(join(workspace.state, file));
-		for (const match of text.matchAll(
-			/(?:~|\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+)/g,
-		)) {
-			const value = match[0].replace(/[.,;:]+$/, "");
-			const path =
-				value === "~" ? home : resolve(value.replace(/^~\//, `${home}/`));
-			if (path !== home) paths.add(path);
+		for (const match of text.matchAll(pattern)) {
+			const value = match[0].replace(/[./]+$/, "");
+			const path = resolve(value.replace(/^~/, home));
+			if (path !== home && !within(root, path)) paths.add(path);
 		}
 	}
 	return [...paths];
@@ -62,19 +71,12 @@ function currentSessions(workspace: Workspace): ListedSession[] {
 	return existsSync(path) ? listedSessions(read(path)) : [];
 }
 
-function sessionKey(name: string, harness: Running["harness"]): string {
-	return `${harness}\0${name}`;
-}
-
-function listedHarness(session: ListedSession): Running["harness"] {
-	return session.codex ? "codex" : "claude";
-}
-
 /** Classify listed and running sessions for the selected workspaces. */
 export function liveReports(
 	workspaces: readonly Workspace[],
 	tree: WorkspaceTree,
 	running: RunningSessionsResult,
+	home: string,
 ): LiveReports {
 	const allListed = new Map(
 		tree.workspaces.map((workspace) => [
@@ -85,11 +87,8 @@ export function liveReports(
 	const listedNames = new Set(
 		[...allListed.values()].flat().map((session) => session.name),
 	);
-	const runningByKey = new Map(
-		running.sessions.map((session) => [
-			sessionKey(session.name, session.harness),
-			session,
-		]),
+	const runningByName = new Map(
+		running.sessions.map((session) => [session.name, session]),
 	);
 	const hasChildren = new Set(
 		tree.workspaces
@@ -105,10 +104,9 @@ export function liveReports(
 		hasChildren.has(workspace.name)
 			? cwd === workspace.dir
 			: within(workspace.dir, cwd);
-	const home = dirname(tree.root.dir);
 	const references = tree.workspaces.map((workspace) => ({
 		workspace,
-		paths: mentionedPaths(workspace, home),
+		paths: mentionedPaths(workspace, home, tree.root.dir),
 	}));
 	const owner = (cwd: string): Workspace | undefined => {
 		const direct = tree.workspaces
@@ -141,14 +139,9 @@ export function liveReports(
 				ownsDirectory(workspace, session.cwd),
 			),
 			ok: checked
-				.filter((session) =>
-					runningByKey.has(sessionKey(session.name, listedHarness(session))),
-				)
+				.filter((session) => runningByName.has(session.name))
 				.map((session) => session.name),
-			gone: checked.filter(
-				(session) =>
-					!runningByKey.has(sessionKey(session.name, listedHarness(session))),
-			),
+			gone: checked.filter((session) => !runningByName.has(session.name)),
 			unchecked: active.flatMap((session) => {
 				const reason = unavailableReason(session);
 				return reason ? [{ ...session, reason }] : [];

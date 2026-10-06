@@ -243,8 +243,10 @@ function context(
 	return {
 		flags: {},
 		args,
+		passthrough: [],
 		cwd,
 		backend,
+		modelFromFlag: false,
 		mode: "interactive",
 		preview: true,
 		spec: spec(),

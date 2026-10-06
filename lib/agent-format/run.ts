@@ -107,14 +107,15 @@ export function createPrepareContext(
 			options.runCommand ??
 			createRunCommand({ cwd: invocation.cwd, signal: options.signal }),
 	};
-	Object.defineProperties(context, {
+	const completeContext = Object.defineProperties(context, {
 		passthrough: {
 			value: Object.freeze([...invocation.passthrough]),
 			enumerable: false,
 		},
 		modelFromFlag: { value: invocation.modelFromFlag, enumerable: false },
-	});
-	return Object.freeze(context);
+	}) as typeof context &
+		Pick<PrepareContext, "passthrough" | "modelFromFlag">;
+	return Object.freeze(completeContext);
 }
 
 /**
