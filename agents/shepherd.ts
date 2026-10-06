@@ -168,15 +168,20 @@ export function prepare(
 		"today",
 		"apply",
 		"recursive",
+		"master",
 	]) {
 		const value = ctx.flags[name];
 		if (value !== undefined && value !== false) {
 			const owner =
-				name === "json" || name === "today"
-					? "tool check and tool archive"
-					: name === "apply" || name === "recursive"
-						? "tool archive"
-						: "tool check";
+				name === "master"
+					? "tool init"
+					: name === "json"
+						? "tool check, tool archive and tool init"
+						: name === "today"
+							? "tool check and tool archive"
+							: name === "apply" || name === "recursive"
+								? "tool archive"
+								: "tool check";
 			return {
 				exit: {
 					message: `shepherd: --${name} applies only to ${owner}\n`,

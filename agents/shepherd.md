@@ -13,7 +13,7 @@ flags:
     description: "tool check: show words per context tier"
   json:
     type: boolean
-    description: "tool check and tool archive: emit machine-readable JSON"
+    description: "tool check, tool archive and tool init: emit machine-readable JSON"
   today:
     type: string
     description: "tool check and tool archive: evaluate dates as of YYYY-MM-DD"
@@ -23,6 +23,9 @@ flags:
   recursive:
     type: boolean
     description: "tool archive: include nested workspaces"
+  master:
+    type: boolean
+    description: "tool init: also write the shared layer for a root workspace"
   name:
     type: string
     short: n

@@ -290,7 +290,7 @@ async function execute(
 		},
 		isDirectory: (path) => existsSync(path) || "missing",
 		env: {
-			PATH: `${bin}:${process.env.PATH}`,
+			PATH: bin,
 			HOME: join(base, "home"),
 			FAKE_RECORD: recordFile,
 			...env,
@@ -353,7 +353,8 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			},
 			json: {
 				type: "boolean",
-				description: "tool check and tool archive: emit machine-readable JSON",
+				description:
+					"tool check, tool archive and tool init: emit machine-readable JSON",
 			},
 			today: {
 				type: "string",
@@ -367,6 +368,11 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			recursive: {
 				type: "boolean",
 				description: "tool archive: include nested workspaces",
+			},
+			master: {
+				type: "boolean",
+				description:
+					"tool init: also write the shared layer for a root workspace",
 			},
 			name: {
 				type: "string",
@@ -729,6 +735,13 @@ describe("tool surface", () => {
 			["tool", "guide", "--json"],
 			["tool", "guide", "--show-prompt"],
 			["tool", "guide", "--model", "x"],
+			["tool", "init"],
+			["tool", "init", "--master"],
+			["tool", "init", "--json"],
+			["tool", "init", "--master", "--json"],
+			["tool", "init", "--show-prompt"],
+			["tool", "init", "--model", "x"],
+			["tool", "check", "--master"],
 			["tool", "check", "--all"],
 			["tool", "check", "--status"],
 			["tool", "check", "--context"],
@@ -773,7 +786,7 @@ describe("tool surface", () => {
 					["tool", "guide", "--json"],
 					2,
 					"",
-					"shepherd: --json applies only to tool check and tool archive\n",
+					"shepherd: --json applies only to tool check, tool archive and tool init\n",
 				],
 				[
 					["tool", "guide", "--model", "x"],
@@ -798,6 +811,123 @@ describe("tool surface", () => {
 					argv: [],
 				});
 			}
+		}
+	});
+
+	test("init succeeds and refuses preview and model flags without either backend", async () => {
+		const tree = makeTree({ "launch/placeholder": "" });
+		try {
+			const cwd = join(tree.root, "launch");
+			for (const backend of BACKENDS) {
+				for (const flags of [
+					[],
+					["--master"],
+					["--json"],
+					["--master", "--json"],
+				]) {
+					const output = await execute(
+						["--backend", backend, "tool", "init", ...flags],
+						cwd,
+					);
+					expect(output).toMatchObject({ code: 0, stderr: "", records: [] });
+					if (flags.includes("--json")) {
+						expect(JSON.parse(output.stdout)).toMatchObject({
+							command: "init",
+							root: cwd,
+							master: flags.includes("--master"),
+							failed: null,
+						});
+					} else {
+						expect(output.stdout).toStartWith(
+							`Initialized ${cwd}/.shepherd (workspace${flags.includes("--master") ? ", shared layer" : ""})\n`,
+						);
+					}
+					const shown = await preview(
+						["--backend", backend, "tool", "init", ...flags],
+						cwd,
+					);
+					expect(shown).toMatchObject({
+						code: 1,
+						text: "",
+						argv: [],
+						stderr:
+							"shepherd tool init does not launch a session; drop --show-prompt\n",
+					});
+				}
+				const modeled = await execute(
+					["--backend", backend, "tool", "init", "--model", "x"],
+					cwd,
+				);
+				expect(modeled).toEqual({
+					code: 2,
+					stdout: "",
+					records: [],
+					stderr: "shepherd: --model applies only to launches\n",
+				});
+			}
+		} finally {
+			tree.cleanup();
+		}
+	});
+
+	test("launch flag gate and other tools reject master with its owner message", async () => {
+		const { cwd } = build("plain");
+		for (const backend of BACKENDS) {
+			for (const argv of [
+				["--master"],
+				["tool", "check", "--master"],
+				["tool", "archive", "--master"],
+				["tool", "guide", "--master"],
+			]) {
+				expect(await execute(["--backend", backend, ...argv], cwd)).toEqual({
+					code: 2,
+					stdout: "",
+					records: [],
+					stderr: "shepherd: --master applies only to tool init\n",
+				});
+			}
+		}
+	});
+
+	test("initialized master and child load shared integrations and gate root and nested modules", async () => {
+		const tree = makeTree({ "launch/child/placeholder": "" });
+		try {
+			const cwd = join(tree.root, "launch");
+			const child = join(cwd, "child");
+			expect((await execute(["tool", "init", "--master"], cwd)).code).toBe(0);
+			for (const backend of BACKENDS) {
+				const shown = await preview(["--backend", backend], cwd);
+				expect(shown.code).toBe(0);
+				expect(shown.systemPrompt).toContain(
+					"Workspace-local integrations loaded: shared.md",
+				);
+				expect(shown.systemPrompt).toContain("Enclosing workspace: none");
+				expect(shown.systemPrompt).toContain("Gated modules loaded: none");
+			}
+			expect((await execute(["tool", "init"], child)).code).toBe(0);
+			for (const backend of BACKENDS) {
+				const parentShown = await preview(["--backend", backend], cwd);
+				expect(parentShown.code).toBe(0);
+				expect(parentShown.systemPrompt).toContain(
+					"Gated modules loaded: root",
+				);
+				const childShown = await preview(["--backend", backend], child);
+				expect(childShown.code).toBe(0);
+				expect(childShown.systemPrompt).toContain(
+					`Enclosing workspace: ${cwd} (inherited integrations: shared.md)`,
+				);
+				expect(childShown.systemPrompt).toContain(
+					"Gated modules loaded: nested",
+				);
+			}
+			const checked = await execute(["tool", "check", "--json"], cwd);
+			expect(checked).toMatchObject({ code: 0, stderr: "", records: [] });
+			expect(JSON.parse(checked.stdout).totals).toMatchObject({
+				error: 0,
+				warn: 0,
+			});
+		} finally {
+			tree.cleanup();
 		}
 	});
 

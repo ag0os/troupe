@@ -30,7 +30,7 @@ function fixture() {
 }
 
 describe("runTool usage and validation", () => {
-	test("requires check, archive, or guide and prints all usage lines", async () => {
+	test("requires check, archive, guide, or init and prints all usage lines", async () => {
 		const { env } = fixture();
 		for (const args of [[], ["sweep"]]) {
 			const output = await runTool(args, {}, env);
@@ -38,6 +38,7 @@ describe("runTool usage and validation", () => {
 			expect(output.text).toContain("shepherd tool check");
 			expect(output.text).toContain("shepherd tool archive");
 			expect(output.text).toContain("shepherd tool guide [<name>]");
+			expect(output.text).toContain("shepherd tool init [--master] [--json]");
 		}
 	});
 
@@ -142,7 +143,7 @@ describe("runTool guide", () => {
 	test("rejects every misplaced tool flag", async () => {
 		const { env } = fixture();
 		for (const [name, value, owner] of [
-			["json", true, "tool check and tool archive"],
+			["json", true, "tool check, tool archive and tool init"],
 			["today", "2026-13-40", "tool check and tool archive"],
 			["all", true, "tool check"],
 			["status", true, "tool check"],
@@ -150,6 +151,7 @@ describe("runTool guide", () => {
 			["apply", true, "tool archive"],
 			["recursive", true, "tool archive"],
 			["name", "session", "launches"],
+			["master", true, "tool init"],
 		] as const) {
 			expect(await runTool(["guide"], { [name]: value }, env)).toEqual({
 				text: `shepherd: --${name} applies only to ${owner}\n`,
@@ -188,6 +190,187 @@ describe("runTool guide", () => {
 		for (const args of [["guide"], ["guide", "memory"]]) {
 			expect(await runTool(args, {}, env)).toMatchObject({ code: 0 });
 		}
+	});
+});
+
+const INIT_PATHS = [
+	"CURRENT.md",
+	"MEMORY.md",
+	"journal.md",
+	"docs/INDEX.md",
+	"docs/STATUS-template.md",
+	"archive/INDEX.md",
+	"work/todo/",
+	"work/in-progress/",
+	"work/done/",
+];
+const SHARED_PATHS = [
+	"shared/user.md",
+	"shared/machine.md",
+	"shared/roster.md",
+	"shared/tools.md",
+	"integrations/shared.md",
+];
+const INIT_NEXT =
+	"Next: launch `shepherd` here and run the init conversation; `shepherd tool guide charter` has the questions and the charter's shape.";
+
+function initFixture(files: Record<string, string> = {}) {
+	const tree = makeTree({ "launch/placeholder": "", ...files });
+	cleanups.push(tree.cleanup);
+	const cwd = join(tree.root, "launch");
+	return { cwd, env: fakeToolEnv({ home: join(tree.root, "home"), cwd }) };
+}
+
+describe("runTool init", () => {
+	test("initializes a non-workspace and renders fresh and all-kept output exactly", async () => {
+		const { cwd, env } = initFixture();
+		expect(existsSync(join(cwd, ".shepherd"))).toBe(false);
+		for (const status of ["created", "kept"]) {
+			expect(await runTool(["init"], {}, env)).toEqual({
+				text: [
+					`Initialized ${cwd}/.shepherd (workspace)`,
+					...INIT_PATHS.map((path) => `  ${status.padEnd(7)} ${path}`),
+					INIT_NEXT,
+					"",
+				].join("\n"),
+				code: 0,
+				stream: "stdout",
+			});
+		}
+		for (const path of INIT_PATHS) {
+			expect(existsSync(join(cwd, ".shepherd", path))).toBe(true);
+		}
+	});
+
+	test("returns the exact fresh and all-kept JSON envelopes", async () => {
+		const { cwd, env } = initFixture();
+		for (const fresh of [true, false]) {
+			expect(await runTool(["init"], { json: true }, env)).toEqual({
+				text: `${JSON.stringify(
+					{
+						schema: 1,
+						command: "init",
+						root: cwd,
+						state: join(cwd, ".shepherd"),
+						master: false,
+						created: fresh ? INIT_PATHS : [],
+						kept: fresh ? [] : INIT_PATHS,
+						failed: null,
+					},
+					null,
+					2,
+				)}\n`,
+				code: 0,
+				stream: "stdout",
+			});
+		}
+	});
+
+	test("reports completed writes and the failure on stdout with exit 1", async () => {
+		for (const json of [false, true]) {
+			const { cwd, env } = initFixture({
+				"launch/.shepherd/work/todo": "blocked",
+			});
+			const output = await runTool(["init"], { json }, env);
+			expect(output).toMatchObject({ code: 1, stream: "stdout" });
+			if (json) {
+				expect(JSON.parse(output.text)).toEqual({
+					schema: 1,
+					command: "init",
+					root: cwd,
+					state: join(cwd, ".shepherd"),
+					master: false,
+					created: INIT_PATHS.slice(0, 6),
+					kept: [],
+					failed: { path: "work/todo/", error: "a file is in the way" },
+				});
+			} else {
+				expect(output.text).toBe(
+					[
+						`Initialized ${cwd}/.shepherd (workspace)`,
+						...INIT_PATHS.slice(0, 6).map((path) => `  created ${path}`),
+						"  failed  work/todo/: a file is in the way",
+						"",
+					].join("\n"),
+				);
+			}
+			expect(existsSync(join(cwd, ".shepherd/work/in-progress"))).toBe(false);
+		}
+	});
+
+	test("ignores broken user config and reads no HOME or environment input", async () => {
+		const { env } = initFixture({
+			"home/.config/shepherd/config.json": "{broken",
+		});
+		expect(await runTool(["init"], {}, env)).toMatchObject({ code: 0 });
+		for (const key of ["home", "env"]) {
+			Object.defineProperty(env, key, {
+				get: () => {
+					throw new Error("init must not read config inputs");
+				},
+			});
+		}
+		expect(await runTool(["init"], {}, env)).toMatchObject({ code: 0 });
+	});
+
+	test("master creates 14 entries and upgrades a workspace without overwriting it", async () => {
+		for (const upgrade of [false, true]) {
+			const { cwd, env } = initFixture();
+			if (upgrade) {
+				await runTool(["init"], {}, env);
+				writeFileSync(join(cwd, ".shepherd/CURRENT.md"), "custom state");
+			}
+			const output = await runTool(["init"], { master: true, json: true }, env);
+			expect(output).toMatchObject({ code: 0, stream: "stdout" });
+			expect(JSON.parse(output.text)).toEqual({
+				schema: 1,
+				command: "init",
+				root: cwd,
+				state: join(cwd, ".shepherd"),
+				master: true,
+				created: upgrade ? SHARED_PATHS : [...INIT_PATHS, ...SHARED_PATHS],
+				kept: upgrade ? INIT_PATHS : [],
+				failed: null,
+			});
+			for (const path of [...INIT_PATHS, ...SHARED_PATHS]) {
+				expect(existsSync(join(cwd, ".shepherd", path))).toBe(true);
+			}
+			if (upgrade)
+				expect(readFileSync(join(cwd, ".shepherd/CURRENT.md"), "utf8")).toBe(
+					"custom state",
+				);
+		}
+	});
+
+	test("rejects positionals and misplaced flags before writing", async () => {
+		const { cwd, env } = initFixture();
+		expect(await runTool(["init", "child"], {}, env)).toMatchObject({
+			code: 2,
+			stream: "stderr",
+		});
+		for (const [name, value, owner] of [
+			["today", "invalid", "tool check and tool archive"],
+			["all", true, "tool check"],
+			["status", true, "tool check"],
+			["context", true, "tool check"],
+			["apply", true, "tool archive"],
+			["recursive", true, "tool archive"],
+			["name", "session", "launches"],
+		] as const) {
+			expect(await runTool(["init"], { [name]: value }, env)).toEqual({
+				text: `shepherd: --${name} applies only to ${owner}\n`,
+				code: 2,
+				stream: "stderr",
+			});
+		}
+		for (const command of ["check", "archive", "guide"]) {
+			expect(await runTool([command], { master: true }, env)).toEqual({
+				text: "shepherd: --master applies only to tool init\n",
+				code: 2,
+				stream: "stderr",
+			});
+		}
+		expect(existsSync(join(cwd, ".shepherd"))).toBe(false);
 	});
 });
 
