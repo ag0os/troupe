@@ -4,7 +4,7 @@ Your charter declares `Modules: software`: this workspace's work changes code. C
 
 ## The cycle
 
-Investigate, decide, implement, review, verify. This is the full chain, for work that is foundational or big enough to delegate. Core's review depth rule says how much of it a routine change needs; one you can make and check yourself in minutes needs only its gates. When stages run in separate sessions, each starts fresh, seeded from what the one before wrote down.
+Investigate, decide, implement, review, verify. This is the full chain, for work that is foundational or big enough to delegate. Core's review depth rule says how much of it a routine change needs; one that takes minutes needs only its gates. When stages run in separate sessions, each starts fresh, seeded from what the one before wrote down.
 
 1. **Investigate.** Establish which code is involved, with evidence, before anyone proposes a fix: no code, no branch. Work against the intended base revision and record which; do not disturb the user's working tree, and fetch only with permission. Where data is involved, look at authorized, representative records in a safe read-only environment, not only at the code. Size the problem before fixing it.
 2. **Decide.** Where scope or splitting is a real decision, bring the user the options, tradeoffs and your recommendation. Before a plan is approved, ask what reacts to the change once it ships: scheduled jobs, notifications, reports, downstream consumers.
