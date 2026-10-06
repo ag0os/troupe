@@ -68,7 +68,7 @@ Two modules load into every Shepherd and check their own availability at run tim
 
 A fresh workspace is deliberately generic. On first launch Shepherd runs an init conversation with the user to agree the mission, Shepherd's role, what lives where and what is confidential, the way of working, the cadence, what done means, the toolset (for example gh and project tooling), and any structure the workspace needs, then records the agreement as `.shepherd/charter.md`. The charter loads into every session and is the contract; renegotiate it rather than drift from it. A workspace can be any shape: one project, several, a coordinator of coordinators, internet chores.
 
-The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. It opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing rules agreed later go into the charter, not into `CURRENT.md`. A charter agreed before this skeleton stands as it is.
+The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. Core names the topics; the questions each one settles and the charter's skeleton are in the `charter` guide, which Shepherd reads with `shepherd tool guide charter` before it starts the conversation. The charter opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing rules agreed later go into the charter, not into `CURRENT.md`. A charter agreed before this skeleton stands as it is.
 
 ## Self evolution
 
@@ -99,6 +99,8 @@ Shepherd maintains `.shepherd/` in the launch directory:
   archive/           # closed work and past journal months; INDEX.md lists them
   integrations/      # workspace local capability modules
 ```
+
+Core names the memory frontmatter keys and the four types; the full format is in the `memory` guide (`shepherd tool guide memory`). `shepherd tool archive` moves items closed about a month and past journal months into `archive/`, with their index lines and link rewrites.
 
 Context is tiered (see core, "Context tiers"): the prompt and a short session-start list (`CURRENT.md`, `MEMORY.md`, `docs/INDEX.md`, the journal's last two days) are always read; everything else is reached through those indexes when needed, and history moves to `archive/`.
 
