@@ -23,6 +23,7 @@ Troupe (formerly Claude Forge) is a collection of Markdown-declared agents compi
 ### Directory Structure
 - `agents/` - Markdown declarations and optional same-stem TypeScript extensions, organized by namespace
 - `lib/agent-format/` - Strict schema, templates, CLI, runner, and backend adapters
+- `lib/shepherd/` - Shepherd workspace, maintenance, session, and launch helpers
 - `system-prompts/` - Shared prompt fragments used by declarations and extensions
 - `scripts/` - Build and development utilities
 - `bin/` - Compiled binaries (generated)

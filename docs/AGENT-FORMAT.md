@@ -110,10 +110,13 @@ For Claude children, the runner removes an inherited `CLAUDE_PROJECT_DIR`. It do
 
 ## Extensions
 
-A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, or both. Both hooks may be synchronous or asynchronous. `prepare(ctx)` receives resolved flags, positionals, cwd, backend, effective mode, preview state, the compiled spec, an abort signal, and a cancellable `runCommand` helper. `runCommand({ argv, cwd?, env? })` returns a promise for `{ exitCode, stdout, stderr }`. Preparation may return:
+A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, or both. Both hooks may be synchronous or asynchronous. `prepare(ctx)` receives resolved flags, positionals, the verbatim backend passthrough, cwd, backend, whether the model came from `--model`, effective mode, preview state, the compiled spec, an abort signal, and a cancellable `runCommand` helper. `runCommand({ argv, cwd?, env? })` returns a promise for `{ exitCode, stdout, stderr }`. Preparation may return:
 
 - extra system prompt fragments or a replacement initial prompt;
 - Claude allow rules and additional directories;
+- an interactive Claude session name;
+- a launch model or effort, with an explicit framework `--model` taking precedence;
+- an absolute Codex home, passed to Codex as `CODEX_HOME` and never put on argv;
 - a new cwd or validated flag overrides;
 - messages for before or after execution;
 - an early exit with an exact message, stream, and code.
@@ -122,7 +125,7 @@ A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, 
 
 Execution notices do not belong in print payloads. In particular, the PR review and Git fix agents do not emit a `Detected PR` notice under `--print`.
 
-Extensions must not do work at module import time. Static inspection permits declarations and side-effect-free constants, imports from packages, builtins, and the framework, plus text imports of `.md` files under `system-prompts/`. The text-import exception lets an extension compose dynamic prompt layers without executing another module. In preview, preparation must not write files, start network work, or print.
+Extensions must not do work at module import time. Static inspection permits declarations and side-effect-free constants, imports from packages, builtins, `lib/agent-format/`, and `lib/shepherd/`, plus text imports of `.md` files under `system-prompts/`. The text-import exception lets an extension compose dynamic prompt layers without executing another module. In preview, preparation must not write files, start network work, or print.
 
 Extensions return runner data, not raw backend commands. Use `runCommand` for git, `gh`, or another preparation child. Never spawn the backend from an extension.
 

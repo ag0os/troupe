@@ -9,6 +9,8 @@ shepherd                          # interactive session in the current directory
 shepherd "triage my morning"      # with an initial message
 shepherd --cwd ~/work             # run against another root
 shepherd --backend codex          # use Codex instead of the default Claude backend
+shepherd -n <name>                # name a new Claude session
+# Codex: start it, then use its rename dialog.
 shepherd --print "status report"  # one-shot, non-interactive
 shepherd --show-prompt            # print the composed prompt, don't spawn
 shepherd -- --resume SESSION_ID   # pass a backend flag through
@@ -32,7 +34,9 @@ The session prompt is layered, in order:
 | Inherited integrations | `.shepherd/integrations/*.md` of the nearest enclosing workspace (a parent directory with its own `.shepherd/`) | no, read at launch |
 | Workspace integrations | `.shepherd/integrations/*.md` in the launch directory | no, read at launch |
 | Workspace charter | `.shepherd/charter.md` in the launch directory | no, read at launch |
-| Session context header | generated (cwd, state dir, local date, backend, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
+| Session context header | generated (cwd, state dir, local date, backend, session name, Codex home when selected, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
+
+On interactive launches the header has a `Session name` line. Interactive Codex launches also have a `Codex home` line.
 
 The charter comes after every module because it is the contract: where it and a module disagree about how the workspace works, the charter wins. Modules stay authoritative about what a capability can do and about their safety rules.
 
@@ -102,6 +106,23 @@ Core fixes the shape of the tracking files (see core, "Work tracking"), so every
 - `docs/INDEX.md` has one line per doc: `- [title](path): when to read it`.
 
 The declaration and extension preapprove Read and Edit inside `.shepherd/`, Read inside an enclosing workspace's `.shepherd/`, and `Bash(herdr:*)` so memory upkeep and Herdr coordination never prompt. There is no separate Write rule. Destructive Herdr operations are forbidden by the integration module instead. Everything else follows normal permission rules.
+
+## Tools
+
+Maintenance commands run without starting an agent backend:
+
+```bash
+shepherd tool check   [<workspace>...] [--all] [--status | --context] [--json] [--today YYYY-MM-DD]
+shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]
+```
+
+`tool check` checks this workspace and every workspace beneath it. Name one or more workspaces to limit the check. By default it hides informational findings; `--all` shows them, `--status` reports tracked work and live sessions, `--context` reports words by context tier, and `--json` produces machine readable output. `--status` and `--context` cannot be combined.
+
+`tool archive` shows a dry run for the current workspace. Name workspaces to select them, or use `--recursive` to include this workspace and every workspace beneath it. `--apply` performs the planned item and journal moves and rewrites live references. `--json` produces machine readable output. Both commands accept `--today YYYY-MM-DD` for a repeatable date during diagnosis or testing.
+
+Exit code 0 means the command completed without an error. For the default check, exit code 1 means at least one error finding; for archive, it means at least one move was skipped. Exit code 2 means invalid usage, an invalid date or selector, an invalid user configuration, or a directory that is not a workspace. Status and context reports use exit code 0 when they run successfully.
+
+Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, and the noninherited `sessionPrefix`. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
 
 ## Backends
 

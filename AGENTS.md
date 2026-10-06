@@ -8,6 +8,7 @@ Troupe is a Bun + strict TypeScript repository for Markdown-declared CLI agents,
 
 - `agents/`: Markdown declarations and optional same-stem TypeScript extensions; subdirectories determine colon-delimited binary names.
 - `lib/agent-format/`: Schema, CLI, runner, and Claude and Codex adapters.
+- `lib/shepherd/`: Shepherd workspace, maintenance, session, and launch helpers.
 - `system-prompts/`: Shared prompt fragments used by declarations and extensions.
 - `scripts/` — Build/watch utilities.
 - `bin/` — Generated binaries (do not edit manually).
