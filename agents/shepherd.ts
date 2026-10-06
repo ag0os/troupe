@@ -1,5 +1,5 @@
 /**
- * SHEPHERD: personal day-to-day assistant and agent coordinator.
+ * SHEPHERD: executive assistant and manager for day-to-day work.
  *
  * Runs in any directory and keeps its own state there (.shepherd/): memories,
  * an append-only journal, and living docs that make it better at that

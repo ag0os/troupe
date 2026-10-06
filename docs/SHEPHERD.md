@@ -1,6 +1,6 @@
 # Shepherd
 
-Shepherd is a personal day to day assistant and agent coordinator. It runs in any directory, helps with routine work, coordinates terminal sessions and other coding agents (through Herdr when available), talks to co sessions over inter agent messaging when the harness supports it, and keeps persistent state in the launch directory so it improves at a workspace over time.
+Shepherd is an executive assistant and manager for day to day work. It runs in any directory, fills in for the user on routine work, manages terminal sessions and other coding agents (through Herdr when available), talks to co sessions over inter agent messaging when the harness supports it, and keeps persistent state in the launch directory so it improves at a workspace over time.
 
 ## Usage
 

@@ -1,5 +1,5 @@
 ---
-description: Personal day to day assistant and agent coordinator that keeps its own state in .shepherd/ of the launch directory
+description: Executive assistant and manager for day to day work that keeps its own state in .shepherd/ of the launch directory
 backends: [claude, codex]
 flags:
   all:
