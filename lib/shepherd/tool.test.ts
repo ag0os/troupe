@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fakeToolEnv, makeTree } from "./test-support";
-import { runTool } from "./tool";
+import { isToolCommand, runTool } from "./tool";
 
 const cleanups: Array<() => void> = [];
 
@@ -30,7 +36,7 @@ function fixture() {
 }
 
 describe("runTool usage and validation", () => {
-	test("requires check, archive, guide, or init and prints all usage lines", async () => {
+	test("requires check, archive, guide, init, or doctor and prints all usage lines", async () => {
 		const { env } = fixture();
 		for (const args of [[], ["sweep"]]) {
 			const output = await runTool(args, {}, env);
@@ -39,6 +45,7 @@ describe("runTool usage and validation", () => {
 			expect(output.text).toContain("shepherd tool archive");
 			expect(output.text).toContain("shepherd tool guide [<name>]");
 			expect(output.text).toContain("shepherd tool init [--master] [--json]");
+			expect(output.text).toContain("shepherd tool doctor [--json]");
 		}
 	});
 
@@ -143,7 +150,7 @@ describe("runTool guide", () => {
 	test("rejects every misplaced tool flag", async () => {
 		const { env } = fixture();
 		for (const [name, value, owner] of [
-			["json", true, "tool check, tool archive and tool init"],
+			["json", true, "tool check, tool archive, tool init and tool doctor"],
 			["today", "2026-13-40", "tool check and tool archive"],
 			["all", true, "tool check"],
 			["status", true, "tool check"],
@@ -633,5 +640,112 @@ describe("runTool output", () => {
 				message: "link to ~/Projects/missing.md does not resolve",
 			}),
 		]);
+	});
+});
+
+describe("runTool doctor", () => {
+	function doctorFixture(healthy: boolean, brokenConfig = false) {
+		const tree = makeTree({
+			"launch/placeholder": "",
+			"home/placeholder": "",
+			...(healthy
+				? {
+						"bin/claude": "",
+						"bin/jq": "",
+						"home/.claude/settings.json": JSON.stringify({
+							crossSessionInbound: "accept",
+							statusLine: { type: "command", command: "jq used_percentage" },
+						}),
+					}
+				: {}),
+			...(brokenConfig ? { "home/.config/shepherd/config.json": "{" } : {}),
+		});
+		cleanups.push(tree.cleanup);
+		if (healthy) {
+			for (const name of ["claude", "jq"])
+				chmodSync(join(tree.root, "bin", name), 0o755);
+		}
+		return fakeToolEnv({
+			cwd: join(tree.root, "launch"),
+			home: join(tree.root, "home"),
+			env: { PATH: join(tree.root, "bin") },
+			runCommand: async () => {
+				throw new Error("doctor must run no external command");
+			},
+		});
+	}
+
+	test("recognizes doctor and renders human and JSON reports outside a workspace", async () => {
+		expect(isToolCommand("doctor")).toBeTrue();
+		for (const healthy of [false, true]) {
+			const env = doctorFixture(healthy);
+			expect(existsSync(join(env.cwd, ".shepherd"))).toBeFalse();
+			const human = await runTool(["doctor"], {}, env);
+			const json = await runTool(["doctor"], { json: true }, env);
+			for (const output of [human, json])
+				expect(output).toMatchObject({
+					code: healthy ? 0 : 1,
+					stream: "stdout",
+				});
+			expect(human.text).toStartWith(`Shepherd doctor, home ${env.home}, `);
+			expect(human.text).toContain(healthy ? "0 gaps" : "install jq:");
+			const report = JSON.parse(json.text);
+			if (!healthy) expect(report.totals.gap).toBeGreaterThan(0);
+			expect(report).toMatchObject({
+				schema: 1,
+				command: "doctor",
+				home: env.home,
+				today: expect.any(String),
+				checks: expect.any(Array),
+				totals: {
+					ok: expect.any(Number),
+					gap: healthy ? 0 : expect.any(Number),
+					skip: expect.any(Number),
+				},
+			});
+		}
+	});
+
+	test("reports broken user config as a gap with exit 1", async () => {
+		const env = doctorFixture(true, true);
+		for (const flags of [{ json: false }, { json: true }]) {
+			const output = await runTool(["doctor"], flags, env);
+			expect(output).toMatchObject({ code: 1, stream: "stdout" });
+			if (flags.json) {
+				expect(JSON.parse(output.text).checks).toContainEqual(
+					expect.objectContaining({
+						id: "config:user",
+						status: "gap",
+						subject: join(env.home, ".config/shepherd/config.json"),
+					}),
+				);
+			} else expect(output.text).toContain("config.json");
+		}
+	});
+
+	test("rejects positionals and flags belonging to other tools", async () => {
+		const env = doctorFixture(false);
+		expect(await runTool(["doctor", "workspace"], {}, env)).toMatchObject({
+			code: 2,
+			stream: "stderr",
+		});
+		for (const name of [
+			"all",
+			"status",
+			"context",
+			"today",
+			"apply",
+			"recursive",
+			"master",
+			"name",
+		]) {
+			expect(
+				await runTool(
+					["doctor"],
+					{ [name]: name === "today" ? "2026-10-05" : true },
+					env,
+				),
+			).toMatchObject({ code: 2, stream: "stderr" });
+		}
 	});
 });

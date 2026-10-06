@@ -13,7 +13,7 @@ flags:
     description: "tool check: show words per context tier"
   json:
     type: boolean
-    description: "tool check, tool archive and tool init: emit machine-readable JSON"
+    description: "tool check, tool archive, tool init and tool doctor: emit machine-readable JSON"
   today:
     type: string
     description: "tool check and tool archive: evaluate dates as of YYYY-MM-DD"

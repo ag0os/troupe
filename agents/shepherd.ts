@@ -110,6 +110,7 @@ function processToolEnv(ctx: PrepareContext): ToolEnv {
 		cwd: ctx.cwd,
 		home: homedir(),
 		env: process.env,
+		execPath: process.execPath,
 		now: new Date(),
 		runCommand: ctx.runCommand,
 		pidAlive: (pid) => {
@@ -176,7 +177,7 @@ export function prepare(
 				name === "master"
 					? "tool init"
 					: name === "json"
-						? "tool check, tool archive and tool init"
+						? "tool check, tool archive, tool init and tool doctor"
 						: name === "today"
 							? "tool check and tool archive"
 							: name === "apply" || name === "recursive"

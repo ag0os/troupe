@@ -15,6 +15,7 @@ import {
 } from "./config";
 import { contextTiers, renderContextTable } from "./context";
 import { dayOf, localDate } from "./dates";
+import { doctorExitCode, doctorJson, renderDoctor, runDoctor } from "./doctor";
 import { GUIDES } from "./guides";
 import { applyInit, initExitCode, initJson, renderInit } from "./init";
 import { runningSessions, type ToolEnv } from "./sessions";
@@ -41,10 +42,12 @@ const USAGE = [
 	"shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]",
 	"shepherd tool guide [<name>]",
 	"shepherd tool init [--master] [--json]",
+	"shepherd tool doctor [--json]",
 ].join("\n");
 
 const CHECK_FLAGS = new Set(["all", "status", "context", "json", "today"]);
 const ARCHIVE_FLAGS = new Set(["recursive", "apply", "json", "today"]);
+const DOCTOR_FLAGS = new Set(["json"]);
 const INIT_FLAGS = new Set(["master", "json"]);
 const TOOL_FLAGS = new Set([...CHECK_FLAGS, ...ARCHIVE_FLAGS, ...INIT_FLAGS]);
 const LEVELS: FindingLevel[] = ["error", "warn", "info"];
@@ -52,12 +55,13 @@ const LEVELS: FindingLevel[] = ["error", "warn", "info"];
 /** Whether a positional names a Shepherd maintenance command. */
 export function isToolCommand(
 	command: string | undefined,
-): command is "check" | "archive" | "guide" | "init" {
+): command is "check" | "archive" | "guide" | "init" | "doctor" {
 	return (
 		command === "check" ||
 		command === "archive" ||
 		command === "guide" ||
-		command === "init"
+		command === "init" ||
+		command === "doctor"
 	);
 }
 
@@ -78,7 +82,7 @@ function flagName(name: string): string {
 }
 
 function invalidFlag(
-	command: "check" | "archive" | "guide" | "init",
+	command: "check" | "archive" | "guide" | "init" | "doctor",
 	flags: ToolFlags,
 ): string | undefined {
 	const allowed =
@@ -88,7 +92,9 @@ function invalidFlag(
 				? ARCHIVE_FLAGS
 				: command === "init"
 					? INIT_FLAGS
-					: new Set<string>();
+					: command === "doctor"
+						? DOCTOR_FLAGS
+						: new Set<string>();
 	for (const [name, value] of Object.entries(flags)) {
 		if (value === false || value === undefined || allowed.has(name)) continue;
 		if (name === "name") return "shepherd: --name applies only to launches";
@@ -97,7 +103,7 @@ function invalidFlag(
 				name === "master"
 					? "tool init"
 					: name === "json"
-						? "tool check, tool archive and tool init"
+						? "tool check, tool archive, tool init and tool doctor"
 						: name === "today"
 							? "tool check and tool archive"
 							: name === "apply" || name === "recursive"
@@ -424,6 +430,16 @@ export async function runTool(
 				? JSON.stringify(initJson(initialized), null, 2)
 				: renderInit(initialized),
 			initExitCode(initialized),
+		);
+	}
+	if (command === "doctor") {
+		if (args.length > 1) return usage();
+		const diagnosed = runDoctor(toolEnv);
+		return result(
+			flags.json === true
+				? JSON.stringify(doctorJson(diagnosed), null, 2)
+				: renderDoctor(diagnosed),
+			doctorExitCode(diagnosed),
 		);
 	}
 	const today = todayFrom(flags, toolEnv.now);

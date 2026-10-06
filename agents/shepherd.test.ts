@@ -354,7 +354,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			json: {
 				type: "boolean",
 				description:
-					"tool check, tool archive and tool init: emit machine-readable JSON",
+					"tool check, tool archive, tool init and tool doctor: emit machine-readable JSON",
 			},
 			today: {
 				type: "string",
@@ -741,6 +741,10 @@ describe("tool surface", () => {
 			["tool", "init", "--master", "--json"],
 			["tool", "init", "--show-prompt"],
 			["tool", "init", "--model", "x"],
+			["tool", "doctor"],
+			["tool", "doctor", "--json"],
+			["tool", "doctor", "--show-prompt"],
+			["tool", "doctor", "--model", "x"],
 			["tool", "check", "--master"],
 			["tool", "check", "--all"],
 			["tool", "check", "--status"],
@@ -786,7 +790,7 @@ describe("tool surface", () => {
 					["tool", "guide", "--json"],
 					2,
 					"",
-					"shepherd: --json applies only to tool check, tool archive and tool init\n",
+					"shepherd: --json applies only to tool check, tool archive, tool init and tool doctor\n",
 				],
 				[
 					["tool", "guide", "--model", "x"],
@@ -812,6 +816,63 @@ describe("tool surface", () => {
 				});
 			}
 		}
+	});
+
+	test("doctor reports and refuses preview and model flags without either backend", async () => {
+		const tree = makeTree({ "launch/placeholder": "" });
+		try {
+			const cwd = join(tree.root, "launch");
+			for (const backend of BACKENDS) {
+				for (const flags of [[], ["--json"]]) {
+					const output = await execute(
+						["--backend", backend, "tool", "doctor", ...flags],
+						cwd,
+					);
+					expect(output).toMatchObject({ code: 1, stderr: "", records: [] });
+					if (flags.includes("--json"))
+						expect(JSON.parse(output.stdout)).toMatchObject({
+							schema: 1,
+							command: "doctor",
+							home: join(root, "home"),
+						});
+					else expect(output.stdout).toStartWith("Shepherd doctor, home ");
+					const shown = await preview(
+						["--backend", backend, "tool", "doctor", ...flags],
+						cwd,
+					);
+					expect(shown).toMatchObject({
+						code: 1,
+						text: "",
+						argv: [],
+						stderr:
+							"shepherd tool doctor does not launch a session; drop --show-prompt\n",
+					});
+					const modeled = await execute(
+						["--backend", backend, "tool", "doctor", ...flags, "--model", "x"],
+						cwd,
+					);
+					expect(modeled).toEqual({
+						code: 2,
+						stdout: "",
+						records: [],
+						stderr: "shepherd: --model applies only to launches\n",
+					});
+				}
+			}
+		} finally {
+			tree.cleanup();
+		}
+	});
+
+	test("launch JSON refusal names doctor as an owner", async () => {
+		const { cwd } = build("plain");
+		expect(await execute(["--json"], cwd)).toEqual({
+			code: 2,
+			stdout: "",
+			records: [],
+			stderr:
+				"shepherd: --json applies only to tool check, tool archive, tool init and tool doctor\n",
+		});
 	});
 
 	test("init succeeds and refuses preview and model flags without either backend", async () => {
