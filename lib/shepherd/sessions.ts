@@ -19,6 +19,7 @@ export type ToolEnv = {
 	home: string;
 	env: Readonly<Record<string, string | undefined>>;
 	now: Date;
+	execPath?: string;
 	runCommand: (request: CommandRequest) => Promise<CommandResult>;
 	pidAlive: (pid: number) => boolean;
 };

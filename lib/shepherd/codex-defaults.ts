@@ -40,7 +40,7 @@ function expandHome(path: string, home: string): string {
 	return path;
 }
 
-function configuredHome(
+export function configuredHome(
 	config: Config,
 	toolEnv: ToolEnv,
 ): { path?: string; source?: string; error?: string } {

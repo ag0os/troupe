@@ -108,7 +108,7 @@ function expandHome(path: string, home: string): string {
 			: path;
 }
 
-function userConfigFile(
+export function userConfigFile(
 	options: Pick<LoadConfigOptions, "home" | "env">,
 ): string {
 	const configHome = expandHome(
