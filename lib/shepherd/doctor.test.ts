@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	readFileSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join, relative } from "node:path";
 import { doctorExitCode, doctorJson, renderDoctor, runDoctor } from "./doctor";
 import { fakeToolEnv, makeTree } from "./test-support";
@@ -71,6 +77,155 @@ function complete(f: ReturnType<typeof fixture>) {
 }
 
 describe("doctor filesystem checks", () => {
+	test("doctor reads only the injected environment", () => {
+		const source = readFileSync(join(import.meta.dir, "doctor.ts"), "utf8");
+		expect(source).not.toMatch(/\bprocess\s*\.\s*env\b/);
+		expect(source).not.toMatch(/\bhomedir\b/);
+		expect(source).not.toContain("node:os");
+	});
+	test("Codex on PATH is ok without configuration; absent is skipped", () => {
+		const f = fixture();
+		expect(check(f.run(), "path:codex")).toMatchObject({
+			status: "ok",
+			summary: `codex on PATH: ${f.bin}/codex`,
+		});
+		chmodSync(join(f.bin, "codex"), 0o600);
+		expect(check(f.run(), "path:codex")).toMatchObject({
+			status: "skip",
+			summary: "codex not on PATH; Codex not configured",
+		});
+	});
+	test.skipIf(process.getuid?.() === 0)(
+		"other execute permission does not grant the owner access",
+		() => {
+			const f = fixture();
+			chmodSync(join(f.bin, "claude"), 0o001);
+			expect(check(f.run(), "path:claude").status).toBe("gap");
+		},
+	);
+	test("commented and unterminated hook script words are gaps", () => {
+		const f = fixture();
+		const script = f.put(".claude/herdr-agent-state.sh", "");
+		for (const command of [
+			`true # ${script}`,
+			`'${script}`,
+			`"${script}`,
+			`${script} '`,
+		]) {
+			f.put(".claude/settings.json", JSON.stringify(hooks(command)));
+			expect(check(f.run(), "claude:herdr-hook")).toMatchObject({
+				status: "gap",
+				edit: "herdr integration install claude",
+			});
+		}
+		const hashScript = f.put("#dir/herdr-agent-state.sh", "");
+		for (const command of [`'${hashScript}'`, hashScript, `''#${script}`]) {
+			f.put(".claude/settings.json", JSON.stringify(hooks(command)));
+			expect(check(f.run(), "claude:herdr-hook").status).toBe(
+				command.startsWith("''") ? "gap" : "ok",
+			);
+		}
+	});
+	test("missing absolute configured home gets a home gap rather than config gap", () => {
+		const f = fixture({ homeName: "home '$" });
+		const path = join(f.home, "missing-home");
+		f.put(
+			".config/shepherd/config.json",
+			JSON.stringify({ codex: { home: path } }),
+		);
+		const result = f.run();
+		expect(check(result, "config:user").status).toBe("ok");
+		const quoted = `'${path.replaceAll("'", "'\\''")}'`;
+		expect(check(result, `codex:home:${path}`)).toMatchObject({
+			status: "gap",
+			subject: path,
+			edit: `mkdir -p ${quoted}\nCODEX_HOME=${quoted} codex login`,
+		});
+	});
+	test("relative configured home remains a config gap without a home check", () => {
+		const f = fixture();
+		f.put(
+			".config/shepherd/config.json",
+			JSON.stringify({ codex: { home: "relative" } }),
+		);
+		const result = f.run();
+		expect(check(result, "config:user").edit).toBe(
+			`${f.home}/.config/shepherd/config.json: Codex home is not an absolute path: relative`,
+		);
+		expect(
+			result.checks.some((entry) => entry.id.startsWith("codex:home:")),
+		).toBe(false);
+	});
+	test.skipIf(process.getuid?.() === 0)(
+		"unreadable homeFile preserves launcher error and suppresses home check",
+		() => {
+			const f = fixture();
+			const file = f.put("selected-home", "~/missing-home");
+			f.put(
+				".config/shepherd/config.json",
+				JSON.stringify({ codex: { homeFile: file } }),
+			);
+			chmodSync(file, 0);
+			try {
+				const result = f.run();
+				expect(check(result, "config:user")).toMatchObject({
+					status: "gap",
+					edit: expect.stringContaining(`${file}:`),
+				});
+				expect(
+					result.checks.some((entry) => entry.id.startsWith("codex:home:")),
+				).toBe(false);
+			} finally {
+				chmodSync(file, 0o600);
+			}
+		},
+	);
+	test("hook install edits distinguish default home, its alias, and another home", () => {
+		const f = fixture({ homeName: "home '$" });
+		f.put(".codex/auth.json", "{}");
+		const alternate = join(f.home, "other-home");
+		mkdirSync(alternate);
+		const alias = join(f.home, "default-alias");
+		symlinkSync(join(f.home, ".codex"), alias);
+		for (const path of [join(f.home, ".codex"), alias, alternate]) {
+			f.toolEnv.env = { ...f.toolEnv.env, CODEX_HOME: path };
+			const quoted = `'${path.replaceAll("'", "'\\''")}'`;
+			expect(check(f.run(), `codex:herdr-hook:${path}`).edit).toBe(
+				path === alternate
+					? `herdr integration install codex (it installs into ~/.codex; for ${quoted}, symlink its hooks.json and herdr-agent-state.sh from there)`
+					: "herdr integration install codex",
+			);
+		}
+	});
+	test("CODEX_HOME expands tilde using the injected HOME", () => {
+		const f = fixture();
+		f.toolEnv.env = { ...f.toolEnv.env, CODEX_HOME: "~/.codex-x" };
+		const result = f.run();
+		expect(check(result, "config:user").status).toBe("ok");
+		expect(check(result, `codex:home:${f.home}/.codex-x`)).toMatchObject({
+			status: "gap",
+			summary: `Codex home ${f.home}/.codex-x (environment): directory missing`,
+		});
+	});
+	test("missing shepherd and wrong binary have distinct summaries and the same edit", () => {
+		const f = fixture();
+		f.toolEnv.execPath = f.put("launcher/shepherd", "");
+		chmodSync(f.toolEnv.execPath, 0o755);
+		const edit = `add to your shell rc: export PATH='${f.home}/launcher':"$PATH"`;
+		expect(check(f.run(), "path:shepherd")).toMatchObject({
+			status: "gap",
+			summary: "shepherd not on PATH",
+			edit,
+		});
+		writeFileSync(join(f.bin, "shepherd"), "");
+		chmodSync(join(f.bin, "shepherd"), 0o755);
+		expect(check(f.run(), "path:shepherd")).toMatchObject({
+			status: "gap",
+			summary: "shepherd on PATH is not this binary",
+			edit,
+		});
+	});
+
 	test("everything present, stable table order, no external commands", () => {
 		const f = fixture();
 		complete(f);

@@ -1,4 +1,11 @@
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+	accessSync,
+	constants,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { codexDefaults, configuredHome } from "./codex-defaults";
 import { loadConfig, userConfigFile } from "./config";
@@ -41,7 +48,9 @@ function readObject(file: string): {
 function isFile(path: string, executable = false): boolean {
 	try {
 		const stat = statSync(path);
-		return stat.isFile() && (!executable || (stat.mode & 0o111) !== 0);
+		if (!stat.isFile()) return false;
+		if (executable) accessSync(path, constants.X_OK);
+		return true;
 	} catch {
 		return false;
 	}
@@ -69,8 +78,10 @@ function shellWords(command: string): string[] {
 	const words: string[] = [];
 	let word = "";
 	let quoted = "";
+	let wordStarted = false;
 	for (let i = 0; i < command.length; i++) {
 		const char = command[i] ?? "";
+		if (!quoted && char === "#" && !wordStarted) break;
 		if (char === "\\" && quoted !== "'") {
 			const next = command[i + 1] ?? "";
 			if (!quoted || /["\\$`\n]/.test(next)) {
@@ -84,8 +95,12 @@ function shellWords(command: string): string[] {
 		else if (/\s|[;|&<>]/.test(char)) {
 			if (word) words.push(word);
 			word = "";
+			wordStarted = false;
+			continue;
 		} else word += char;
+		wordStarted = true;
 	}
+	if (quoted) return [];
 	if (word) words.push(word);
 	return words;
 }
@@ -143,9 +158,20 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 		"new",
 		false,
 	);
-	if (configured.path && !validation.error) addHome(configured.path, "config");
-	if (env.CODEX_HOME && isAbsolute(env.CODEX_HOME))
-		addHome(env.CODEX_HOME, "environment");
+	const validationError =
+		config.codex.homeFile || !configured.path || !isAbsolute(configured.path)
+			? validation.error
+			: undefined;
+	if (configured.path && !validationError) addHome(configured.path, "config");
+	const environmentHome = env.CODEX_HOME
+		? env.CODEX_HOME === "~"
+			? home
+			: env.CODEX_HOME.startsWith("~/")
+				? join(home, env.CODEX_HOME.slice(2))
+				: env.CODEX_HOME
+		: undefined;
+	if (environmentHome && isAbsolute(environmentHome))
+		addHome(environmentHome, "environment");
 	let enumerationError: string | undefined;
 	try {
 		for (const name of readdirSync(home).sort()) {
@@ -174,9 +200,9 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 	const herdr = onPath("herdr");
 	for (const name of ["claude", "codex", "herdr", "jq"]) {
 		const path = onPath(name);
-		if (name === "codex" && !codexConfigured)
-			add("path:codex", "skip", "Codex not configured");
-		else if (path) add(`path:${name}`, "ok", `${name} on PATH: ${path}`);
+		if (path) add(`path:${name}`, "ok", `${name} on PATH: ${path}`);
+		else if (name === "codex" && !codexConfigured)
+			add("path:codex", "skip", "codex not on PATH; Codex not configured");
 		else if (name === "herdr")
 			add(
 				"path:herdr",
@@ -207,7 +233,7 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 		add(
 			"path:shepherd",
 			"gap",
-			"shepherd on PATH is not this binary",
+			shepherd ? "shepherd on PATH is not this binary" : "shepherd not on PATH",
 			undefined,
 			`add to your shell rc: export PATH=${quote(dirname(toolEnv.execPath))}:"$PATH"`,
 		);
@@ -221,9 +247,9 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 			edit,
 		);
 	}
-	if (validation.error)
-		add("config:user", "gap", validation.error, configFile, validation.error);
-	if (env.CODEX_HOME && !isAbsolute(env.CODEX_HOME))
+	if (validationError)
+		add("config:user", "gap", validationError, configFile, validationError);
+	if (environmentHome && !isAbsolute(environmentHome))
 		add(
 			"config:user",
 			"gap",
@@ -254,6 +280,7 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 		file: string,
 		settings: ReturnType<typeof readObject>,
 		backend: string,
+		installEdit = `herdr integration install ${backend}`,
 	) => {
 		if (!herdr) {
 			add(id, "skip", "Herdr not on PATH; hook check skipped", file);
@@ -280,7 +307,7 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 					? "hook script path must be absolute"
 					: "Herdr SessionStart hook missing or script absent",
 			file,
-			ok ? undefined : `herdr integration install ${backend}`,
+			ok ? undefined : installEdit,
 		);
 	};
 	if (settings.error) {
@@ -343,6 +370,9 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 			join(path, "hooks.json"),
 			readObject(join(path, "hooks.json")),
 			"codex",
+			realpath(path) === realpath(join(home, ".codex"))
+				? "herdr integration install codex"
+				: `herdr integration install codex (it installs into ~/.codex; for ${quote(path)}, symlink its hooks.json and herdr-agent-state.sh from there)`,
 		);
 	const totals = { ok: 0, gap: 0, skip: 0 };
 	for (const check of checks) totals[check.status]++;

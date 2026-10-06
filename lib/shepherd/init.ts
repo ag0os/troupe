@@ -3,7 +3,6 @@ import {
 	lstatSync,
 	mkdirSync,
 	openSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -79,7 +78,9 @@ export function planInit(root: string, { master }: InitOptions): InitResult {
 
 function createDirectory(path: string): InitEntry["status"] {
 	if (present(path)) {
-		if (!statSync(path).isDirectory()) throw new Error("a file is in the way");
+		const stat = lstatSync(path);
+		if (!stat.isSymbolicLink() && !stat.isDirectory())
+			throw new Error("a file is in the way");
 		return "kept";
 	}
 	mkdirSync(dirname(path), { recursive: true });
@@ -88,7 +89,9 @@ function createDirectory(path: string): InitEntry["status"] {
 		return "created";
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		if (!statSync(path).isDirectory()) throw new Error("a file is in the way");
+		const stat = lstatSync(path);
+		if (!stat.isSymbolicLink() && !stat.isDirectory())
+			throw new Error("a file is in the way");
 		return "kept";
 	}
 }

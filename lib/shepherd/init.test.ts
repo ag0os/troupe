@@ -139,6 +139,49 @@ describe("init", () => {
 		);
 	});
 
+	test("keeps a dangling symlink at a required directory and completes", () => {
+		const { root, now } = fixture(
+			{},
+			{
+				symlinks: { ".shepherd/work/todo": "missing" },
+			},
+		);
+		expect(planInit(root, { master: true }).kept).toEqual(["work/todo/"]);
+		const result = applyInit(root, { master: true, now });
+		expect(result.failed).toBeNull();
+		expect(result.kept).toEqual(["work/todo/"]);
+		expect(result.created).toEqual(
+			[...BASE, ...SHARED].filter((path) => path !== "work/todo/"),
+		);
+		expect(
+			fs.lstatSync(join(root, ".shepherd/work/todo")).isSymbolicLink(),
+		).toBe(true);
+		expect(fs.existsSync(join(root, "missing"))).toBe(false);
+	});
+
+	test("keeps a dangling directory symlink appearing just before mkdir", () => {
+		const { root, now } = fixture();
+		const target = join(root, ".shepherd/work/todo");
+		const originalMkdir = fs.mkdirSync;
+		const mkdir = spyOn(fs, "mkdirSync").mockImplementation(
+			(...args: Parameters<typeof fs.mkdirSync>) => {
+				if (args[0] === target) fs.symlinkSync("missing", target);
+				return originalMkdir(...args);
+			},
+		);
+		try {
+			const result = applyInit(root, { master: true, now });
+			expect(result.failed).toBeNull();
+			expect(result.kept).toEqual(["work/todo/"]);
+			expect(result.created).toEqual(
+				[...BASE, ...SHARED].filter((path) => path !== "work/todo/"),
+			);
+			expect(fs.readlinkSync(target)).toBe("missing");
+		} finally {
+			mkdir.mockRestore();
+		}
+	});
+
 	test("stops at a file blocking work/todo and reports only completed writes", () => {
 		const { root, now } = fixture({ ".shepherd/work/todo": "blocked" });
 		const result = applyInit(root, { master: true, now });

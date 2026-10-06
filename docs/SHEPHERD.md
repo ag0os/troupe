@@ -143,7 +143,7 @@ Every workspace gets these entries, in order:
 |------|---------|
 | `CURRENT.md` | Work index and first move: run the init conversation |
 | `MEMORY.md` | Memory index |
-| `journal.md` | Journal with the current date |
+| `journal.md` | Journal, empty, with the daily heading rule |
 | `docs/INDEX.md` | Documentation index |
 | `docs/STATUS-template.md` | Work item status template |
 | `archive/INDEX.md` | Archive index |
@@ -155,7 +155,7 @@ Every workspace gets these entries, in order:
 |------|---------|
 | `shared/user.md` | User context skeleton |
 | `shared/machine.md` | Machine context skeleton |
-| `shared/roster.md` | Workspace roster skeleton |
+| `shared/roster.md` | Roster card: which model, harness and effort to use now |
 | `shared/tools.md` | Tool notes skeleton |
 | `integrations/shared.md` | Shared module inherited by workspaces beneath the root |
 
