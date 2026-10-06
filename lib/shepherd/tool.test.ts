@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fakeToolEnv, makeTree } from "./test-support";
 import { runTool } from "./tool";
@@ -30,13 +30,14 @@ function fixture() {
 }
 
 describe("runTool usage and validation", () => {
-	test("requires check or archive and prints both usage lines", async () => {
+	test("requires check, archive, or guide and prints all usage lines", async () => {
 		const { env } = fixture();
 		for (const args of [[], ["sweep"]]) {
 			const output = await runTool(args, {}, env);
 			expect(output).toMatchObject({ code: 2, stream: "stderr" });
 			expect(output.text).toContain("shepherd tool check");
 			expect(output.text).toContain("shepherd tool archive");
+			expect(output.text).toContain("shepherd tool guide [<name>]");
 		}
 	});
 
@@ -91,6 +92,102 @@ describe("runTool usage and validation", () => {
 			code: 2,
 			stream: "stderr",
 		});
+	});
+});
+
+describe("runTool guide", () => {
+	test("lists all three guides with their purpose lines", async () => {
+		const { env } = fixture();
+		expect(await runTool(["guide"], {}, env)).toEqual({
+			text: [
+				"charter: the init conversation's questions and the charter's shape",
+				"memory: the memory file format and what each type holds",
+				"tools: generic traps in Claude Code delegates, the Codex CLI and the shell",
+				"",
+			].join("\n"),
+			code: 0,
+			stream: "stdout",
+		});
+	});
+
+	for (const name of ["charter", "memory", "tools"]) {
+		test(`prints ${name} byte for byte`, async () => {
+			const { env } = fixture();
+			const output = await runTool(["guide", name], {}, env);
+			expect(output).toMatchObject({ code: 0, stream: "stdout" });
+			expect(Buffer.from(output.text)).toEqual(
+				readFileSync(
+					join(
+						import.meta.dir,
+						"../../system-prompts/shepherd/guides",
+						`${name}.md`,
+					),
+				),
+			);
+		});
+	}
+
+	test("rejects unknown names and extra positionals", async () => {
+		const { env } = fixture();
+		expect(await runTool(["guide", "missing"], {}, env)).toEqual({
+			text: 'shepherd: no guide named "missing"; guides: charter, memory, tools\n',
+			code: 2,
+			stream: "stderr",
+		});
+		const extra = await runTool(["guide", "charter", "memory"], {}, env);
+		expect(extra).toMatchObject({ code: 2, stream: "stderr" });
+		expect(extra.text).toContain("shepherd tool guide [<name>]");
+	});
+
+	test("rejects every misplaced tool flag", async () => {
+		const { env } = fixture();
+		for (const [name, value, owner] of [
+			["json", true, "tool check and tool archive"],
+			["today", "2026-13-40", "tool check and tool archive"],
+			["all", true, "tool check"],
+			["status", true, "tool check"],
+			["context", true, "tool check"],
+			["apply", true, "tool archive"],
+			["recursive", true, "tool archive"],
+			["name", "session", "launches"],
+		] as const) {
+			expect(await runTool(["guide"], { [name]: value }, env)).toEqual({
+				text: `shepherd: --${name} applies only to ${owner}\n`,
+				code: 2,
+				stream: "stderr",
+			});
+		}
+	});
+
+	test("works outside a workspace with a broken user config", async () => {
+		const tree = makeTree({
+			"launch/placeholder": "",
+			"home/.config/shepherd/config.json": "{broken",
+		});
+		cleanups.push(tree.cleanup);
+		const env = fakeToolEnv({
+			cwd: join(tree.root, "launch"),
+			home: join(tree.root, "home"),
+		});
+		for (const args of [["guide"], ["guide", "charter"]]) {
+			expect(await runTool(args, {}, env)).toMatchObject({
+				code: 0,
+				stream: "stdout",
+			});
+		}
+	});
+
+	test("reads no workspace, config, or clock input", async () => {
+		const { env } = fixture();
+		const unreadable = () => {
+			throw new Error("guide must not read ToolEnv");
+		};
+		for (const key of ["cwd", "home", "env", "now"]) {
+			Object.defineProperty(env, key, { get: unreadable });
+		}
+		for (const args of [["guide"], ["guide", "memory"]]) {
+			expect(await runTool(args, {}, env)).toMatchObject({ code: 0 });
+		}
 	});
 });
 

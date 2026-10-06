@@ -724,6 +724,11 @@ describe("tool surface", () => {
 			["tool", "sweep"],
 			["tool", "check"],
 			["tool", "archive"],
+			["tool", "guide"],
+			["tool", "guide", "charter"],
+			["tool", "guide", "--json"],
+			["tool", "guide", "--show-prompt"],
+			["tool", "guide", "--model", "x"],
 			["tool", "check", "--all"],
 			["tool", "check", "--status"],
 			["tool", "check", "--context"],
@@ -740,6 +745,59 @@ describe("tool surface", () => {
 		for (const argv of cases) {
 			const output = await execute(argv, cwd);
 			expect(output.records, argv.join(" ")).toEqual([]);
+		}
+	});
+
+	test("guide returns text and refusals without launching either backend", async () => {
+		const { cwd } = build("plain");
+		for (const backend of BACKENDS) {
+			for (const [argv, code, stdout, stderr] of [
+				[
+					["tool", "guide"],
+					0,
+					[
+						"charter: the init conversation's questions and the charter's shape",
+						"memory: the memory file format and what each type holds",
+						"tools: generic traps in Claude Code delegates, the Codex CLI and the shell",
+						"",
+					].join("\n"),
+					"",
+				],
+				[
+					["tool", "guide", "charter"],
+					0,
+					text("system-prompts/shepherd/guides/charter.md"),
+					"",
+				],
+				[
+					["tool", "guide", "--json"],
+					2,
+					"",
+					"shepherd: --json applies only to tool check and tool archive\n",
+				],
+				[
+					["tool", "guide", "--model", "x"],
+					2,
+					"",
+					"shepherd: --model applies only to launches\n",
+				],
+			] as const) {
+				const output = await execute(["--backend", backend, ...argv], cwd);
+				expect(output).toEqual({ code, stdout, stderr, records: [] });
+			}
+			for (const args of [
+				["tool", "guide"],
+				["tool", "guide", "charter"],
+			]) {
+				const output = await preview(["--backend", backend, ...args], cwd);
+				expect(output).toMatchObject({
+					code: 1,
+					text: "",
+					stderr:
+						"shepherd tool guide does not launch a session; drop --show-prompt\n",
+					argv: [],
+				});
+			}
 		}
 	});
 

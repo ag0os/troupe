@@ -15,6 +15,7 @@ import {
 } from "./config";
 import { contextTiers, renderContextTable } from "./context";
 import { dayOf, localDate } from "./dates";
+import { GUIDES } from "./guides";
 import { runningSessions, type ToolEnv } from "./sessions";
 import { renderStatus, statusJson, statusReport } from "./status-render";
 import {
@@ -37,6 +38,7 @@ type ToolFlags = Readonly<Record<string, string | boolean>>;
 const USAGE = [
 	"shepherd tool check   [<workspace>...] [--all] [--status | --context] [--json] [--today YYYY-MM-DD]",
 	"shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]",
+	"shepherd tool guide [<name>]",
 ].join("\n");
 
 const CHECK_FLAGS = new Set(["all", "status", "context", "json", "today"]);
@@ -47,8 +49,8 @@ const LEVELS: FindingLevel[] = ["error", "warn", "info"];
 /** Whether a positional names a Shepherd maintenance command. */
 export function isToolCommand(
 	command: string | undefined,
-): command is "check" | "archive" {
-	return command === "check" || command === "archive";
+): command is "check" | "archive" | "guide" {
+	return command === "check" || command === "archive" || command === "guide";
 }
 
 function result(
@@ -68,10 +70,15 @@ function flagName(name: string): string {
 }
 
 function invalidFlag(
-	command: "check" | "archive",
+	command: "check" | "archive" | "guide",
 	flags: ToolFlags,
 ): string | undefined {
-	const allowed = command === "check" ? CHECK_FLAGS : ARCHIVE_FLAGS;
+	const allowed =
+		command === "check"
+			? CHECK_FLAGS
+			: command === "archive"
+				? ARCHIVE_FLAGS
+				: new Set<string>();
 	for (const [name, value] of Object.entries(flags)) {
 		if (value === false || value === undefined || allowed.has(name)) continue;
 		if (name === "name") return "shepherd: --name applies only to launches";
@@ -374,6 +381,24 @@ export async function runTool(
 	if (!isToolCommand(command)) return usage();
 	const badFlag = invalidFlag(command, flags);
 	if (badFlag) return result(badFlag, 2, "stderr");
+	if (command === "guide") {
+		if (args.length > 2) return usage();
+		const name = args[1];
+		if (name === undefined) {
+			return result(
+				GUIDES.map((guide) => `${guide.name}: ${guide.purpose}`).join("\n"),
+				0,
+			);
+		}
+		const guide = GUIDES.find((guide) => guide.name === name);
+		return guide
+			? { text: guide.text, code: 0, stream: "stdout" }
+			: result(
+					`shepherd: no guide named "${name}"; guides: ${GUIDES.map((guide) => guide.name).join(", ")}`,
+					2,
+					"stderr",
+				);
+	}
 	const today = todayFrom(flags, toolEnv.now);
 	if ("text" in today) return today;
 
