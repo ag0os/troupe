@@ -91,6 +91,7 @@ function testToolEnv(ctx: PrepareContext): ToolEnv {
 		home: join(root, "home"),
 		env: {},
 		now: new Date(),
+		clock: () => new Date(),
 		runCommand: ctx.runCommand,
 		pidAlive: () => false,
 	};

@@ -28,6 +28,7 @@ export interface FakeToolEnvOptions {
 	env?: Record<string, string | undefined>;
 	alivePids?: Iterable<number>;
 	runCommand?: ToolEnv["runCommand"];
+	clock?: ToolEnv["clock"];
 }
 
 /** Build a deterministic ToolEnv for Shepherd unit tests. */
@@ -37,15 +38,29 @@ export function fakeToolEnv({
 	env = {},
 	alivePids = [],
 	runCommand = async () => ({ exitCode: 1, stdout: "", stderr: "" }),
+	clock,
 }: FakeToolEnvOptions): ToolEnv {
 	const alive = new Set(alivePids);
+	const now = new Date("2026-10-05T12:00:00Z");
 	return {
 		cwd,
 		home,
 		env,
-		now: new Date("2026-10-05T12:00:00Z"),
+		now,
+		clock: clock ?? (() => new Date(now)),
 		runCommand,
 		pidAlive: (pid) => alive.has(pid),
+	};
+}
+
+/** A controllable clock that returns independent Date instances. */
+export function fakeClock(start: Date | string | number) {
+	let time = new Date(start).getTime();
+	return {
+		clock: () => new Date(time),
+		advance: (ms: number) => {
+			time += ms;
+		},
 	};
 }
 

@@ -112,6 +112,7 @@ function processToolEnv(ctx: PrepareContext): ToolEnv {
 		env: process.env,
 		execPath: process.execPath,
 		now: new Date(),
+		clock: () => new Date(),
 		runCommand: ctx.runCommand,
 		pidAlive: (pid) => {
 			try {
