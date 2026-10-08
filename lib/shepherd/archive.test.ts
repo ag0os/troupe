@@ -15,7 +15,12 @@ import {
 	planArchive,
 	renderArchive,
 } from "./archive";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { makeTree } from "./test-support";
 import { discoverTree, selectWorkspaces } from "./tree";
 
@@ -29,6 +34,7 @@ function config(doneDays: number = DEFAULT_WINDOWS.doneDays): Config {
 	return {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS, doneDays },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 	};

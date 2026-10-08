@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
 import { promptWords } from "./compose";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { contextTiers, renderContextTable } from "./context";
 import { type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
@@ -17,6 +22,7 @@ function config(opening: number = DEFAULT_MARKS.opening): Config {
 	return {
 		marks: { ...DEFAULT_MARKS, opening },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 	};

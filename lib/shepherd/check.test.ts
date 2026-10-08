@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { checkWorkspace, type Finding } from "./check";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
@@ -27,6 +32,7 @@ function config(overrides: Partial<Config> = {}): Config {
 	return {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 		...overrides,
