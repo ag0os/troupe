@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	lstatSync,
@@ -109,6 +110,202 @@ export function journalSections(text: string): {
 		body,
 	}));
 	return { preamble, days };
+}
+
+export type JournalEntry = {
+	line: number;
+	day?: string;
+	time?: string;
+	text: string;
+	id: string;
+};
+
+export type ChainEntry = JournalEntry & { file: string };
+
+/** Entries in file order, with ids chained from previousId. */
+export function journalEntries(
+	text: string,
+	previousId: string = "root",
+): JournalEntry[] {
+	const entries: JournalEntry[] = [];
+	let day: string | undefined;
+	let current: JournalEntry | undefined;
+	let previousLine = 0;
+	for (const { n, line } of proseLines(text)) {
+		if (n !== previousLine + 1) current = undefined;
+		previousLine = n;
+		const heading = line.match(/^## (\d{4}-\d{2}-\d{2})/);
+		if (heading) day = heading[1];
+		if (line.startsWith("- ")) {
+			current = { line: n, day, text: line.slice(2), id: "" };
+			entries.push(current);
+		} else if (current && /^[ \t]/.test(line) && line.trim()) {
+			current.text += ` ${line}`;
+		} else {
+			current = undefined;
+		}
+	}
+	for (const entry of entries) {
+		entry.text = entry.text.replace(/\s+/g, " ").trim();
+		entry.time = entry.text.match(/^(\d{2}:\d{2})(?=\s|:)/)?.[1];
+		entry.id = createHash("sha256")
+			.update(`${previousId}\n${entry.text}`)
+			.digest("hex")
+			.slice(0, 10);
+		previousId = entry.id;
+	}
+	return entries;
+}
+
+/** Archived journals in filename order, followed by the current journal. */
+export function journalChain(state: string): {
+	entries: ChainEntry[];
+	files: string[];
+	unreadable: { file: string; reason: string }[];
+} {
+	const entries: ChainEntry[] = [];
+	const files: string[] = [];
+	const unreadable: { file: string; reason: string }[] = [];
+	const candidates: string[] = [];
+	const archive = "archive/journal";
+	try {
+		const path = join(state, archive);
+		if (lstatSync(path).isSymbolicLink()) {
+			unreadable.push({ file: archive, reason: "is a symlink" });
+		} else {
+			candidates.push(
+				...readdirSync(path)
+					.filter((file) => file.endsWith(".md"))
+					.sort()
+					.map((file) => `${archive}/${file}`),
+			);
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			unreadable.push({
+				file: archive,
+				reason: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	candidates.push("journal.md");
+	let previousId = "root";
+	for (const file of candidates) {
+		let inspected = false;
+		try {
+			const path = join(state, file);
+			const stat = lstatSync(path);
+			inspected = true;
+			if (stat.isSymbolicLink() || !stat.isFile()) {
+				unreadable.push({
+					file,
+					reason: stat.isSymbolicLink()
+						? "is a symlink"
+						: "is not a regular file",
+				});
+				continue;
+			}
+			const parsed = journalEntries(read(path), previousId);
+			files.push(file);
+			entries.push(...parsed.map((entry) => ({ ...entry, file })));
+			previousId = parsed.at(-1)?.id ?? previousId;
+		} catch (error) {
+			if (
+				!inspected &&
+				file === "journal.md" &&
+				(error as NodeJS.ErrnoException).code === "ENOENT"
+			) {
+				continue;
+			}
+			unreadable.push({
+				file,
+				reason: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return { entries, files, unreadable };
+}
+
+function journalHeadings(text: string): { day: string; line: number }[] {
+	return proseLines(text).flatMap(({ n, line }) => {
+		const day = line.match(/^## (\d{4}-\d{2}-\d{2})/)?.[1];
+		return day ? [{ day, line: n }] : [];
+	});
+}
+
+/** Timed entries more than five minutes behind the previous time per heading. */
+export function journalTimeSlips(text: string): {
+	day: string;
+	headingLine: number;
+	count: number;
+	firstLine: number;
+}[] {
+	const headings = journalHeadings(text);
+	const slips: ReturnType<typeof journalTimeSlips> = [];
+	let headingIndex = -1;
+	let previous: number | undefined;
+	let slip: (typeof slips)[number] | undefined;
+	for (const entry of journalEntries(text)) {
+		while (
+			headings[headingIndex + 1] &&
+			(headings[headingIndex + 1]?.line ?? Infinity) < entry.line
+		) {
+			headingIndex++;
+			previous = undefined;
+			slip = undefined;
+		}
+		const heading = headings[headingIndex];
+		if (!heading || !entry.time) continue;
+		const [hour, minute] = entry.time.split(":").map(Number);
+		const time = (hour ?? 0) * 60 + (minute ?? 0);
+		if (previous !== undefined && previous - time > 5) {
+			if (!slip) {
+				slip = {
+					day: heading.day,
+					headingLine: heading.line,
+					count: 0,
+					firstLine: entry.line,
+				};
+				slips.push(slip);
+			}
+			slip.count++;
+		}
+		previous = time;
+	}
+	return slips;
+}
+
+/** Repeated dates with every heading line, in first appearance order. */
+export function journalDuplicateHeadings(
+	text: string,
+): { day: string; lines: number[] }[] {
+	const dates = new Map<string, number[]>();
+	for (const { day, line } of journalHeadings(text)) {
+		const lines = dates.get(day) ?? [];
+		lines.push(line);
+		dates.set(day, lines);
+	}
+	return [...dates].flatMap(([day, lines]) =>
+		lines.length > 1 ? [{ day, lines }] : [],
+	);
+}
+
+/** Headings earlier than the immediately preceding dated heading. */
+export function journalMisorderedHeadings(
+	text: string,
+): { day: string; line: number; previous: string }[] {
+	const out: ReturnType<typeof journalMisorderedHeadings> = [];
+	let previous: string | undefined;
+	for (const { day, line } of journalHeadings(text)) {
+		if (previous && day < previous) out.push({ day, line, previous });
+		previous = day;
+	}
+	return out;
+}
+
+/** Entries before the first dated heading, retaining their chain ids. */
+export function journalOrphans(text: string): JournalEntry[] {
+	return journalEntries(text).filter(({ day }) => day === undefined);
 }
 
 /** One line from STATUS.md for an index. */
