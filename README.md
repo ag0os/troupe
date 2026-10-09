@@ -1,297 +1,63 @@
 # Troupe
 
-A troupe of agents: each one declared once in this repo, compiled into a binary in `bin/`, and run from the terminal. The shared format supports Claude Code and Codex. See [the agent-format guide](docs/AGENT-FORMAT.md).
+A troupe of agents: each one declared once in this repo, compiled into a binary in `bin/`, and run from the terminal. The shared format supports Claude Code and Codex, so an agent is written once and runs on either backend it declares. Shepherd, the day to day assistant and manager, is built here too.
 
 Formerly `claude-forge`; the repo was renamed in place on 2026-09-29.
+
+## How it is organized
+
+- **Agent declarations**, `agents/`: one Markdown file per agent. The frontmatter holds backend neutral configuration and the body is the system prompt. A same-stem `.ts` extension adds dynamic behavior only when an agent needs it. Subdirectories become the binary name: `agents/plan/planner.md` builds `bin/plan:planner`.
+- **Shared prompts**, `system-prompts/`: fragments that several declarations or an extension pull in, including Shepherd's layered prompt.
+- **Compiler and runner**: `scripts/` holds the compile and watch scripts; `lib/agent-format/` holds the schema, generated CLI, shared runner, and the Claude and Codex adapters. `lib/shepherd/` holds Shepherd's workspace and launch helpers.
+- **Binaries**, `bin/`: standalone binaries produced by the compile scripts. Never edit them by hand; git ignores them.
+- **Docs**, `docs/`: the guides listed below.
+
+The compiler builds a fixed roster, the `ROSTER` list in `scripts/agent-compiler.ts`; a new declaration is compiled only once its name is there. To see the current agents, look in `agents/` or `bin/`, or run `bun run compile:all --dry-run`.
+
+## Setup
+
+Install [Bun](https://bun.sh) and Claude Code, Codex, or both, with their executables on `PATH`. Then:
+
+```bash
+git clone https://github.com/ag0os/troupe.git
+cd troupe
+bun install
+bun run compile:all
+export PATH="$PATH:/path/to/troupe/bin"   # add to your shell profile
+```
+
+[docs/SETUP.md](docs/SETUP.md) covers a fresh machine in full, including Shepherd's settings, Codex homes and Herdr.
+
+## Running an agent
+
+Every binary shares the same command line. Positionals form the prompt; backend flags go after a standalone `--`.
+
+```bash
+shepherd "triage my morning"
+shepherd --help                     # this agent's flags and supported backends
+shepherd --show-prompt              # print the prompt and argv, launch nothing
+shepherd --backend codex            # run on another declared backend
+shepherd -- --resume SESSION_ID     # pass a flag through to the backend
+```
+
+## Development
+
+```bash
+bun run watch                 # rebuild the roster whenever agents/ or system-prompts/ change
+bun run compile -- <agent>    # rebuild one agent
+bun test
+bun run check:all             # typecheck and Biome, as CI and the pre-commit hook run it
+```
+
+## Docs
+
+- [docs/AGENT-FORMAT.md](docs/AGENT-FORMAT.md): read before writing or changing a declaration or extension. It owns the schema, command line, backend mapping and compilation.
+- [docs/SHEPHERD.md](docs/SHEPHERD.md): read to use, configure or extend Shepherd.
+- [docs/SETUP.md](docs/SETUP.md): read when setting up a new machine.
+- [docs/COACH.md](docs/COACH.md): read to use `tutors:coach` or write a subject pack for it.
+- [docs/WEBFETCH-SKILL.md](docs/WEBFETCH-SKILL.md): read when an agent should call `tools:webfetch`.
+- [AGENTS.md](AGENTS.md): conventions for coding agents and contributors working in this repo.
 
 ## Origins
 
 This project was originally forked from [johnlindquist/claude-workshop-live](https://github.com/johnlindquist/claude-workshop-live), a workshop collection of Claude Code agents. It has since been reshaped into a backend-agnostic hub of declared agents; the git history records how.
-
-## Prerequisites
-
-### Install Bun
-
-This project requires [Bun](https://bun.sh), a fast all-in-one JavaScript runtime. Install it using:
-
-```bash
-# macOS/Linux
-curl -fsSL https://bun.sh/install | bash
-
-# Windows (via PowerShell)
-powershell -c "irm bun.sh/install.ps1 | iex"
-
-# Or via npm/yarn if you have Node.js
-npm install -g bun
-```
-
-### Install a backend CLI
-
-Install Claude Code, Codex, or both. Each agent's generated help lists its supported backends. The executables must be on `PATH`.
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-## Quick Start
-
-1. **Clone the repository:**
-```bash
-git clone https://github.com/ag0os/troupe.git
-cd troupe
-```
-
-2. **Install dependencies:**
-```bash
-bun install
-```
-
-3. **Build all agents:**
-```bash
-bun run watch  # Watches and auto-compiles all agents
-# OR
-bun run compile -- design:designer  # Compile a specific roster agent
-```
-
-## Setting Up Agents as Global Commands
-
-This project compiles strict Markdown agent declarations into standalone binaries that can be used as global commands. Here's how to set up `design:designer` (or any other roster agent) as a global command:
-
-### Method 1: Using `bun watch` (Recommended for Development)
-
-The watcher compiles the fixed 22-agent roster and watches its two source roots:
-
-```bash
-# Start the watcher (compiles all agents and watches for changes)
-bun run watch
-```
-
-This will:
-- Compile every declaration in the roster to `bin/`
-- Watch `agents/` and `system-prompts/`
-- Rebuild the roster when either root changes
-- Prune binaries outside the roster after a successful full build
-
-### Method 2: Manual Compilation
-
-Compile individual agents as needed:
-
-```bash
-# Compile a specific agent
-bun run compile -- design:designer
-
-# The binary will be created at ./bin/design:designer
-```
-
-### Making Agents Globally Available
-
-After compilation, add the `bin` directory to your PATH to use agents as global commands:
-
-```bash
-# Add to your shell profile (~/.bashrc, ~/.zshrc, ~/.bash_profile, etc.)
-export PATH="$PATH:/path/to/troupe/bin"
-
-# Reload your shell configuration
-source ~/.zshrc  # or ~/.bashrc, depending on your shell
-
-# Now you can use agents as commands from anywhere
-design:designer "Create a responsive landing page"
-modes:contain "Analyze this codebase"
-plan:planner "Help me plan a new feature"
-```
-
-### How the Designer Agent Works
-
-The designer agent is a compiled declaration that:
-
-1. **Declares configuration:** Stores backends, model, MCP, and Claude permissions in `agents/design/designer.md` frontmatter
-2. **Embeds its prompt:** Uses the Markdown declaration body as its system prompt
-3. **Enables MCP tools:** Integrates with Chrome DevTools for design workflows
-4. **Separates prompts and backend flags:** Positionals form the prompt; backend flags follow a standalone `--`
-
-Example usage:
-```bash
-# After adding bin/ to PATH
-design:designer "Create a card component with hover effects"
-
-# Or run directly from the project
-./bin/design:designer "Help me design a navigation menu"
-
-# Preview without launching a backend
-./bin/design:designer --show-prompt "Design a color palette for a tech startup"
-```
-
-## Project Structure
-
-- `agents/` - Markdown declarations plus optional same-stem TypeScript extensions
-- `bin/` - Compiled standalone binaries (generated by build/watch)
-- `system-prompts/` - Shared prompt fragments used by declarations and extensions
-- `lib/agent-format/` - Strict schema, templates, CLI, runner, and backend adapters
-- `scripts/` - Build and development utilities
-
-## Available Agents
-
-The fixed roster contains 22 focused agents:
-
-### Task-Specific Agents
-- **design:designer** - Token-first design work with Chrome DevTools
-- **build:builder** - Interactive building workflows from an agreed plan
-- **build:comment-review** - Review and improve newly added code comments
-- **build:refactor** - Internal-structure improvements that preserve external behavior
-- **build:tdd** - Test-driven development coordination
-- **design:architect** - Collaborative architecture and ADRs
-- **design:audit** - Design-system and styling audits
-- **modes:contain** - Claude restricted to container-use MCP tools
-- **plan:planner** - Strategic implementation planning
-- **plan:riff** - Design exploration through pseudo-code dialogue
-
-### Coordination Agents
-- **rails:backlog** - Rails backlog task coordination
-- **shepherd** - Day-to-day assistant and agent coordinator
-- **tutors:coach** - Dynamic interview and skills coach
-
-### Analysis & Research Agents
-- **analyze:orient** - Context-aware codebase orientation
-- **review:pr** - Pull request review
-
-### Diagram Agents
-- **design:diagram:all** - Project-wide event-flow diagrams
-- **design:diagram:topic** - Diagrams limited to one topic
-- **design:diagram:consolidate** - Verify, deduplicate, and bundle diagrams
-
-### Utility Agents
-- **git:fix** - Address review comments on a pull request
-- **meta:prompt** - Turn prompts into three structured Markdown variations
-- **resume:tailor** - Tailor and compile a Typst resume
-- **tools:webfetch** - One-shot WebFetch wrapper
-
----
-
-## Diagram Agents
-
-- Run project-wide diagrams:
-  - `design:diagram:all [optional focus words]`
-- Run topic-focused diagrams:
-  - `design:diagram:topic <topic> [extra focus]`
-- Consolidate existing diagrams:
-  - `design:diagram:consolidate [optional filters]`
-
-## Development Commands
-
-```bash
-# Watch and auto-compile all agents
-bun run watch
-
-# Compile a specific agent
-bun run compile -- <roster-name>
-
-# Format and lint code
-bun run lint
-
-# Run type checking, then non-mutating Biome checks
-bun run typecheck
-bun run check
-```
-
-## Editing an Agent
-
-The compiler accepts only the fixed roster. Edit an existing `agents/<path>.md` declaration and use a same-stem `.ts` extension only when dynamic preparation or result transformation is required. The [agent-format guide](docs/AGENT-FORMAT.md) documents the schema and extension contract.
-
-Compile and preview the agent:
-
-```bash
-bun run compile -- design:designer
-./bin/design:designer --help
-./bin/design:designer --show-prompt "Your prompt here"
-```
-
-## Tips
-
-- The watch script monitors `agents/` and `system-prompts/`
-- Changes under either watched root trigger a full rebuild
-- Binaries are self-contained and include all dependencies
-- Each agent declares its MCP tools, native backend configuration, and system prompt
-- Backend flags go after `--`, for example `shepherd -- --resume SESSION_ID`
-
-This project was created using `bun init` in bun v1.2.9.
-
-## Orient Agent
-
-Generate an orientation map that traces files, dependencies, dependents, functions, event flow hints, and tests around a concept or file.
-
-Usage:
-
-```bash
-# Full orientation with optional context
-analyze:orient "authentication"
-
-# Quick overview
-analyze:orient --quick
-
-# Focus on one area
-analyze:orient --focus structure
-```
-
-The agent examines the current project and returns an orientation covering structure, technology, commands, workflow, recent changes, and next steps. Its prompt may also write an orientation document under `ai/orientations/` when requested.
-
-## Agents & Prompts: Behaviors and Usage Scenarios
-
-Each agent keeps its backend-neutral configuration in frontmatter and its system prompt in the declaration body. Shared fragments remain under `system-prompts/` only when several declarations or a dynamic extension need them.
-
-### Common Prompt Expectations
-- Private scratchpad: agents think step-by-step privately; outputs contain results and rationale only (no chain-of-thought).
-- Structured outputs: many agents emit XML-like tagged blocks per turn, such as `<turn>`, `<options>`, `<verification>`, `<commit>`, and `<next>`.
-- Code fences: labeled with language and a filename comment; changes are minimal and reversible.
-- Tool safety: read before edit; avoid destructive commands; never expose secrets.
-- Decision loops: many prompts present EXACTLY 3 options and block for a `1/2/3` selection or a minimal modification.
-
-### When To Use Which Agent
-- `design:designer`
-  - Token-first design system work (colors/typography → atoms → organisms → pages).
-  - Produces `<turn>` blocks with 3 options, Storybook/Chrome DevTools MCP validation, and accessibility gates.
-  - Use when establishing or evolving design systems with visual validation.
-
-- `build:builder`
-  - Iterative implementation from a markdown plan, per-feature `<turn>` with plan/preview/verification/commit.
-  - User controls progression with proceed/modify/skip; tracks state and tests.
-  - Use for incremental, reviewable delivery from an agreed plan.
-
-- `build:refactor`
-  - Internal-structure improvements that preserve external behavior; baselines first, small reversible steps.
-  - `<turn>` with options, parity verification, commit message, churn limits.
-  - Use to pay down tech debt without changing behavior.
-
-- `plan:planner`
-  - Proposes plans only; does not implement code. Produces `<planning>` with options and a commit/file-specific plan.
-  - Use to converge on an actionable plan before starting work.
-
-- `analyze:orient`
-  - Orientation analysis with `<orientation>` output: overview, structure, tech, commands, workflow, recent, next.
-  - Use when onboarding to a repo or scoping a change area.
-
-- `modes:contain`
-  - Launches Claude with container-use MCP and denies direct filesystem and shell tools.
-  - Use for "standardized" sessions across machines or teams.
-
-- `plan:riff`
-  - Design exploration through pseudo-code dialogue; based on Kasper Timm Hansen's "riffing" technique.
-  - Detects tech stack, explores problems through pseudo-code, surfaces design decisions and open questions.
-  - Use for early-stage design exploration before committing to implementation.
-
-- `rails:backlog`
-  - Rails Backlog Task Coordinator; reads tasks from backlog.md and coordinates specialized sub-agents.
-  - Handles task analysis, sub-agent coordination, lifecycle management, and Definition of Done verification.
-  - Use for Rails projects with backlog-driven development workflows.
-
-- `design:audit`
-  - Comprehensive design system/site styling audit; scans for tokens, variables, themes, layouts, patterns.
-  - Writes navigable audit reports to `ai/design-audit/` without modifying app code.
-  - Use to understand and document existing design systems.
-
-- `meta:prompt`
-  - Turns a provided prompt/spec into three structured Markdown variations with winner rationale.
-  - Use to iterate on and improve prompts before use.
-
-### Runtime Consistency
-- Generated entries use the shared runner, which owns backend selection, prompt transport, signals, child cancellation, and cleanup.
-- Prompts enforce structured outputs, three-option decision loops where relevant, and non-destructive tool use.
