@@ -523,9 +523,14 @@ export function checkWorkspace(
 	}
 
 	let promptProblem: string | undefined;
-	const tiers = contextTiers(workspace, config, (message) => {
-		promptProblem = message;
-	});
+	const tiers = contextTiers(
+		workspace,
+		config,
+		(message) => {
+			promptProblem = message;
+		},
+		probe,
+	);
 	if (promptProblem) {
 		add(
 			"warn",
