@@ -9,7 +9,7 @@ import {
 	resolve,
 	sep,
 } from "node:path";
-import { frontmatter, walk } from "./text";
+import { frontmatter } from "./text";
 import type { Workspace } from "./tree";
 import { findEnclosingWorkspace, STATE_DIR } from "./workspace";
 
@@ -216,15 +216,17 @@ function isDirectory(path: string): boolean {
 
 function markdownFiles(dir: string, recursive: boolean): string[] {
 	if (!isDirectory(dir)) return [];
-	if (recursive)
-		return walk(
-			dir,
-			(path) => path.endsWith(".md") && lstatSync(path).isFile(),
-		);
-	return readdirSync(dir, { withFileTypes: true })
-		.filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-		.map((entry) => join(dir, entry.name))
-		.sort();
+	try {
+		return readdirSync(dir, { withFileTypes: true })
+			.flatMap((entry) => {
+				const path = join(dir, entry.name);
+				if (recursive && entry.isDirectory()) return markdownFiles(path, true);
+				return entry.isFile() && entry.name.endsWith(".md") ? [path] : [];
+			})
+			.sort();
+	} catch {
+		return [];
+	}
 }
 
 function itemState(state: string, slug: string): ItemState {
@@ -274,7 +276,11 @@ export function readDroppedSources(
 } {
 	const items: DroppedInput["items"] = {};
 	for (const { slug } of itemEntries(baseline))
-		items[slug] = itemState(workspace.state, slug);
+		try {
+			items[slug] = itemState(workspace.state, slug);
+		} catch {
+			items[slug] = "missing";
+		}
 	const destinations: DroppedInput["destinations"] = {};
 	const paths = markdownFiles(join(workspace.state, "docs"), true);
 	for (const dir of ["memories", "integrations", "outbox"])
@@ -289,23 +295,29 @@ export function readDroppedSources(
 		const path = join(workspace.state, file);
 		try {
 			if (lstatSync(path).isFile()) paths.push(path);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
+		} catch {}
 	}
-	for (const path of paths.sort())
-		destinations[relative(workspace.state, path).split(sep).join("/")] =
-			readFileSync(path, "utf8");
+	for (const path of paths.sort()) {
+		try {
+			if (lstatSync(path).isFile())
+				destinations[relative(workspace.state, path).split(sep).join("/")] =
+					readFileSync(path, "utf8");
+		} catch {}
+	}
 	const enclosing = findEnclosingWorkspace(workspace.dir);
 	if (enclosing) {
 		for (const path of markdownFiles(
 			join(enclosing, STATE_DIR, "shared"),
 			false,
-		))
-			destinations[`enclosing:shared/${basename(path)}`] = readFileSync(
-				path,
-				"utf8",
-			);
+		)) {
+			try {
+				if (lstatSync(path).isFile())
+					destinations[`enclosing:shared/${basename(path)}`] = readFileSync(
+						path,
+						"utf8",
+					);
+			} catch {}
+		}
 	}
 	return { items, destinations };
 }
