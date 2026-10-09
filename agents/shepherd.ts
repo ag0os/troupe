@@ -133,9 +133,10 @@ export function prepare(
 		const command = ctx.args[1];
 		if (!isToolCommand(command)) {
 			return runTool(ctx.args.slice(1), ctx.flags, toolEnv).then(
-				({ text, code, stream }) => ({
-					exit: { message: text, code, stream },
-				}),
+				({ text, code, stream, notice }) => {
+					if (notice !== undefined) process.stderr.write(`${notice}\n`);
+					return { exit: { message: text, code, stream } };
+				},
 			);
 		}
 		if (ctx.preview) {
@@ -157,9 +158,10 @@ export function prepare(
 			};
 		}
 		return runTool(ctx.args.slice(1), ctx.flags, toolEnv).then(
-			({ text, code, stream }) => ({
-				exit: { message: text, code, stream },
-			}),
+			({ text, code, stream, notice }) => {
+				if (notice !== undefined) process.stderr.write(`${notice}\n`);
+				return { exit: { message: text, code, stream } };
+			},
 		);
 	}
 	for (const name of [
@@ -171,19 +173,32 @@ export function prepare(
 		"apply",
 		"recursive",
 		"master",
+		"budget",
+		"stdin",
+		"token",
+		"session",
+		"accept-dropped",
 	]) {
 		const value = ctx.flags[name];
 		if (value !== undefined && value !== false) {
 			const owner =
-				name === "master"
-					? "tool init"
-					: name === "json"
-						? "tool check, tool archive, tool init and tool doctor"
-						: name === "today"
-							? "tool check and tool archive"
-							: name === "apply" || name === "recursive"
-								? "tool archive"
-								: "tool check";
+				name === "budget"
+					? "tool start"
+					: name === "stdin"
+						? "tool journal"
+						: ["token", "session", "accept-dropped"].includes(name)
+							? "tool checkpoint"
+							: name === "master"
+								? "tool init"
+								: name === "json"
+									? "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock"
+									: name === "today"
+										? "tool check and tool archive"
+										: name === "apply"
+											? "tool archive and tool checkpoint"
+											: name === "recursive"
+												? "tool archive"
+												: "tool check";
 			return {
 				exit: {
 					message: `shepherd: --${name} applies only to ${owner}\n`,

@@ -25,6 +25,9 @@ import journal from "../../system-prompts/shepherd/templates/journal.md" with {
 import memoryIndex from "../../system-prompts/shepherd/templates/MEMORY.md" with {
 	type: "text",
 };
+import pending from "../../system-prompts/shepherd/templates/pending.md" with {
+	type: "text",
+};
 import statusTemplate from "../../system-prompts/shepherd/templates/STATUS-template.md" with {
 	type: "text",
 };
@@ -66,6 +69,7 @@ export const TEMPLATES = [
 	{ path: "CURRENT.md", master: false, text: current },
 	{ path: "MEMORY.md", master: false, text: memoryIndex },
 	{ path: "journal.md", master: false, text: journal },
+	{ path: "pending.md", master: false, text: pending },
 	{ path: "docs/INDEX.md", master: false, text: docsIndex },
 	{ path: "docs/STATUS-template.md", master: false, text: statusTemplate },
 	{ path: "archive/INDEX.md", master: false, text: archiveIndex },

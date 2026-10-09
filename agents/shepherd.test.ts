@@ -5,6 +5,7 @@ import {
 	expect,
 	setDefaultTimeout,
 	setSystemTime,
+	spyOn,
 	test,
 } from "bun:test";
 import {
@@ -355,7 +356,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			json: {
 				type: "boolean",
 				description:
-					"tool check, tool archive, tool init and tool doctor: emit machine-readable JSON",
+					"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock: emit machine-readable JSON",
 			},
 			today: {
 				type: "string",
@@ -364,7 +365,8 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			},
 			apply: {
 				type: "boolean",
-				description: "tool archive: apply planned moves and reference rewrites",
+				description:
+					"tool archive and tool checkpoint: apply planned moves or certify the held state",
 			},
 			recursive: {
 				type: "boolean",
@@ -374,6 +376,26 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 				type: "boolean",
 				description:
 					"tool init: also write the shared layer for a root workspace",
+			},
+			budget: {
+				type: "string",
+				description: "tool start: set the journal word budget",
+			},
+			stdin: {
+				type: "boolean",
+				description: "tool journal: read text from stdin",
+			},
+			token: {
+				type: "string",
+				description: "tool checkpoint: certify the dry run token",
+			},
+			session: {
+				type: "string",
+				description: "tool checkpoint: name the certifying session",
+			},
+			"accept-dropped": {
+				type: "string",
+				description: "tool checkpoint: journal dropped lines with this reason",
 			},
 			name: {
 				type: "string",
@@ -791,7 +813,7 @@ describe("tool surface", () => {
 					["tool", "guide", "--json"],
 					2,
 					"",
-					"shepherd: --json applies only to tool check, tool archive, tool init and tool doctor\n",
+					"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock\n",
 				],
 				[
 					["tool", "guide", "--model", "x"],
@@ -872,7 +894,7 @@ describe("tool surface", () => {
 			stdout: "",
 			records: [],
 			stderr:
-				"shepherd: --json applies only to tool check, tool archive, tool init and tool doctor\n",
+				"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock\n",
 		});
 	});
 
@@ -1859,4 +1881,72 @@ describe("preview is side-effect free (D-012)", () => {
 			}
 		}
 	});
+});
+
+describe("staged context flag refusals", () => {
+	for (const [name, value, owner] of [
+		["budget", "10", "start"],
+		["stdin", undefined, "journal"],
+		["token", "r0-000000000000", "checkpoint"],
+		["session", "T12", "checkpoint"],
+		["accept-dropped", "reason", "checkpoint"],
+	] as const) {
+		test(`launch refuses --${name} with its owner`, async () => {
+			const { cwd } = build("plain");
+			const flags = value === undefined ? [`--${name}`] : [`--${name}`, value];
+			for (const backend of BACKENDS) {
+				expect(await execute(["--backend", backend, ...flags], cwd)).toEqual({
+					code: 2,
+					stdout: "",
+					stderr: `shepherd: --${name} applies only to tool ${owner}\n`,
+					records: [],
+				});
+			}
+		});
+	}
+	for (const command of ["start", "journal", "checkpoint", "unlock"]) {
+		test(`tool ${command} refuses --show-prompt`, async () => {
+			const { cwd } = build("plain");
+			for (const backend of BACKENDS) {
+				expect(
+					await preview(["--backend", backend, "tool", command], cwd),
+				).toMatchObject({
+					code: 1,
+					text: "",
+					stderr: `shepherd tool ${command} does not launch a session; drop --show-prompt\n`,
+					argv: [],
+				});
+			}
+		});
+	}
+});
+
+test("journal clock notice reaches stderr separately from the JSON exit message", async () => {
+	const { cwd } = build("plain");
+	for (const backend of BACKENDS) {
+		const chunks: string[] = [];
+		const stderr = spyOn(process.stderr, "write").mockImplementation(
+			(chunk) => {
+				chunks.push(String(chunk));
+				return true;
+			},
+		);
+		try {
+			const output = await shepherd.prepare(
+				context(backend, cwd, {
+					args: ["tool", "journal", "09:30 UTC: A discovery"],
+					flags: { json: true },
+					preview: false,
+				}),
+				fakeToolEnv({ cwd, home: join(root, "home") }),
+			);
+			expect(chunks).toEqual(["time comes from the clock\n"]);
+			expect(output).toMatchObject({ exit: { code: 0, stream: "stdout" } });
+			if (!("exit" in output)) throw new Error("expected tool exit");
+			expect(JSON.parse(output.exit.message).text).toEndWith(" A discovery");
+			expect(output.exit.message).not.toContain("time comes from the clock");
+		} finally {
+			stderr.mockRestore();
+		}
+	}
 });

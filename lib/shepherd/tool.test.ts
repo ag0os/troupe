@@ -151,12 +151,16 @@ describe("runTool guide", () => {
 	test("rejects every misplaced tool flag", async () => {
 		const { env } = fixture();
 		for (const [name, value, owner] of [
-			["json", true, "tool check, tool archive, tool init and tool doctor"],
+			[
+				"json",
+				true,
+				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock",
+			],
 			["today", "2026-13-40", "tool check and tool archive"],
 			["all", true, "tool check"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
-			["apply", true, "tool archive"],
+			["apply", true, "tool archive and tool checkpoint"],
 			["recursive", true, "tool archive"],
 			["name", "session", "launches"],
 			["master", true, "tool init"],
@@ -205,6 +209,7 @@ const INIT_PATHS = [
 	"CURRENT.md",
 	"MEMORY.md",
 	"journal.md",
+	"pending.md",
 	"docs/INDEX.md",
 	"docs/STATUS-template.md",
 	"archive/INDEX.md",
@@ -288,7 +293,7 @@ describe("runTool init", () => {
 					root: cwd,
 					state: join(cwd, ".shepherd"),
 					master: false,
-					created: INIT_PATHS.slice(0, 6),
+					created: INIT_PATHS.slice(0, 7),
 					kept: [],
 					failed: { path: "work/todo/", error: "a file is in the way" },
 				});
@@ -296,7 +301,7 @@ describe("runTool init", () => {
 				expect(output.text).toBe(
 					[
 						`Initialized ${cwd}/.shepherd (workspace)`,
-						...INIT_PATHS.slice(0, 6).map((path) => `  created ${path}`),
+						...INIT_PATHS.slice(0, 7).map((path) => `  created ${path}`),
 						"  failed  work/todo/: a file is in the way",
 						"",
 					].join("\n"),
@@ -361,7 +366,7 @@ describe("runTool init", () => {
 			["all", true, "tool check"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
-			["apply", true, "tool archive"],
+			["apply", true, "tool archive and tool checkpoint"],
 			["recursive", true, "tool archive"],
 			["name", "session", "launches"],
 		] as const) {
@@ -942,4 +947,297 @@ describe("runTool doctor", () => {
 			).toMatchObject({ code: 2, stream: "stderr" });
 		}
 	});
+});
+
+describe("staged context tool commands", () => {
+	for (const command of ["start", "journal", "checkpoint", "unlock"]) {
+		test(`${command} is recognized and appears in usage`, async () => {
+			const { env } = fixture();
+			expect(isToolCommand(command)).toBe(true);
+			expect((await runTool([], {}, env)).text).toContain(
+				`shepherd tool ${command}`,
+			);
+		});
+
+		test(`${command} rejects workspace selectors`, async () => {
+			const { env } = fixture();
+			const args =
+				command === "journal" ? [command, "text", "child"] : [command, "child"];
+			expect(await runTool(args, {}, env)).toMatchObject({
+				code: 2,
+				stream: "stderr",
+			});
+		});
+
+		test(`${command} rejects a directory without state`, async () => {
+			const { cwd, env } = fixture();
+			const args = command === "journal" ? [command, "text"] : [command];
+			const output = await runTool(
+				args,
+				{},
+				{ ...env, cwd: join(cwd, "notes") },
+			);
+			expect(output).toMatchObject({ code: 2, stream: "stderr" });
+			expect(output.text).toContain("not a workspace:");
+		});
+	}
+
+	test("start renders the selected child with a zero budget and template-only pending", async () => {
+		const { cwd, env } = fixture();
+		const child = join(cwd, "child");
+		await runTool(["init"], {}, { ...env, cwd: child });
+		const output = await runTool(
+			["start"],
+			{ budget: "0", json: true },
+			{ ...env, cwd: child },
+		);
+		expect(output.code).toBe(0);
+		expect(JSON.parse(output.text)).toMatchObject({
+			command: "start",
+			workspace: "child",
+			pending: "none",
+		});
+	});
+
+	test("journal appends one text only to the selected workspace", async () => {
+		const { cwd, env } = fixture();
+		const output = await runTool(
+			["journal", "A discovery"],
+			{},
+			{ ...env, cwd: join(cwd, "child") },
+		);
+		expect(output).toMatchObject({ code: 0, stream: "stdout" });
+		expect(output.text).toContain("A discovery");
+		expect(
+			readFileSync(join(cwd, "child/.shepherd/journal.md"), "utf8"),
+		).toContain("A discovery");
+		expect(readFileSync(join(cwd, ".shepherd/journal.md"), "utf8")).toBe(
+			"# Journal\n",
+		);
+	});
+
+	test("journal stdin uses the injected reader and separates clock notices", async () => {
+		const { env } = fixture();
+		let reads = 0;
+		const output = await runTool(
+			["journal"],
+			{ stdin: true },
+			env,
+			{},
+			async () => {
+				reads++;
+				return "09:30 UTC: A\n discovery";
+			},
+		);
+		expect(reads).toBe(1);
+		expect(output).toMatchObject({ code: 0, stream: "stdout" });
+		expect(output.notice).toBe("time comes from the clock");
+		expect(output.text).toStartWith("- ");
+		expect(output.text).not.toContain("notice");
+		expect(output.text).not.toContain("time comes from the clock");
+		expect(output.text).toContain("A discovery");
+		expect(output.text).not.toContain("09:30 UTC:");
+	});
+
+	for (const [args, flags] of [
+		[["journal"], {}],
+		[["journal", "text"], { stdin: true }],
+		[["start"], { budget: "-1" }],
+		[["start"], { budget: "x" }],
+		[["start"], { budget: "1.5" }],
+		[["checkpoint"], { apply: true }],
+		[["checkpoint"], { token: "r0-000000000000" }],
+	] as const) {
+		test(`usage rejects ${args.join(" ")} ${JSON.stringify(flags)}`, async () => {
+			const { env } = fixture();
+			expect(await runTool(args, flags, env)).toMatchObject({
+				code: 2,
+				stream: "stderr",
+			});
+		});
+	}
+
+	test("checkpoint dispatches dry run and token apply with session", async () => {
+		const { cwd, env } = fixture();
+		const dry = await runTool(["checkpoint"], { json: true }, env);
+		expect(dry.code).toBe(0);
+		const token = JSON.parse(dry.text).token;
+		expect(token).toMatch(/^r0-[a-f0-9]{12}$/);
+		const applied = await runTool(
+			["checkpoint"],
+			{ apply: true, token, session: "staged-T12", json: true },
+			env,
+		);
+		expect(applied.code).toBe(0);
+		expect(JSON.parse(applied.text)).toMatchObject({
+			revision: 1,
+			session: "staged-T12",
+			applied: true,
+		});
+		expect(existsSync(join(cwd, ".shepherd/checkpoint.json"))).toBe(true);
+		expect(existsSync(join(cwd, "child/.shepherd/checkpoint.json"))).toBe(
+			false,
+		);
+	});
+
+	test("unlock dispatches text and JSON and clears only the selected state", async () => {
+		const { cwd, env } = fixture();
+		const owner = { pid: 12345, started: env.now.toISOString() };
+		for (const state of [
+			join(cwd, ".shepherd"),
+			join(cwd, "child/.shepherd"),
+		]) {
+			mkdirSync(join(state, ".state.lock"));
+			writeFileSync(join(state, ".state.lock/owner"), JSON.stringify(owner));
+		}
+		const output = await runTool(["unlock"], { json: true }, env);
+		expect(output.code).toBe(0);
+		expect(JSON.parse(output.text)).toEqual({
+			outcome: "cleared",
+			pid: 12345,
+			code: 0,
+		});
+		expect(existsSync(join(cwd, "child/.shepherd/.state.lock"))).toBe(true);
+		expect(await runTool(["unlock"], {}, env)).toEqual({
+			text: "nothing to clear\n",
+			code: 0,
+			stream: "stdout",
+		});
+	});
+
+	test("unlock JSON preserves refusal code and live pid", async () => {
+		const { cwd, env } = fixture();
+		mkdirSync(join(cwd, ".shepherd/.state.lock"));
+		writeFileSync(
+			join(cwd, ".shepherd/.state.lock/owner"),
+			JSON.stringify({ pid: 42, started: env.now.toISOString() }),
+		);
+		const output = await runTool(
+			["unlock"],
+			{ json: true },
+			{ ...env, pidAlive: () => true },
+		);
+		expect(output.code).toBe(1);
+		expect(JSON.parse(output.text)).toEqual({
+			outcome: "alive",
+			pid: 42,
+			code: 1,
+		});
+	});
+
+	for (const [name, value, owner] of [
+		["budget", "10", "start"],
+		["stdin", true, "journal"],
+		["token", "r0-000000000000", "checkpoint"],
+		["session", "T12", "checkpoint"],
+		["accept-dropped", "reason", "checkpoint"],
+	] as const) {
+		test(`refuses --${name} on every other command`, async () => {
+			const { env } = fixture();
+			for (const command of [
+				"check",
+				"archive",
+				"guide",
+				"init",
+				"doctor",
+				"start",
+				"journal",
+				"checkpoint",
+				"unlock",
+			]) {
+				if (command === owner) continue;
+				expect(await runTool([command], { [name]: value }, env)).toEqual({
+					text: `shepherd: --${name} applies only to tool ${owner}\n`,
+					code: 2,
+					stream: "stderr",
+				});
+			}
+		});
+	}
+
+	test("check context passes the real environment for clock and lock reads", async () => {
+		const { cwd, env } = fixture();
+		mkdirSync(join(cwd, ".shepherd/.state.lock"));
+		writeFileSync(
+			join(cwd, ".shepherd/.state.lock/owner"),
+			JSON.stringify({ pid: 42, started: env.now.toISOString() }),
+		);
+		const pids: number[] = [];
+		let ticks = 0;
+		const output = await runTool(
+			["check"],
+			{ context: true, json: true },
+			{
+				...env,
+				clock: () => {
+					ticks++;
+					return env.now;
+				},
+				pidAlive: (pid) => {
+					pids.push(pid);
+					return true;
+				},
+			},
+		);
+		expect(output.code).toBe(0);
+		expect(pids).toContain(42);
+		expect(ticks).toBeGreaterThan(0);
+	});
+});
+
+test("checkpoint passes the hyphenated accept-dropped reason to certification", async () => {
+	const { cwd, env } = fixture();
+	const dry = await runTool(["checkpoint"], { json: true }, env);
+	await runTool(
+		["checkpoint"],
+		{ apply: true, token: JSON.parse(dry.text).token },
+		env,
+	);
+	writeFileSync(
+		join(cwd, ".shepherd/CURRENT.md"),
+		"Updated: 2026-10-05\n\n## Items\n",
+	);
+	const next = await runTool(["checkpoint"], { json: true }, env);
+	const token = JSON.parse(next.text).token;
+	expect(
+		(await runTool(["checkpoint"], { apply: true, token }, env)).code,
+	).toBe(1);
+	const output = await runTool(
+		["checkpoint"],
+		{ apply: true, token, "accept-dropped": "completed" },
+		env,
+	);
+	expect(output.code).toBe(0);
+	expect(readFileSync(join(cwd, ".shepherd/journal.md"), "utf8")).toContain(
+		"dropped from CURRENT (completed): - NEXT: Continue",
+	);
+});
+
+test("stamped journal JSON remains parseable and carries the notice separately", async () => {
+	const { env } = fixture();
+	const output = await runTool(
+		["journal", "09:30 UTC: A discovery"],
+		{ json: true },
+		env,
+	);
+	expect(output).toMatchObject({
+		code: 0,
+		stream: "stdout",
+		notice: "time comes from the clock",
+	});
+	expect(JSON.parse(output.text).text).toEndWith(" A discovery");
+	expect(output.text).not.toContain("time comes from the clock");
+	expect(output.text.endsWith("\n")).toBe(false);
+});
+
+test("a refused journal append preserves its exact text and separate notice", async () => {
+	const { env } = fixture();
+	expect(await runTool(["journal", "09:30 UTC:"], { json: true }, env)).toEqual(
+		{
+			code: 1,
+			stream: "stderr",
+			text: "nothing to append",
+			notice: "time comes from the clock",
+		},
+	);
 });
