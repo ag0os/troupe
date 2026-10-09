@@ -30,4 +30,4 @@ Each tool's own help is the authority on syntax; these are the traps it does not
 - `while pgrep -f "<pattern>"` matches its own command line and never exits. Wait on the pid: `while kill -0 <pid>; do sleep 30; done`.
 - Before removing files from a gitignored directory, check `git ls-files <dir>/`: a file committed before the ignore rule is still tracked, and removing it stages a deletion.
 - On a shared database, cap every query (`SET SESSION MAX_EXECUTION_TIME=10000`) and use plain `EXPLAIN`; never execute the query under investigation.
-- Take timestamps from `date`; a model's sense of the time is a guess.
+- Take timestamps from `date`, or `shepherd tool journal`, which stamps for you; a model's sense of the time is a guess.

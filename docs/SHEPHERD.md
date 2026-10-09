@@ -91,10 +91,14 @@ Shepherd maintains `.shepherd/` in the launch directory:
 .shepherd/
   charter.md         # agreed mission and way of working, written at init
   CURRENT.md         # index of the work and handoff to the next session
+  pending.md         # warnings waiting for their destination, shown whole at start
   work/              # todo/ in-progress/ done/, one dir per item
   MEMORY.md          # index: one line per memory
   memories/          # one fact per file (frontmatter: name, description, type)
   journal.md         # append only history, current month
+  checkpoint.json    # the last checkpoint: certified journal range and file hashes
+  checkpoints/       # CURRENT.r<n>: the copy of CURRENT.md that revision n certified
+  .state.lock/       # the workspace lock, present while a writer holds it, or left stale by a crashed one until `shepherd tool unlock`
   docs/              # runbooks, environment notes, checklists; INDEX.md lists them
   archive/           # closed work and past journal months; INDEX.md lists them
   integrations/      # workspace local capability modules
@@ -102,7 +106,7 @@ Shepherd maintains `.shepherd/` in the launch directory:
 
 Core names the memory frontmatter keys and the four types; the full format is in the `memory` guide (`shepherd tool guide memory`).
 
-Context is tiered (see core, "Context tiers"): the prompt and a short session-start list (`CURRENT.md`, `MEMORY.md`, `docs/INDEX.md`, the journal's last two days) are always read; everything else is reached through those indexes when needed, and history moves to `archive/`.
+Context is tiered (see core, "Context tiers"): the prompt and what `shepherd tool start` prints at session start (`CURRENT.md`, `pending.md`, the journal since the last checkpoint, `MEMORY.md`, `docs/INDEX.md` and the check findings) are always read; without the command, a session reads `CURRENT.md`, `MEMORY.md`, `docs/INDEX.md` and the journal's last two days. Everything else is reached through those indexes when needed, and history moves to `archive/`.
 
 ### Tracking standard
 
@@ -110,8 +114,11 @@ Core fixes the shape of the tracking files (see core, "Work tracking"), so every
 
 - `CURRENT.md` is the index and the handoff, rewritten whole at handoff: an `Updated: YYYY-MM-DD HH:MM` line with the session name, then `## Next session`, `## Items` (one entry each, led by a status word in bold: NEXT, SCHEDULED, WAITING, ASK or CANDIDATE; the line `No NEXT is set.` when there is none) and `## Live sessions` (name, harness, model, the item served).
 - An item with more to it than its line is a directory under `work/` with a `STATUS.md`: frontmatter (`state`, `opened`, `closed`, `blocked_on`) and the sections What and origin, State, Next, and Next session must know. `CURRENT.md` is updated in the same turn as the `STATUS.md` it points to.
-- `journal.md` is history, not handoff: one `## YYYY-MM-DD` heading per day, with one line bullets that start with the local `HH:MM`.
-- `docs/INDEX.md` has one line per doc: `- [title](path): when to read it`.
+- `journal.md` is history, not handoff: one `## YYYY-MM-DD` heading per day, with one line bullets that start with the local `HH:MM`. `shepherd tool journal` appends in that form with the time from the clock; a past entry is never edited, only corrected by a new one.
+- `pending.md` holds warnings whose destination does not exist yet or needs the user, one bullet each: `- YYYY-MM-DD <what, who found it> -> <destination>`. A bullet leaves when its destination carries it. `tool start` shows the file whole; `tool check` warns on a bullet older than `windows.pendingDays` days.
+- `checkpoint.json` records what a session reconciled: the certified journal range, by entry id, and the hashes of `CURRENT.md`, `MEMORY.md`, `docs/INDEX.md`, `pending.md`, `charter.md` and every todo and in-progress `STATUS.md`. `shepherd tool checkpoint` writes it at handoff, with the certified copy of CURRENT under `checkpoints/`; `Updated:` stays for people. Apart from headings, the `Updated:` line, Live sessions lines and Items entries whose linked item is live, done with an `## Outcome`, or archived, a line dropped from CURRENT since the last checkpoint must appear whole in a live file (a doc, memory, STATUS, `pending.md`, the charter, a module, the outbox or the enclosing shared layer) or be journaled with a reason.
+- A delegate's report (a `*report.md` file in a todo or in-progress item) ends with `## Discoveries`: new constraints, tool traps and unresolved uncertainties, or the word none. `tool check` warns on a report without it.
+- `docs/INDEX.md` has one line per action a doc guards: `- [title](path): before <action>, read this`. `tool check` warns on a line that names no moment (none of before, when, after, if, while, once, during, until).
 
 The declaration and extension preapprove Read and Edit inside `.shepherd/`, Read inside an enclosing workspace's `.shepherd/`, and `Bash(herdr:*)` so memory upkeep and Herdr coordination never prompt. There is no separate Write rule. Destructive Herdr operations are forbidden by the integration module instead. Everything else follows normal permission rules.
 
@@ -125,13 +132,31 @@ shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today
 shepherd tool init    [--master] [--json]
 shepherd tool doctor  [--json]
 shepherd tool guide   [<name>]
+shepherd tool start      [--budget <words>] [--json]
+shepherd tool journal    (<text> | --stdin) [--json]
+shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]
+shepherd tool unlock     [--json]
 ```
 
 `tool check` checks this workspace and every workspace beneath it. Name one or more workspaces to limit the check. By default it hides informational findings; `--all` shows them, `--status` reports tracked work and live sessions, `--context` reports words by context tier, and `--json` produces machine readable output. `--status` and `--context` cannot be combined.
 
-`tool archive` shows a dry run for the current workspace. Name workspaces to select them, or use `--recursive` to include this workspace and every workspace beneath it. `--apply` performs the planned item and journal moves and rewrites live references. `--json` produces machine readable output. Both commands accept `--today YYYY-MM-DD` for a repeatable date during diagnosis or testing.
+`tool archive` shows a dry run for the current workspace. Name workspaces to select them, or use `--recursive` to include this workspace and every workspace beneath it. `--apply` performs the planned item and journal moves and rewrites live references. It takes the workspace lock (below) of every workspace in the tree discovered from the launch directory, not only the selected ones, since the reference rewrite touches files across the tree, and plans again inside the locks, so the apply can differ from the dry run; it prints what it did. Before a journal move it simulates the rotation, and when a month's move would change the order of journal entries (entries without a heading, a heading out of date order, or a month that would land behind a later month already archived) it skips that month's move with the reason and the fix; other months and item moves go ahead. `--json` produces machine readable output. Both commands accept `--today YYYY-MM-DD` for a repeatable date during diagnosis or testing.
 
-Exit code 0 means the command completed without an error. For the default check, exit code 1 means at least one error finding; for archive, it means at least one move was skipped. Exit code 2 means invalid usage, an invalid date or selector, an invalid user configuration, or a directory that is not a workspace. Status and context reports use exit code 0 when they run successfully.
+Exit code 0 means the command completed without an error. For the default check, exit code 1 means at least one error finding; for archive, it means at least one move was skipped or a lock could not be taken. Exit code 2 means invalid usage, an invalid date or selector, an invalid user configuration, or a directory that is not a workspace. Status and context reports use exit code 0 when they run successfully.
+
+The four commands below act on the launch directory's workspace only (`--cwd` selects another) and take no workspace selectors.
+
+`tool start` prints what a session must read before it acts, and takes no lock: a header with the time, the binary that answered and the checkpoint line; the verdict; `CURRENT.md` whole, never cut; `pending.md` whole unless it is absent or still the template; the journal since the checkpoint's boundary; `MEMORY.md`; `docs/INDEX.md`; this workspace's error and warning findings; and three fixed next steps. The verdict is `CLEAN` when a valid checkpoint's boundary is found and nothing is new since it: no journal entry, no changed, appeared or removed covered file, no changed evidence file, no unaccounted dropped CURRENT line. Anything else is `RECONCILE`, with one reason line each; a journal entry without a heading at or after the boundary is one such reason. Without a usable checkpoint the journal part falls back to the last two dated sections that hold entries. It keeps the newest entries whole within `--budget <words>` (default `start.journalWords`, 1,500) and prints a cut notice with the file and lines it left out. `CLEAN` covers the records only: the `freshness:` line compares the last Claude transcript activity in this directory with the last write of `CURRENT.md` or `journal.md`, whatever the backend. Codex activity is not measured, so on Codex the line can show an earlier Claude session's activity; `unknown` means no Claude activity was found. `--json` prints the same parts with their word counts. Exit 0 whenever the view renders, whatever the verdict; 2 for usage, an invalid user configuration or a directory that is not a workspace.
+
+`tool journal` appends one entry to `journal.md`: `<text>` as one argument, or all of stdin with `--stdin`. Newlines and runs of whitespace collapse to one space. The time comes from the clock: a leading `HH:MM` in the text is removed, with the notice "time comes from the clock" on stderr, and a `## YYYY-MM-DD` heading is added when the file's last heading is not today's. It prints the line, its entry id and its line number; `--json` prints `line`, `id`, `day`, `time`, `text` and `headingAdded`. A missing `journal.md` is created from the template; a symlinked or non-regular one is refused. Exit 0 on append; 1 when the text is empty, the journal path is unsafe or the lock could not be taken; 2 for usage.
+
+Journal entry ids are derived at read time, never written. The journal sequence is `archive/journal/*.md` in month order, then `journal.md`; each entry's id is the first 10 hex of a sha256 over the previous id and the entry's text. Appending changes no earlier id and neither does a heading fix; editing or removing a past entry changes every later id. The checkpoint reports a lost boundary only when the certified boundary entry or one before it changed; an edit after the boundary changes only the ids of unreviewed entries, which the next dry run shows.
+
+`tool checkpoint` without flags is a dry run: it prints in full everything an apply would certify, with no budget: every journal entry in the range since the boundary (without a usable checkpoint, from the earlier of the two fallback sections to the end), each changed or appeared covered file whole with its word count, the count of dropped CURRENT lines found elsewhere, each line not accounted for with the nearest similar line as a hint (`--json` also lists the accounted lines and where each was found), the lock state and a token. `--apply --token <token>` certifies under the workspace lock what the dry run showed. It refuses, and certifies nothing, when the checkpoint revision moved, when anything the token binds changed (the journal chain through its last entry, the covered files, the certified CURRENT, and what the dry run said about each dropped line), when `CURRENT.md` is missing, when a covered file is unsafe or a journal file unreadable, or when dropped lines are unaccounted for and `--accept-dropped <reason>` is not given. `--accept-dropped` journals each unaccounted line as `dropped from CURRENT (<reason>): <line>` and certifies those entries too; if the journal changes under the apply in any other way, it refuses, and the lines it appended stay. `--session <name>` records who wrote the checkpoint. The apply writes `checkpoints/CURRENT.r<n>`, then `checkpoint.json` through a temporary file and a rename, then prunes older snapshots. The dry run refuses too, printing no token, when a journal entry without a heading sits inside the range (give it a `## YYYY-MM-DD` heading, which changes no id), a covered file is unsafe or a journal file is unreadable. Exit 0 for a dry run that printed a token and for a written checkpoint; 1 for a refusal; 2 for usage, including `--apply` without `--token`, `--token` without `--apply`, or a malformed token.
+
+`tool unlock` clears a stale workspace lock. Exit 0 when it cleared one or found none; 1 when the lock's owner is alive, another unlock is running, or the unlock lock is stale; 2 for usage.
+
+The workspace lock serializes every writer: `tool journal`, `tool checkpoint --apply` and `tool archive --apply` take the directory `.shepherd/.state.lock/`, whose `owner` file holds the pid and start time; readers, the dry runs included, never take it. A writer that finds it held by a live pid waits up to 5 seconds, then fails with "locked by pid N (alive)". A lock whose pid is dead, or whose `owner` is missing or malformed, is stale: writers fail at once with "stale lock `.shepherd/.state.lock` left by pid N; run `shepherd tool unlock`" and never take or remove it. Run `shepherd tool unlock` only when no other Shepherd of the workspace is live (`shepherd tool check --status` shows live sessions); it refuses a live owner in any case. Unlocks serialize under a second lock, `.shepherd/.unlock.lock/`; one left by a crashed unlock makes `tool unlock` print the `rm -r` line to run by hand. `tool check` reports either stale lock as an error (`lock-stale`), and `tool start` prints the lock state. A crash can leave inert directories in `.shepherd/`: `.state.lock.<pid>.<uuid>.gone` from between a lock's rename away and its delete, and `.state.lock.<pid>.tmp` from between creating a lock and renaming it into place, with the same two names for `.unlock.lock`. Nothing cleans up a `.gone` directory. A `.tmp` directory has no general sweep either: only a later writer whose pid (and thread) gives the same name removes it. Both are safe to delete by hand when no Shepherd of the workspace is running.
 
 For a fresh machine, follow [SETUP.md](SETUP.md).
 
@@ -146,6 +171,7 @@ Every workspace gets these entries, in order:
 | `CURRENT.md` | Work index and first move: run the init conversation |
 | `MEMORY.md` | Memory index |
 | `journal.md` | Journal, empty, with the daily heading rule |
+| `pending.md` | Pending warnings, empty, with the bullet form |
 | `docs/INDEX.md` | Documentation index |
 | `docs/STATUS-template.md` | Work item status template |
 | `archive/INDEX.md` | Archive index |
@@ -202,7 +228,7 @@ For init, doctor and guide, exit 0 means done. Doctor exits 1 when it finds at l
 
 ### Configuration
 
-Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, and the noninherited `sessionPrefix`. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
+Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, `start`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, `start`, and the noninherited `sessionPrefix`. `windows.pendingDays` (default 14) is the age in days a `pending.md` bullet must exceed to be reported stale; `start.journalWords` (default 1,500) is the journal budget of `tool start` when `--budget` is not given. Both are positive integers. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
 
 ## Backends
 
