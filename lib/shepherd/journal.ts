@@ -62,7 +62,8 @@ export async function appendEntries(
 			const headingAdded = lastDay !== day;
 			const newline = before.endsWith("\n") ? "" : "\n";
 			const heading = headingAdded ? `\n## ${day}\n\n` : "";
-			const addition = `${newline}${heading}- ${time} ${text}\n`;
+			const writtenText = `${time} ${text}`.replace(/\s+/g, " ").trim();
+			const addition = `${newline}${heading}- ${writtenText}\n`;
 			appendFileSync(join(state, "journal.md"), addition);
 			const line = (before + addition).split("\n").length - 1;
 			const entry = journalChain(state).entries.find(
@@ -74,7 +75,7 @@ export async function appendEntries(
 				id: entry.id,
 				day,
 				time,
-				text: entry.text,
+				text: writtenText,
 				headingAdded,
 			});
 		}

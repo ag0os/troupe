@@ -461,21 +461,23 @@ test("capture reads overlapping covered records, journal and destinations once",
 		spy.mockRestore();
 	}
 });
-test("token uses exactly the specified sorted newline serialization", () => {
-	const f = fixture();
-	const held = f.capture();
-	const lines = [
-		`range ${held.chain[0]?.id} ${held.chain.at(-1)?.id}`,
-		...Object.keys(held.files)
-			.sort()
-			.map((path) => `file ${path} ${held.files[path]?.hash ?? "null"}`),
-		"baseline none",
-		"digest none",
-	];
-	expect(held.token).toBe(
-		`r0-${createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 12)}`,
-	);
-});
+for (const journalText of [journal, ""])
+	test(`token uses exactly the specified sorted newline serialization (${journalText ? "entries" : "empty"})`, () => {
+		const f = fixture({ "journal.md": journalText });
+		const held = f.capture();
+		const lines = [
+			`range ${held.chain[0]?.id ?? "none"} ${held.chain.at(-1)?.id ?? "none"}`,
+			`chain ${held.chain.at(-1)?.id ?? "none"} ${held.chain.length}`,
+			...Object.keys(held.files)
+				.sort()
+				.map((path) => `file ${path} ${held.files[path]?.hash ?? "null"}`),
+			"baseline none",
+			"digest none",
+		];
+		expect(held.token).toBe(
+			`r0-${createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 12)}`,
+		);
+	});
 test("found boundary counts uncertified entries before from, including old orphans", () => {
 	const f = fixture({ "journal.md": `- orphan\n${journal}` });
 	f.apply();
@@ -773,3 +775,16 @@ test("a symlinked live bucket does not hide an item resolved through a real live
 	expect(readDroppedSources(f.workspace, baseline).items).toEqual(held.items);
 	expect(held.dropped?.candidates[0]?.disposition.kind).toBe("exempt");
 });
+
+for (const edit of ["delete", "rewrite"] as const)
+	test(`empty-range token binds the complete chain after journal ${edit}`, () => {
+		const f = fixture();
+		f.apply();
+		const before = f.capture();
+		expect(before.range).toMatchObject({ ok: true, entries: [] });
+		if (edit === "delete") f.remove("journal.md");
+		else f.put("journal.md", journal.replace("A", "rewritten A"));
+		const after = f.capture();
+		expect(after.files).toEqual(before.files);
+		expect(after.token).not.toBe(before.token);
+	});

@@ -318,11 +318,12 @@ export function certifyRange(
 	};
 }
 
-/** Bind the held range, union hashes, baseline and dropped dispositions. */
+/** Bind the held range, chain, union hashes, baseline and dropped dispositions. */
 export function checkpointToken(held: Omit<HeldState, "token">): string {
 	const entries = held.range.ok ? held.range.entries : [];
 	const lines = [
 		`range ${entries[0]?.id ?? "none"} ${entries.at(-1)?.id ?? "none"}`,
+		`chain ${held.chain.at(-1)?.id ?? "none"} ${held.chain.length}`,
 		...Object.keys(held.files)
 			.sort()
 			.map((path) => `file ${path} ${held.files[path]?.hash ?? "null"}`),
