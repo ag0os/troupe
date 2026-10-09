@@ -82,6 +82,81 @@ function fixture(files: Record<string, string> = {}) {
 	return { workspace, env, put, read, remove, dry, apply, assess, checkpoint };
 }
 
+for (const dropped of ["none", "accounted", "unaccounted"] as const)
+	test(`dry run suggests one safe apply command with session for ${dropped} dropped lines`, async () => {
+		const f = fixture();
+		await f.apply();
+		if (dropped !== "none") {
+			f.put("CURRENT.md", "# Current\nRetain another important fact\n");
+			if (dropped === "accounted")
+				f.put("memories/copy.md", "Preserve this important line\n");
+		}
+		const dry = await f.dry();
+		const facts = JSON.parse((await f.dry(true)).text);
+		const command = dry.text.split("then: ").at(-1) ?? "";
+		const args = [
+			"tool",
+			"checkpoint",
+			"--apply",
+			"--token",
+			facts.token,
+			"--session",
+			"YOUR_SESSION_NAME",
+			...(dropped === "unaccounted" ? ["--accept-dropped", "REASON"] : []),
+		];
+		expect(dry.code).toBe(0);
+		expect(facts.apply).toBe(command);
+		expect(command).toBe(
+			`shepherd tool checkpoint --apply --token ${facts.token} --session YOUR_SESSION_NAME${dropped === "unaccounted" ? ' --accept-dropped "REASON"' : ""}`,
+		);
+		expect(command).not.toMatch(/[<>;|&\n`$]/);
+		const syntax = Bun.spawn(["bash", "-n", "-c", command], {
+			stderr: "pipe",
+		});
+		expect(await syntax.exited).toBe(0);
+		const shell = Bun.spawn(
+			["bash", "-c", `shepherd() { printf '%s\\n' "$@"; }; ${command}`],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		const output = await new Response(shell.stdout).text();
+		expect(await shell.exited).toBe(0);
+		expect(output).toBe(`${args.join("\n")}\n`);
+	});
+
+test("throw after the second append write reports one confirmed line and an uncertain second", async () => {
+	const f = fixture();
+	await f.apply();
+	const old = f.read("checkpoint.json");
+	f.put("CURRENT.md", "# Current\n");
+	const append = fs.appendFileSync;
+	let writes = 0;
+	const spy = spyOn(fs, "appendFileSync").mockImplementation(((
+		...args: Parameters<typeof fs.appendFileSync>
+	) => {
+		append(...args);
+		if (String(args[0]) === join(f.workspace.state, "journal.md")) {
+			writes++;
+			if (writes === 2) throw new Error("forced error after write");
+		}
+	}) as typeof fs.appendFileSync);
+	try {
+		const result = await f.apply(undefined, {}, "approved");
+		expect(result).toEqual({
+			code: 1,
+			stream: "stderr",
+			text: "journal changed during the apply; 1 accepted lines appended; the append of line 2 failed and may or may not be in the journal: read it. The accepted lines already appended stay. Run the dry run again. Re-running --accept-dropped would journal them again. Restore or move the line instead, or accept it again knowing it will be journaled twice.\nforced error after write",
+		});
+		expect(
+			journalChain(f.workspace.state).entries.filter((entry) =>
+				entry.text.includes("dropped from CURRENT (approved):"),
+			),
+		).toHaveLength(2);
+		expect(f.read("checkpoint.json")).toBe(old);
+	} finally {
+		spy.mockRestore();
+	}
+});
+
 for (const [name, edit] of [
 	[
 		"journal append",
@@ -209,7 +284,7 @@ for (const intruder of ["between", "after", "held edit"] as const)
 		expect(result).toEqual({
 			code: 1,
 			stream: "stderr",
-			text: "journal changed during the apply; your 2 accepted lines are appended and stay; run the dry run again. Re-running --accept-dropped would journal them again; restore or move the line instead, or accept knowing that",
+			text: "journal changed during the apply; your 2 accepted lines are appended and stay. Run the dry run again. Re-running --accept-dropped would journal them again. Restore or move the line instead, or accept it again knowing it will be journaled twice.",
 		});
 		expect(f.read("checkpoint.json")).toBe(old);
 		const texts = journalChain(f.workspace.state).entries.map(
@@ -457,7 +532,7 @@ test("dry run token applies and assessment is CLEAN", async () => {
 		"checkpoint: no checkpoint -> would write revision 1\njournal: 2 entries since the boundary, journal.md:2 to 4 (all shown below)",
 	);
 	expect(dry.text).toEndWith(
-		`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${token}`,
+		`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${token} --session YOUR_SESSION_NAME`,
 	);
 	expect((await f.apply(token)).code).toBe(0);
 	expect(f.assess().verdict).toBe("CLEAN");
@@ -546,7 +621,7 @@ test("rewritten accepted line between append and readback refuses instead of cer
 		const result = await f.apply(undefined, {}, "approved");
 		expect(result.code).toBe(1);
 		expect(result.text).toStartWith(
-			"journal changed during the apply; your 1 accepted lines are appended and stay; run the dry run again",
+			"journal changed during the apply; your 1 accepted lines are appended and stay. Run the dry run again",
 		);
 		expect(f.read("checkpoint.json")).toBe(old);
 		expect(f.read("journal.md")).toContain("intruder rewrite");
@@ -591,7 +666,7 @@ test("append error after first accepted line refuses with error and keeps the ap
 	);
 	expect(result.code).toBe(1);
 	expect(result.text).toStartWith(
-		"journal changed during the apply; your 1 accepted lines are appended and stay; run the dry run again",
+		"journal changed during the apply; 1 accepted lines appended; the append of line 2 failed and may or may not be in the journal: read it. The accepted lines already appended stay. Run the dry run again",
 	);
 	expect(result.text).toContain(
 		"Re-running --accept-dropped would journal them again",

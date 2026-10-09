@@ -38,13 +38,17 @@ type Result = { code: 0 | 1 | 2; text: string; stream: "stdout" | "stderr" };
 function failure(text: string): Result {
 	return { code: 1, text, stream: "stderr" };
 }
-function appendRefusal(count: number, error?: unknown): Result {
+function appendRefusal(
+	count: number,
+	error?: unknown,
+	appendPending = false,
+): Result {
 	const detail =
 		error === undefined
 			? ""
 			: `\n${error instanceof Error ? error.message : String(error)}`;
 	return failure(
-		`journal changed during the apply; your ${count} accepted lines are appended and stay; run the dry run again. Re-running --accept-dropped would journal them again; restore or move the line instead, or accept knowing that${detail}`,
+		`journal changed during the apply; ${appendPending ? `${count} accepted lines appended; the append of line ${count + 1} failed and may or may not be in the journal: read it. The accepted lines already appended stay.` : `your ${count} accepted lines are appended and stay.`} Run the dry run again. Re-running --accept-dropped would journal them again. Restore or move the line instead, or accept it again knowing it will be journaled twice.${detail}`,
 	);
 }
 function writtenAt(date: Date): string {
@@ -149,6 +153,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	const refused = !held.range.ok ? held.range.message : unsafeReason(held);
 	const selected = held.range.ok ? held.range : refusedRange(held);
 	const range = selected.entries;
+	const apply = `shepherd tool checkpoint --apply --token ${held.token} --session YOUR_SESSION_NAME${held.dropped?.unaccounted.length ? ' --accept-dropped "REASON"' : ""}`;
 	const facts = {
 		revision: held.revision,
 		nextRevision: held.revision + 1,
@@ -161,7 +166,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 		changed,
 		dropped: held.dropped ?? { candidates: [], accounted: [], unaccounted: [] },
 		lock,
-		...(refused ? { refused } : { token: held.token }),
+		...(refused ? { refused } : { token: held.token, apply }),
 	};
 	if (json)
 		return {
@@ -197,7 +202,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	else
 		lines.push(
 			`token: ${held.token}`,
-			`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${held.token}`,
+			`Read every entry and changed file above, then: ${apply}`,
 		);
 	return { code: refused ? 1 : 0, text: lines.join("\n"), stream: "stdout" };
 }
@@ -260,8 +265,10 @@ export async function runCheckpoint(
 				let appended: ChainEntry[] = [];
 				if (unaccounted.length) {
 					const expected: string[] = [];
+					let appendPending = false;
 					try {
 						for (const [index, line] of unaccounted.entries()) {
+							appendPending = true;
 							const [entry] = await appendEntries(
 								workspace.state,
 								[
@@ -272,10 +279,11 @@ export async function runCheckpoint(
 							);
 							if (!entry) throw new Error("accepted line not appended");
 							expected.push(entry.text);
+							appendPending = false;
 							await hooks.afterAppend?.(index);
 						}
 					} catch (error) {
-						return appendRefusal(expected.length, error);
+						return appendRefusal(expected.length, error, appendPending);
 					}
 					const chain = journalChain(workspace.state);
 					appended = chain.entries.slice(held.chain.length);
