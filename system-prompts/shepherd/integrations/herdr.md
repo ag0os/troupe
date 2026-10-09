@@ -25,14 +25,14 @@ Read and follow that output; it supersedes anything remembered from training. Fo
 - Pane commands drive raw terminals: run commands, wait for output, read output.
 - Agent commands drive a recognized coding agent in a pane: start it, prompt it, wait for `idle`, `done`, or `blocked`, read its screen, send keys.
 - Your own pane context is injected as `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID`. Prefer `--current` or explicit IDs parsed from JSON responses; never rely on the UI focused pane.
-- Default new work to a sibling pane in the current tab, preserving your working directory, split direction chosen from the caller pane's geometry (wide splits right, narrow or tall splits down).
+- Default new work to a sibling pane in the current tab, preserving your working directory unless the work needs a worktree, split direction chosen from the caller pane's geometry (wide splits right, narrow or tall splits down).
 
 ## Rules of engagement
 
 - Use `--no-focus` for background work; keep the user's focus where it is unless they asked to switch.
 - Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asks.
 - Never run `herdr server stop` and never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
-- Do not create workspaces, tabs, worktrees, or change directories for delegated work unless the user asked for that topology.
+- Do not create workspaces or tabs, or change your own pane's directory, for delegated work unless the user asked for that topology. A git worktree is the work's call, not Herdr's: when the work needs one, start the delegate's pane in it.
 - A Herdr agent name (`agent start <name>`, `agent rename`) labels the pane occupant for Herdr targeting only; it is not the session's own name, will not resume the session after a crash, and clears when the occupant exits. Set the delegate's session name through the delegate's own mechanism as well.
 - Your own pane's status line carries your context usage; read your own pane to check it when budgeting your handoff.
 - Input sent to a busy or unready pane arrives as garbage to whatever is running there, and an agent already working needs no second prompt.

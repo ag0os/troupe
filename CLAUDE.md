@@ -64,4 +64,4 @@ Agents are namespaced via subdirectories. The directory structure determines the
 - This is a Bun project - use `bun` not `npm` or `yarn`
 - Biome excludes authored Markdown while checking TypeScript
 - The project uses TypeScript with module syntax
-- The strict compiler requires the fixed 22-agent roster and publishes standalone binaries through the shared compiler
+- The strict compiler requires the fixed roster (`ROSTER` in `scripts/agent-compiler.ts`) and publishes standalone binaries through the shared compiler
