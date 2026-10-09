@@ -314,7 +314,7 @@ describe("init", () => {
 		});
 	});
 
-	test("fresh workspace passes the checker with only charter-missing info", () => {
+	test("fresh workspace passes the checker with charter-missing and checkpoint-missing info", () => {
 		const { root, now } = fixture();
 		applyInit(root, { master: false, now });
 		const tree = discoverTree(root);
@@ -327,6 +327,7 @@ describe("init", () => {
 		};
 		const findings = checkWorkspace(tree.root, tree, config, now, root);
 		expect(findings.map(({ level, code }) => ({ level, code }))).toEqual([
+			{ level: "info", code: "checkpoint-missing" },
 			{ level: "info", code: "charter-missing" },
 		]);
 	});

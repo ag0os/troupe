@@ -100,6 +100,7 @@ function statusAt(
 		if (errorCode(error) === "ENOENT") return { status: "free" };
 		throw error;
 	}
+	if (!before.isDirectory()) return { status: "stale" };
 	const pid = ownerPid(path);
 	const alive = pid !== undefined && toolEnv.pidAlive(pid);
 	try {
@@ -185,7 +186,11 @@ async function acquire(
 					if (ownerPid(path) === pid) removeLock(path);
 				};
 			} catch (error) {
-				if (errorCode(error) !== "EEXIST" && errorCode(error) !== "ENOTEMPTY")
+				if (
+					!["EEXIST", "ENOTEMPTY", "ENOTDIR", "EISDIR"].includes(
+						errorCode(error) ?? "",
+					)
+				)
 					throw error;
 			}
 			const status = statusAt(path, toolEnv);
@@ -313,7 +318,10 @@ export async function unlockState(
 			} catch (error) {
 				if (errorCode(error) === "ENOENT") {
 					status = { status: "free" };
-				} else if (errorCode(error) === "ENOTEMPTY") {
+				} else if (
+					errorCode(error) === "ENOTEMPTY" ||
+					errorCode(error) === "ENOTDIR"
+				) {
 					status = lockStatus(state, toolEnv);
 					if (status.status === "stale") removeLock(join(state, ".state.lock"));
 				} else {

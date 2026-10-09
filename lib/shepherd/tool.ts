@@ -195,11 +195,19 @@ function findingReports(
 	configs: ReadonlyMap<string, Config>,
 	today: Date,
 	home: string,
+	toolEnv: ToolEnv,
 ) {
 	return workspaces.map((workspace) => {
 		const config = configs.get(workspace.dir);
 		if (!config) throw new Error(`missing config for ${workspace.dir}`);
-		const findings = checkWorkspace(workspace, tree, config, today, home);
+		const findings = checkWorkspace(
+			workspace,
+			tree,
+			config,
+			today,
+			home,
+			toolEnv,
+		);
 		return {
 			name: workspace.name,
 			dir: workspace.dir,
@@ -328,6 +336,7 @@ async function runCheck(
 		configs,
 		today,
 		toolEnv.home,
+		toolEnv,
 	);
 	const total = totals(reports);
 	return flags.json === true
