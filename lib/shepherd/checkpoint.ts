@@ -10,7 +10,7 @@ import {
 import { lockStatus } from "./lock";
 import type { ToolEnv } from "./sessions";
 import { recordFreshness } from "./status";
-import { type ChainEntry, journalChain, journalSections } from "./text";
+import { type ChainEntry, journalChain } from "./text";
 import type { Workspace } from "./tree";
 import { findEnclosingWorkspace, STATE_DIR } from "./workspace";
 
@@ -161,7 +161,19 @@ export function readCheckpoint(state: string): CheckpointRead {
 		};
 	}
 	try {
-		const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+		return parseCheckpoint(readFileSync(path, "utf8"));
+	} catch (error) {
+		return {
+			status: "invalid",
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+/** Validate checkpoint JSON from already held text. */
+export function parseCheckpoint(text: string): CheckpointRead {
+	try {
+		const value: unknown = JSON.parse(text);
 		const reason = validation(value);
 		return reason
 			? { status: "invalid", reason }
@@ -246,41 +258,29 @@ export function hashPaths(
 
 /** Last two entry-bearing dated sections, oldest first, retaining duplicate headings. */
 export function fallbackSections(
-	state: string,
+	_state: string,
 	chain: ChainEntry[],
-	files: string[],
+	_files: string[],
 ): JournalSection[] {
 	const selected: JournalSection[] = [];
-	for (const file of [...files].reverse()) {
-		let text: string;
-		try {
-			text = readFileSync(join(state, file), "utf8");
-		} catch {
-			continue;
-		}
-		const split = journalSections(text);
-		let offset = split.preamble.split("\n").length - 1;
-		const sections = split.days.map(({ date, body }) => {
-			const headingLine = offset + 1;
-			offset += body.split("\n").length - 1;
-			return {
-				file,
-				day: date,
-				headingLine,
-				entries: chain.filter(
-					(entry) =>
-						entry.file === file &&
-						entry.day !== undefined &&
-						entry.line >= headingLine &&
-						entry.line <= offset + (body.endsWith("\n") ? 0 : 1),
-				),
+	for (let index = chain.length - 1; index >= 0; index--) {
+		const entry = chain[index];
+		if (!entry || entry.heading === undefined) continue;
+		let section = selected.find(
+			(section) =>
+				section.file === entry.file && section.headingLine === entry.heading,
+		);
+		if (!section) {
+			if (selected.length === 2) break;
+			section = {
+				file: entry.file,
+				day: entry.day ?? "",
+				headingLine: entry.heading,
+				entries: [],
 			};
-		});
-		for (const section of sections.reverse()) {
-			if (!section.entries.length) continue;
 			selected.push(section);
-			if (selected.length === 2) return selected.reverse();
 		}
+		section.entries.unshift(entry);
 	}
 	return selected.reverse();
 }

@@ -114,6 +114,7 @@ export function journalSections(text: string): {
 
 export type JournalEntry = {
 	line: number;
+	heading?: number;
 	day?: string;
 	time?: string;
 	text: string;
@@ -129,15 +130,25 @@ export function journalEntries(
 ): JournalEntry[] {
 	const entries: JournalEntry[] = [];
 	let day: string | undefined;
+	let headingLine: number | undefined;
 	let current: JournalEntry | undefined;
 	let previousLine = 0;
 	for (const { n, line } of proseLines(text)) {
 		if (n !== previousLine + 1) current = undefined;
 		previousLine = n;
 		const heading = line.match(/^## (\d{4}-\d{2}-\d{2})/);
-		if (heading) day = heading[1];
+		if (heading) {
+			day = heading[1];
+			headingLine = n;
+		}
 		if (line.startsWith("- ")) {
-			current = { line: n, day, text: line.slice(2), id: "" };
+			current = {
+				line: n,
+				heading: headingLine,
+				day,
+				text: line.slice(2),
+				id: "",
+			};
 			entries.push(current);
 		} else if (current && /^[ \t]/.test(line) && line.trim()) {
 			current.text += ` ${line}`;

@@ -6,8 +6,10 @@ import {
 	type DroppedInput,
 	droppedDigest,
 	droppedLines,
+	type ItemSources,
 	readBaseline,
 	readDroppedSources,
+	readItemStates,
 } from "./current-prev";
 import { type MakeTreeOptions, makeTree } from "./test-support";
 import type { Workspace } from "./tree";
@@ -525,5 +527,50 @@ describe("readBaseline", () => {
 				readBaseline(workspace.state, snapshot, contentHash("Keep details."))
 					.status,
 			).toBe("lost");
+	});
+});
+
+describe("readItemStates", () => {
+	const baseline = "## Items\n- [task](work/done/task/STATUS.md)";
+	function sources(symlink?: string) {
+		const reads: string[] = [];
+		const reader: ItemSources = {
+			kind: (path) => {
+				if (path === symlink) return "symlink";
+				if ([".", "work", "work/done", "work/done/task"].includes(path))
+					return "directory";
+				return path === "work/done/task/STATUS.md" ? "file" : "missing";
+			},
+			read: (path) => {
+				reads.push(path);
+				return "---\nstate: done\n---\n## Outcome\nHeld outcome";
+			},
+			list: () => [],
+		};
+		return { reader, reads };
+	}
+	test("classifies a done item using only the supplied text and probes", () => {
+		const s = sources();
+		expect(readItemStates(baseline, s.reader)).toEqual({ task: "done" });
+		expect(s.reads).toEqual(["work/done/task/STATUS.md"]);
+	});
+	for (const path of [
+		"work",
+		"work/done",
+		"work/done/task",
+		"work/done/task/STATUS.md",
+	]) {
+		test(`does not read a done item's text through symlinked ${path}`, () => {
+			const s = sources(path);
+			expect(readItemStates(baseline, s.reader)).toEqual({ task: "missing" });
+			expect(s.reads).toEqual([]);
+		});
+	}
+	test("a real done directory with unavailable text remains done-no-outcome", () => {
+		const s = sources();
+		s.reader.read = () => undefined;
+		expect(readItemStates(baseline, s.reader)).toEqual({
+			task: "done-no-outcome",
+		});
 	});
 });

@@ -229,41 +229,119 @@ function markdownFiles(dir: string, recursive: boolean): string[] {
 	}
 }
 
-function itemState(state: string, slug: string): ItemState {
+export type ItemPathKind =
+	| "directory"
+	| "file"
+	| "symlink"
+	| "missing"
+	| "other";
+export type ItemSources = {
+	read: (path: string) => string | undefined;
+	kind: (path: string) => ItemPathKind;
+	list: (path: string) => string[];
+};
+
+/** Inspect one relative item path without following its final component. */
+export function itemPathKind(state: string, path: string): ItemPathKind {
 	if (
-		["todo", "in-progress"].some((bucket) =>
-			isDirectory(join(state, "work", bucket, slug)),
-		)
+		path !== "." &&
+		(isAbsolute(path) ||
+			path.split("/").some((part) => !part || part === "." || part === ".."))
+	)
+		return "other";
+	try {
+		const stat = lstatSync(join(state, path));
+		return stat.isSymbolicLink()
+			? "symlink"
+			: stat.isDirectory()
+				? "directory"
+				: stat.isFile()
+					? "file"
+					: "other";
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT"
+			? "missing"
+			: "other";
+	}
+}
+
+function itemDirectory(sources: ItemSources, path: string): boolean {
+	if (sources.kind(".") !== "directory") return false;
+	const parts = path === "." ? [] : path.split("/");
+	return parts.every(
+		(_, index) =>
+			sources.kind(parts.slice(0, index + 1).join("/")) === "directory",
+	);
+}
+function itemState(sources: ItemSources, slug: string): ItemState {
+	if (!slug || slug === "." || slug === "..") return "missing";
+	const resolved = (path: string) =>
+		itemDirectory(sources, path) &&
+		sources.kind(`${path}/STATUS.md`) !== "symlink";
+	if (
+		["todo", "in-progress"].some((bucket) => resolved(`work/${bucket}/${slug}`))
 	)
 		return "live";
-	const done = join(state, "work/done", slug);
-	if (isDirectory(done)) {
+	const done = `work/done/${slug}`;
+	if (resolved(done)) {
+		let text: string | undefined;
 		try {
-			const status = join(done, "STATUS.md");
-			if (!lstatSync(status).isFile()) return "done-no-outcome";
-			const text = readFileSync(status, "utf8");
-			const body = text.replace(/^---\n[\s\S]*?\n---/, "");
-			return frontmatter(text)?.state === "done" &&
-				fencedLines(body).some(
-					({ text, fenced }) => !fenced && /^## Outcome[ \t]*\r?$/.test(text),
-				)
-				? "done"
-				: "done-no-outcome";
+			text = sources.read(`${done}/STATUS.md`);
 		} catch {
 			return "done-no-outcome";
 		}
+		if (text === undefined) return "done-no-outcome";
+		const body = text.replace(/^---\n[\s\S]*?\n---/, "");
+		return frontmatter(text)?.state === "done" &&
+			fencedLines(body).some(
+				({ text, fenced }) => !fenced && /^## Outcome[ \t]*\r?$/.test(text),
+			)
+			? "done"
+			: "done-no-outcome";
 	}
-	const archive = join(state, "archive");
 	if (
-		isDirectory(archive) &&
-		readdirSync(archive).some(
-			(bucket) =>
-				isDirectory(join(archive, bucket)) &&
-				isDirectory(join(archive, bucket, slug)),
-		)
+		itemDirectory(sources, "archive") &&
+		sources
+			.list("archive")
+			.some((bucket) => resolved(`archive/${bucket}/${slug}`))
 	)
 		return "archived";
 	return "missing";
+}
+
+/** Classify baseline Items using a supplied reader and symlink-aware path probes. */
+export function readItemStates(
+	baseline: string,
+	sources: ItemSources,
+): Record<string, ItemState> {
+	const items: Record<string, ItemState> = {};
+	for (const { slug } of itemEntries(baseline)) {
+		try {
+			items[slug] = itemState(sources, slug);
+		} catch {
+			items[slug] = "missing";
+		}
+	}
+	return items;
+}
+function diskItemSources(state: string): ItemSources {
+	const sources: ItemSources = {
+		kind: (path) => itemPathKind(state, path),
+		list: (path) => readdirSync(join(state, path)),
+		read: (path) => {
+			try {
+				if (
+					!itemDirectory(sources, dirname(path)) ||
+					sources.kind(path) !== "file"
+				)
+					return undefined;
+				return readFileSync(join(state, path), "utf8");
+			} catch {
+				return undefined;
+			}
+		},
+	};
+	return sources;
 }
 
 /** Read item states and the live preservation and suggestion destinations. */
@@ -274,13 +352,8 @@ export function readDroppedSources(
 	items: DroppedInput["items"];
 	destinations: DroppedInput["destinations"];
 } {
-	const items: DroppedInput["items"] = {};
-	for (const { slug } of itemEntries(baseline))
-		try {
-			items[slug] = itemState(workspace.state, slug);
-		} catch {
-			items[slug] = "missing";
-		}
+	const sources = diskItemSources(workspace.state);
+	const items = readItemStates(baseline, sources);
 	const destinations: DroppedInput["destinations"] = {};
 	const paths = markdownFiles(join(workspace.state, "docs"), true);
 	for (const dir of ["memories", "integrations", "outbox"])
@@ -298,25 +371,20 @@ export function readDroppedSources(
 		} catch {}
 	}
 	for (const path of paths.sort()) {
-		try {
-			if (lstatSync(path).isFile())
-				destinations[relative(workspace.state, path).split(sep).join("/")] =
-					readFileSync(path, "utf8");
-		} catch {}
+		const key = relative(workspace.state, path).split(sep).join("/");
+		const text = sources.read(key);
+		if (text !== undefined) destinations[key] = text;
 	}
 	const enclosing = findEnclosingWorkspace(workspace.dir);
 	if (enclosing) {
+		const shared = diskItemSources(join(enclosing, STATE_DIR));
 		for (const path of markdownFiles(
 			join(enclosing, STATE_DIR, "shared"),
 			false,
 		)) {
-			try {
-				if (lstatSync(path).isFile())
-					destinations[`enclosing:shared/${basename(path)}`] = readFileSync(
-						path,
-						"utf8",
-					);
-			} catch {}
+			const text = shared.read(`shared/${basename(path)}`);
+			if (text !== undefined)
+				destinations[`enclosing:shared/${basename(path)}`] = text;
 		}
 	}
 	return { items, destinations };
