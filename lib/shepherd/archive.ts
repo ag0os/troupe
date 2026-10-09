@@ -11,7 +11,14 @@ import { join } from "node:path";
 import { type ArchivedItem, rewriteArchiveReferences } from "./archive-rewrite";
 import type { Config } from "./config";
 import { dayOf, daysBetween, monthOf } from "./dates";
-import { closedDate, journalSections, read, summaryLine } from "./text";
+import {
+	closedDate,
+	journalChain,
+	journalEntries,
+	journalSections,
+	read,
+	summaryLine,
+} from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
 export type ArchiveMoveStatus = "planned" | "moved" | "skipped";
@@ -74,6 +81,19 @@ function unsafeFile(path: string, display: string): string | undefined {
 
 function journalMoves(workspace: Workspace, today: Date): JournalArchiveMove[] {
 	const journal = join(workspace.state, "journal.md");
+	const problem = unsafeFile(journal, "journal.md");
+	if (problem && problem !== "journal.md is a symlink")
+		return [
+			{
+				kind: "journal",
+				from: "journal.md",
+				to: "journal.md",
+				detail: problem,
+				status: "skipped",
+				month: "",
+				days: [],
+			},
+		];
 	if (!existsSync(journal)) return [];
 
 	const currentMonth = monthOf(today);
@@ -84,15 +104,130 @@ function journalMoves(workspace: Workspace, today: Date): JournalArchiveMove[] {
 		byMonth.set(month, [...(byMonth.get(month) ?? []), section.body]);
 	}
 
-	return [...byMonth].map(([month, days]) => ({
-		kind: "journal",
-		from: "journal.md",
-		to: `archive/journal/${month}.md`,
-		detail: `${days.length} day(s) of ${month}`,
-		status: "planned",
-		month,
-		days,
-	}));
+	return [...byMonth]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([month, days]) => ({
+			kind: "journal",
+			from: "journal.md",
+			to: `archive/journal/${month}.md`,
+			detail: problem ?? `${days.length} day(s) of ${month}`,
+			status: problem ? "skipped" : "planned",
+			month,
+			days,
+		}));
+}
+
+function buildJournalTexts(
+	texts: ReadonlyMap<string, string>,
+	moves: readonly JournalArchiveMove[],
+): Map<string, string> {
+	const built = new Map(texts);
+	for (const move of moves) {
+		const existing = built.get(move.to) ?? `# Journal ${move.month}\n\n`;
+		built.set(
+			move.to,
+			`${existing}${move.days.map((body) => body.trimEnd()).join("\n\n")}\n`,
+		);
+	}
+	const journal = texts.get("journal.md");
+	if (journal === undefined)
+		throw new Error("missing journal text for journal.md");
+	const { preamble, days } = journalSections(journal);
+	const movedMonths = new Set(moves.map(({ month }) => month));
+	const keep = days
+		.filter(({ date }) => !movedMonths.has(date.slice(0, 7)))
+		.map(({ body }) => body.trimEnd());
+	built.set(
+		"journal.md",
+		`${preamble.trimEnd() || "# Journal"}\n\n${keep.join("\n\n")}${keep.length ? "\n" : ""}`,
+	);
+	return built;
+}
+
+function journalTexts(state: string): {
+	texts: Map<string, string>;
+	problem?: string;
+} {
+	const texts = new Map<string, string>();
+	const chain = journalChain(state);
+	if (chain.unreadable.length) {
+		return {
+			texts,
+			problem: chain.unreadable
+				.map(({ file, reason }) => `${file} ${reason}`)
+				.join("; "),
+		};
+	}
+	for (const file of chain.files) {
+		const problem = unsafeFile(join(state, file), file);
+		if (problem) return { texts, problem };
+		try {
+			texts.set(file, read(join(state, file)));
+		} catch {
+			return { texts, problem: `${file} cannot be read` };
+		}
+	}
+	return { texts };
+}
+
+function skipJournalMoves(moves: JournalArchiveMove[], problem: string): void {
+	for (const move of moves) {
+		move.status = "skipped";
+		move.detail = problem;
+	}
+}
+
+function chainTexts(texts: ReadonlyMap<string, string>): string[] {
+	const files = [...texts.keys()]
+		.filter((file) => file !== "journal.md")
+		.sort();
+	files.push("journal.md");
+	return files.flatMap((file) =>
+		journalEntries(texts.get(file) ?? "").map(({ text }) => text),
+	);
+}
+
+function checkJournalSequence(state: string, moves: ArchiveMove[]): void {
+	const pending = moves.filter(
+		(move): move is JournalArchiveMove =>
+			move.kind === "journal" && move.status === "planned",
+	);
+	if (!pending.length) return;
+	const { texts, problem } = journalTexts(state);
+	if (problem) {
+		skipJournalMoves(pending, problem);
+		return;
+	}
+	const before = chainTexts(texts);
+	const accepted: JournalArchiveMove[] = [];
+	for (const move of pending) {
+		const after = chainTexts(buildJournalTexts(texts, [...accepted, move]));
+		if (
+			before.length === after.length &&
+			before.every((text, i) => text === after[i])
+		) {
+			accepted.push(move);
+			continue;
+		}
+		const later = [...texts.keys()]
+			.sort()
+			.find(
+				(file) =>
+					file.startsWith("archive/journal/") &&
+					file > move.to &&
+					journalEntries(texts.get(file) ?? "").length > 0,
+			);
+		const orphans =
+			journalEntries(journalSections(texts.get("journal.md") ?? "").preamble)
+				.length > 0;
+		const cause = orphans
+			? "would move entries without a heading"
+			: later
+				? `would place its entries after ${later}`
+				: "would reorder the journal chain";
+		move.status = "skipped";
+		move.detail = `rotating ${move.month} ${cause}; give orphans a heading, put sections in order, or leave the stray month in place (a heading fix changes no id)`;
+	}
 }
 
 function itemMoves(
@@ -174,6 +309,7 @@ export function planArchive(
 					}
 				}
 			}
+			checkJournalSequence(workspace.state, moves);
 			return {
 				name: workspace.name,
 				state: workspace.state,
@@ -194,38 +330,49 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 	);
 	if (!moves.length) return;
 
-	const archive = join(workspace.state, "archive", "journal");
-	for (const move of moves) {
-		if (move.status === "skipped") continue;
-		const target = join(workspace.state, move.to);
-		const problem = unsafeFile(target, move.to);
-		if (problem) {
-			move.status = "skipped";
-			move.detail = problem;
-			continue;
-		}
-		mkdirSync(archive, { recursive: true });
-		const heading = existsSync(target) ? "" : `# Journal ${move.month}\n\n`;
-		appendFileSync(
-			target,
-			`${heading}${move.days.map((body) => body.trimEnd()).join("\n\n")}\n`,
+	const pending = moves.filter(({ status }) => status !== "skipped");
+	if (!pending.length) return;
+	const { texts: original, problem } = journalTexts(workspace.state);
+	if (problem || !original.has("journal.md")) {
+		skipJournalMoves(
+			pending,
+			problem ?? "journal.md is missing from journal texts",
 		);
+		return;
+	}
+	const archive = join(workspace.state, "archive", "journal");
+	for (const move of pending) {
+		const target = join(workspace.state, move.to);
+		const problem =
+			unsafeFile(target, move.to) ??
+			(existsSync(target) && !original.has(move.to)
+				? `${move.to} is missing from journal texts`
+				: undefined);
+		if (problem) skipJournalMoves([move], problem);
+	}
+	const accepted = pending.filter(({ status }) => status !== "skipped");
+	if (!accepted.length) return;
+	const texts = buildJournalTexts(original, accepted);
+	mkdirSync(archive, { recursive: true });
+	for (const move of accepted) {
+		const text = texts.get(move.to);
+		if (text === undefined)
+			throw new Error(`missing journal text for ${move.to}`);
+		const existing = original.get(move.to);
+		if (existing === undefined) {
+			writeFileSync(join(workspace.state, move.to), text, { flag: "wx" });
+		} else {
+			appendFileSync(
+				join(workspace.state, move.to),
+				text.slice(existing.length),
+			);
+		}
 		move.status = "moved";
 	}
-	if (!moves.some(({ status }) => status === "moved")) return;
-
-	const journal = join(workspace.state, "journal.md");
-	const { preamble, days } = journalSections(read(journal));
-	const movedMonths = new Set(
-		moves.filter(({ status }) => status === "moved").map(({ month }) => month),
-	);
-	const keep = days
-		.filter(({ date }) => !movedMonths.has(date.slice(0, 7)))
-		.map(({ body }) => body.trimEnd());
-	writeFileSync(
-		journal,
-		`${preamble.trimEnd() || "# Journal"}\n\n${keep.join("\n\n")}${keep.length ? "\n" : ""}`,
-	);
+	const journal = texts.get("journal.md");
+	if (journal === undefined)
+		throw new Error("missing journal text for journal.md");
+	writeFileSync(join(workspace.state, "journal.md"), journal);
 }
 
 function applyItemMoves(workspace: ArchiveWorkspacePlan): void {

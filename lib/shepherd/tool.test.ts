@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -491,6 +492,199 @@ describe("runTool output", () => {
 			existsSync(join(cwd, ".shepherd/archive/journal/2026-09.md")),
 		).toBeTrue();
 	});
+
+	const archiveModes: Readonly<Record<string, string | boolean>>[] = [
+		{},
+		{ recursive: true },
+		{ apply: true },
+		{ apply: true, recursive: true },
+	];
+
+	test.each(archiveModes)(
+		"archive ignores a current-month-only symlinked journal (%j)",
+		async (flags) => {
+			const journal = "## 2026-10-01\n- Current\n";
+			const tree = makeTree(
+				{
+					"root/.shepherd/charter.md": "Charter",
+					"journal-target.md": journal,
+				},
+				{ symlinks: { "root/.shepherd/journal.md": "journal-target.md" } },
+			);
+			cleanups.push(tree.cleanup);
+			const env = fakeToolEnv({
+				cwd: join(tree.root, "root"),
+				home: join(tree.root, "home"),
+			});
+			const human = await runTool(["archive"], flags, env);
+			expect(human.code).toBe(0);
+			expect(human.text.trim()).toBe("root: nothing to archive");
+			const json = await runTool(["archive"], { ...flags, json: true }, env);
+			expect(json.code).toBe(0);
+			expect(JSON.parse(json.text).workspaces[0].moves).toEqual([]);
+			expect(readFileSync(join(tree.root, "journal-target.md"), "utf8")).toBe(
+				journal,
+			);
+		},
+	);
+
+	test.each(archiveModes)(
+		"archive skips only real past-month moves for a symlinked journal (%j)",
+		async (flags) => {
+			const journal = "## 2026-09-01\n- Past\n\n## 2026-10-01\n- Current\n";
+			const tree = makeTree(
+				{
+					"root/.shepherd/charter.md": "Charter",
+					"journal-target.md": journal,
+				},
+				{ symlinks: { "root/.shepherd/journal.md": "journal-target.md" } },
+			);
+			cleanups.push(tree.cleanup);
+			const env = fakeToolEnv({
+				cwd: join(tree.root, "root"),
+				home: join(tree.root, "home"),
+			});
+			const human = await runTool(["archive"], flags, env);
+			expect(human.code).toBe(1);
+			expect(human.text).toContain("skip journal: journal.md is a symlink");
+			const json = await runTool(["archive"], { ...flags, json: true }, env);
+			expect(json.code).toBe(1);
+			expect(JSON.parse(json.text).workspaces[0].moves).toEqual([
+				{
+					kind: "journal",
+					from: "journal.md",
+					to: "archive/journal/2026-09.md",
+					detail: "journal.md is a symlink",
+					status: "skipped",
+				},
+			]);
+			expect(readFileSync(join(tree.root, "journal-target.md"), "utf8")).toBe(
+				journal,
+			);
+			expect(existsSync(join(tree.root, "root/.shepherd/archive"))).toBeFalse();
+		},
+	);
+
+	test.each([true, false])(
+		"archive apply refuses an unselected child's lock (alive: %s)",
+		async (alive) => {
+			const { cwd, env } = fixture();
+			const journal = join(cwd, ".shepherd/journal.md");
+			writeFileSync(journal, "## 2026-09-01\n- Old\n");
+			const item = join(cwd, ".shepherd/work/done/release");
+			mkdirSync(item, { recursive: true });
+			writeFileSync(
+				join(item, "STATUS.md"),
+				"---\nclosed: 2026-08-01\n---\n# Release\n",
+			);
+			const lock = join(cwd, "child/.shepherd/.state.lock");
+			mkdirSync(lock);
+			writeFileSync(
+				join(lock, "owner"),
+				JSON.stringify({ pid: 101, started: env.now.toISOString() }),
+			);
+			env.pidAlive = (pid) => alive && pid === 101;
+			const output = await runTool(["archive"], { apply: true }, env, {
+				timeoutMs: 0,
+			});
+			expect(output.code).toBe(1);
+			expect(output.text).toStartWith("child: ");
+			expect(output.text).toContain(
+				alive ? "locked by pid 101 (alive)" : "run `shepherd tool unlock`",
+			);
+			expect(readFileSync(journal, "utf8")).toBe("## 2026-09-01\n- Old\n");
+			expect(existsSync(item)).toBeTrue();
+			expect(existsSync(join(cwd, ".shepherd/archive"))).toBeFalse();
+			expect(existsSync(join(cwd, ".shepherd/.state.lock"))).toBeFalse();
+		},
+	);
+
+	test("archive dry run works with a live lock held and takes no locks", async () => {
+		const { cwd, env } = fixture();
+		writeFileSync(join(cwd, ".shepherd/journal.md"), "## 2026-09-01\n- Old\n");
+		const lock = join(cwd, ".shepherd/.state.lock");
+		mkdirSync(lock);
+		writeFileSync(
+			join(lock, "owner"),
+			JSON.stringify({ pid: 101, started: env.now.toISOString() }),
+		);
+		env.pidAlive = () => true;
+		env.clock = () => {
+			throw new Error("dry run must not acquire locks");
+		};
+		const output = await runTool(["archive"], {}, env);
+		expect(output.code).toBe(0);
+		expect(output.text).toContain("1 move(s) (dry run)");
+		expect(existsSync(lock)).toBeTrue();
+		expect(existsSync(join(cwd, "child/.shepherd/.state.lock"))).toBeFalse();
+	});
+
+	test("archive apply plans after tree locks are acquired and prints its own plan", async () => {
+		const { cwd, env } = fixture();
+		const journal = join(cwd, ".shepherd/journal.md");
+		writeFileSync(journal, "## 2026-08-01\n- Old\n");
+		const dry = await runTool(["archive"], { json: true }, env);
+		expect(JSON.parse(dry.text).workspaces[0].moves[0].to).toBe(
+			"archive/journal/2026-08.md",
+		);
+		let calls = 0;
+		env.clock = () => {
+			if (++calls === 2) {
+				expect(existsSync(join(cwd, ".shepherd/.state.lock"))).toBeTrue();
+				writeFileSync(journal, "## 2026-09-01\n- Changed during acquisition\n");
+			}
+			return new Date(env.now);
+		};
+		const output = await runTool(["archive"], { apply: true, json: true }, env);
+		expect(output.code).toBe(0);
+		expect(calls).toBe(2);
+		expect(JSON.parse(output.text).workspaces[0].moves[0]).toMatchObject({
+			to: "archive/journal/2026-09.md",
+			status: "moved",
+		});
+		expect(
+			existsSync(join(cwd, ".shepherd/archive/journal/2026-08.md")),
+		).toBeFalse();
+		expect(
+			readFileSync(join(cwd, ".shepherd/archive/journal/2026-09.md"), "utf8"),
+		).toContain("Changed during acquisition");
+	});
+
+	test.each([false, true])(
+		"archive prints the applied result when lock release fails (json: %s)",
+		async (json) => {
+			const { cwd, env } = fixture();
+			writeFileSync(
+				join(cwd, ".shepherd/journal.md"),
+				"## 2026-09-01\n- Old\n",
+			);
+			let calls = 0;
+			env.clock = () => {
+				if (++calls === 2) {
+					const lock = join(cwd, ".shepherd/.state.lock");
+					rmSync(lock, { recursive: true });
+					writeFileSync(lock, "simulate failed cleanup");
+				}
+				return new Date(env.now);
+			};
+			const output = await runTool(["archive"], { apply: true, json }, env);
+			expect(output.code).toBe(1);
+			expect(output.text).toContain("lock release failed");
+			if (json) {
+				const applied = JSON.parse(output.text);
+				expect(applied.releaseError).toBe("lock release failed");
+				expect(applied.applied).toBeTrue();
+				expect(applied.workspaces[0].moves[0].status).toBe("moved");
+			} else {
+				expect(output.text).toContain("root: 1 move(s)\n");
+				expect(output.text).not.toContain("dry run");
+			}
+			expect(
+				existsSync(join(cwd, ".shepherd/archive/journal/2026-09.md")),
+			).toBeTrue();
+			expect(existsSync(join(cwd, "child/.shepherd/.state.lock"))).toBeFalse();
+		},
+	);
 
 	test("prints unattributed sessions only when no selector was given", async () => {
 		const tree = makeTree({

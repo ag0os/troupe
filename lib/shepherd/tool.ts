@@ -18,6 +18,12 @@ import { dayOf, localDate } from "./dates";
 import { doctorExitCode, doctorJson, renderDoctor, runDoctor } from "./doctor";
 import { GUIDES } from "./guides";
 import { applyInit, initExitCode, initJson, renderInit } from "./init";
+import {
+	LockError,
+	type LockOptions,
+	LockReleaseError,
+	withStateLocks,
+} from "./lock";
 import { runningSessions, type ToolEnv } from "./sessions";
 import { renderStatus, statusJson, statusReport } from "./status-render";
 import {
@@ -357,38 +363,73 @@ function archiveJson(plan: ReturnType<typeof planArchive>) {
 	};
 }
 
-function runArchive(
+async function runArchive(
 	selectors: string[],
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
 	tree: WorkspaceTree,
 	configs: ReadonlyMap<string, Config>,
 	today: Date,
-): ToolResult {
+	lockOptions: LockOptions = {},
+): Promise<ToolResult> {
 	const scope = flags.recursive === true ? "archive-recursive" : "archive";
 	const workspaces = selectWorkspaces(tree, selectors, scope);
-	const planned = planArchive(
-		workspaces,
-		(workspace) => {
-			const config = configs.get(workspace.dir);
-			if (!config) throw new Error(`missing config for ${workspace.dir}`);
-			return config;
-		},
-		today,
-	);
-	const plan =
-		flags.apply === true ? applyArchive(planned, tree, toolEnv.home) : planned;
-	const code = archiveExitCode(plan);
-	return flags.json === true
-		? result(
-				JSON.stringify(
-					{ ...envelope(tree, today, "archive"), ...archiveJson(plan) },
+	const plan = () =>
+		planArchive(
+			workspaces,
+			(workspace) => {
+				const config = configs.get(workspace.dir);
+				if (!config) throw new Error(`missing config for ${workspace.dir}`);
+				return config;
+			},
+			today,
+		);
+	let planned: ReturnType<typeof planArchive>;
+	let releaseError: LockReleaseError | undefined;
+	try {
+		planned =
+			flags.apply === true
+				? await withStateLocks(
+						[tree.root.state, ...tree.workspaces.map(({ state }) => state)],
+						toolEnv,
+						() => applyArchive(plan(), tree, toolEnv.home),
+						lockOptions,
+					)
+				: plan();
+	} catch (error) {
+		if (error instanceof LockError) {
+			const workspace = tree.workspaces.find(
+				({ state }) => state === error.state,
+			);
+			return result(
+				`${workspace?.name ?? error.state}: ${error.message}`,
+				1,
+				"stderr",
+			);
+		}
+		if (!(error instanceof LockReleaseError)) throw error;
+		planned = error.result as ReturnType<typeof planArchive>;
+		releaseError = error;
+	}
+	const code = releaseError ? 1 : archiveExitCode(planned);
+	const text =
+		flags.json === true
+			? JSON.stringify(
+					{
+						...envelope(tree, today, "archive"),
+						...archiveJson(planned),
+						...(releaseError ? { releaseError: releaseError.message } : {}),
+					},
 					null,
 					2,
-				),
-				code,
-			)
-		: result(renderArchive(plan).replaceAll(`${toolEnv.home}/`, "~/"), code);
+				)
+			: renderArchive(planned).replaceAll(`${toolEnv.home}/`, "~/");
+	return result(
+		releaseError && flags.json !== true
+			? `${text}\n${releaseError.message}`
+			: text,
+		code,
+	);
 }
 
 /** Run a Shepherd maintenance command without launching an agent backend. */
@@ -396,6 +437,7 @@ export async function runTool(
 	args: readonly string[],
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
+	archiveLockOptions: LockOptions = {},
 ): Promise<ToolResult> {
 	const command = args[0];
 	if (!isToolCommand(command)) return usage();
@@ -478,7 +520,15 @@ export async function runTool(
 					configs,
 					today,
 				)
-			: runArchive(args.slice(1), flags, toolEnv, tree, configs, today);
+			: await runArchive(
+					args.slice(1),
+					flags,
+					toolEnv,
+					tree,
+					configs,
+					today,
+					archiveLockOptions,
+				);
 	} catch (error) {
 		if (error instanceof WorkspaceTreeError) {
 			return treeError(toolEnv.cwd, error);

@@ -14,9 +14,10 @@ import type { ToolEnv } from "./sessions";
 
 export class LockError extends Error {
 	readonly kind: "alive" | "stale";
+	readonly state: string;
 	readonly pid?: number;
 
-	constructor(kind: "alive" | "stale", pid?: number) {
+	constructor(kind: "alive" | "stale", pid?: number, state: string = "") {
 		super(
 			kind === "alive"
 				? `locked by pid ${pid} (alive)`
@@ -24,6 +25,7 @@ export class LockError extends Error {
 		);
 		this.name = "LockError";
 		this.kind = kind;
+		this.state = state;
 		this.pid = pid;
 	}
 }
@@ -157,11 +159,12 @@ async function acquire(
 					continue;
 				}
 				const status = statusAt(path, toolEnv);
-				if (status.status === "stale") throw new LockError("stale", status.pid);
+				if (status.status === "stale")
+					throw new LockError("stale", status.pid, state);
 				const remaining = timeoutMs - (performance.now() - start);
 				if (remaining <= 0) {
 					if (status.status === "alive")
-						throw new LockError("alive", status.pid);
+						throw new LockError("alive", status.pid, state);
 					throw error;
 				}
 				await new Promise<void>((done) =>
@@ -187,9 +190,10 @@ async function acquire(
 			}
 			const status = statusAt(path, toolEnv);
 			if (status.status === "free" || status.status === "changed") continue;
-			if (status.status === "stale") throw new LockError("stale", status.pid);
+			if (status.status === "stale")
+				throw new LockError("stale", status.pid, state);
 			const remaining = timeoutMs - (performance.now() - start);
-			if (remaining <= 0) throw new LockError("alive", status.pid);
+			if (remaining <= 0) throw new LockError("alive", status.pid, state);
 			await new Promise<void>((done) =>
 				setTimeout(done, Math.min(pollMs, remaining)),
 			);
