@@ -136,9 +136,9 @@ test("built-in metadata and body costs are pinned against budgets", () => {
 	const expected: Array<[string, number, number]> = [
 		["herdr", 675, 700],
 		["inter-agent", 364, 400],
-		["nested", 399, 450],
+		["nested", 392, 450],
 		["root", 631, 650],
-		["software", 2336, 2600],
+		["software", 2390, 2600],
 	];
 	const builtins = builtInModules();
 	for (const [index, [name, cost, budget]] of expected.entries()) {
@@ -147,6 +147,7 @@ test("built-in metadata and body costs are pinned against budgets", () => {
 		expect(module?.problems).toEqual([]);
 		expect(words(module?.body ?? "")).toBe(cost);
 		expect(module?.metadata?.budget).toBe(budget);
+		expect(words(module?.body ?? "")).toBeLessThanOrEqual(budget);
 	}
 });
 

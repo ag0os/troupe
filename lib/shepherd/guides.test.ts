@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CORE_SLOTS, parseCharter } from "./charter-slots";
 import { GUIDES, renderTemplate, TEMPLATES } from "./guides";
+import { parseModule } from "./module-format";
+import { words } from "./text";
 
 const prompts = join(import.meta.dir, "../../system-prompts/shepherd");
 const templateSources = [
@@ -86,5 +89,109 @@ describe("shipped guides and templates", () => {
 				/import\s+\w+\s+from\s+"[^"\n]+\.md"\s+with\s*\{\s*type:\s*"text",?\s*\}/g,
 			),
 		]).toHaveLength(GUIDES.length + TEMPLATES.length);
+	});
+});
+
+describe("charter boundary text", () => {
+	const charter = GUIDES.find(({ name }) => name === "charter")?.text ?? "";
+	const software = parseModule(
+		readFileSync(join(prompts, "integrations/software.md"), "utf8"),
+		"software.md",
+	);
+
+	test("guide supplies a synthetic slot example and the eight core headings", () => {
+		expect(charter).toContain("## Slots and the boundary");
+		for (const [heading, key] of Object.entries(CORE_SLOTS)) {
+			expect(charter.toLowerCase()).toContain(`| ${heading} |`);
+			expect(charter).toContain(`\`${key}\``);
+		}
+		const example = charter.match(/```markdown\n([\s\S]*?)```/)?.[1];
+		expect(example).toBeDefined();
+		const parsed = parseCharter(example ?? "", ["software"]);
+		expect(
+			parsed.slots
+				.filter(({ kind }) => kind === "module")
+				.map(({ key }) => key),
+		).toEqual([
+			"software.grants",
+			"software.merge-grant",
+			"software.plans",
+			"software.attribution",
+		]);
+		expect(
+			parsed.slots.find(({ key }) => key === "core.done")?.value,
+		).toContain("Tests, typecheck and lint.");
+	});
+
+	test("guide narrows software grants to the cycle's outward actions", () => {
+		expect(charter).toContain(
+			"Standing permissions for pushing branches, opening pull requests, and writing on the code host.",
+		);
+		expect(charter).toContain(
+			"Grants for anything else stay in Way of working prose",
+		);
+	});
+
+	test("guide preserves ordinary prose agreements during migration", () => {
+		expect(charter).toContain(
+			"Existing prose remains authoritative until renegotiated",
+		);
+		expect(charter).toContain("There is no `Grants:` alias");
+		expect(software.body).toContain(
+			"Until the charter is renegotiated, use its existing agreed prose for these values.",
+		);
+	});
+
+	test("None is a value and missing slots or metadata grant no permissions", () => {
+		expect(charter).toContain("`None` is a value, including `None.` in prose");
+		expect(charter).toContain(
+			"Neither missing slots nor module metadata grant permissions.",
+		);
+		expect(software.body).toContain("An absent or empty slot grants nothing");
+		expect(software.body).toContain(
+			"`None` is an agreed value, not an absent slot.",
+		);
+	});
+
+	test("core contains exactly 3,398 words", () => {
+		expect(words(readFileSync(join(prompts, "core.md"), "utf8"))).toBe(3398);
+	});
+
+	test("software references exactly its five declared named slots", () => {
+		expect(software.problems).toEqual([]);
+		const referenced = [
+			...new Set(
+				[
+					...(software.body ?? "").matchAll(
+						/\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*\b/g,
+					),
+				].map(([key]) => key),
+			),
+		].sort();
+		const declared = Object.keys(
+			software.metadata?.["charter-keys"] ?? {},
+		).sort();
+		expect(declared).toEqual([
+			"core.done",
+			"software.attribution",
+			"software.grants",
+			"software.merge-grant",
+			"software.plans",
+		]);
+		expect(referenced).toEqual(declared);
+	});
+});
+
+describe("charter guide recognition and duplicate headings", () => {
+	const charter = GUIDES.find(({ name }) => name === "charter")?.text ?? "";
+
+	test("repeated core headings produce a warning", () => {
+		expect(charter).toContain("Repeated core headings produce a warning.");
+	});
+
+	test("recognizes dotted slots only in core or known module namespaces", () => {
+		expect(charter).toContain(
+			"A dotted bullet is a slot only when its namespace is `core` or a known module's name or slot; any other dotted bullet is ordinary prose.",
+		);
 	});
 });

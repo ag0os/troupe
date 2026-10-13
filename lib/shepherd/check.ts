@@ -262,7 +262,7 @@ export function checkWorkspace(
 				"info",
 				"current-over-mark",
 				current,
-				`${count} words, past the ${config.marks.current}-word review mark: check for closed items and duplicated facts; move live warnings up, never drop them; standing how-tos go to a doc with an action-named index line; standing rules to the charter; keep what is costly on first misuse`,
+				`${count} words, past the ${config.marks.current}-word review mark: check for closed items and duplicated facts; move live warnings up, never drop them; standing how-tos go to a doc with an action-named index line; standing values to the charter, rules to a module; keep what is costly on first misuse`,
 			);
 		}
 		if (checkpoint.status === "none") {

@@ -46,7 +46,7 @@ On new interactive launches the header has a `Session name` line; resumes emit n
 
 Interactive Codex launches also have a `Codex home` line.
 
-The charter comes after every module because it is the contract: where it and a module disagree about how the workspace works, the charter wins. Modules stay authoritative about what a capability can do and about their safety rules.
+The charter comes after every module to supply this workspace's agreed values in their declared slots. Modules stay authoritative about what a capability can do and about their safety rules.
 
 An enclosing workspace lets a group of workspaces share one layer: put them in subdirectories of a workspace whose `integrations/` holds the shared modules, and each one inherits them, with no copies or links. The extension also adds that workspace's real `.shepherd/` path as a readable directory, so the modules can point at reference files there. A local module that resolves to the same file as an inherited one is skipped.
 
@@ -68,9 +68,9 @@ Two modules load into every Shepherd and check their own availability at run tim
 
 ## Init and the charter
 
-A fresh workspace is deliberately generic. On first launch Shepherd runs an init conversation with the user to agree the mission, Shepherd's role, what lives where and what is confidential, the way of working, the cadence, what done means, the toolset (for example gh and project tooling), and any structure the workspace needs, then records the agreement as `.shepherd/charter.md`. The charter loads into every session and is the contract; renegotiate it rather than drift from it. A workspace can be any shape: one project, several, a coordinator of coordinators, internet chores.
+A fresh workspace is deliberately generic. On first launch Shepherd runs an init conversation with the user to agree the mission, Shepherd's role, what lives where and what is confidential, the way of working, the cadence, what done means, the toolset (for example gh and project tooling), and any structure the workspace needs, then records the agreement as `.shepherd/charter.md`. The charter loads into every session and supplies agreed values; renegotiate those values rather than drift from them. A workspace can be any shape: one project, several, a coordinator of coordinators, internet chores.
 
-The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. Core names the topics; the questions each one settles and the charter's skeleton are in the `charter` guide, which Shepherd reads with `shepherd tool guide charter` before it starts the conversation. The charter opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing rules agreed later go into the charter, not into `CURRENT.md`. A charter agreed before this skeleton stands as it is.
+The charter has one section per init topic: Mission, Role, What lives where, Way of working, Cadence, Done, Toolset and Structure. Core names the topics; the questions each one settles and the charter's skeleton are in the `charter` guide, which Shepherd reads with `shepherd tool guide charter` before it starts the conversation. The charter opens with `Agreed YYYY-MM-DD` once the user confirms it. The Toolset names tools, never models or accounts, and standing values agreed later go into the charter and rules into core or a module, never into `CURRENT.md`. A charter agreed before this skeleton stands as it is.
 
 ## Self evolution
 
@@ -113,7 +113,7 @@ Recognition has a reserved signature: line one must be exactly `---`, and the fi
 | `provides` | Optional single slot identifier; providers load only when selected. |
 | `default` | Optional boolean, false by default. May appear only with `provides`. |
 | `budget` | Required positive safe integer in prompt words. Overruns warn without truncating or preventing loading. |
-| `charter-keys` | Optional mapping, empty by default, of owned namespaced keys to `required` or `optional`. Metadata is validated here; charter values are not parsed or enforced yet. |
+| `charter-keys` | Optional mapping, empty by default, of owned namespaced keys to `required` or `optional`. Metadata is validated here; charter values are parsed for `shepherd tool check` findings and never enforced as grants. |
 
 Identifiers use lowercase alphanumeric segments separated by single hyphens: `[a-z0-9]+(?:-[a-z0-9]+)*`. Module names may start with digits, such as `00-flock`. Slots, selectable provider names, and `charter-declares` values use letters and hyphens only to fit the existing `Modules:` tokenizer. Charter keys have the form `namespace.key`, with both components starting with a letter. A module may declare its own namespace, its provided slot's namespace, and the eight existing core keys corresponding to the charter headings. Numeric-prefixed module names cannot own a same-name key namespace.
 
@@ -139,7 +139,7 @@ Two explicit providers for a slot, ambiguous explicit names, or multiple eligibl
 
 Invalid closed workspace metadata is reported and discarded in full. Its stripped body loads ungated, without provider identity, defaults, predicates, or charter declarations. Clearly intended but unclosed metadata is reported and skipped because its body cannot be safely separated. Invalid built-in metadata is a repository defect and composition throws.
 
-Schema and selection problems, including unknown tokens, append `- Module problems: <file>: <code>: <reason>; ...` to the session header. With no problems this line is absent. The Shepherd extension writes the same details to stderr once during launch, print, and preview. Routine costs produce no launch notice. `shepherd tool check` reports schema and name errors, selection errors, unknown-token warnings, budgets, and legacy metadata information. Built-in finding paths are always literal `builtin/<name>.md`. Module checking uses launch's nearest enclosing lookup, including an enclosing workspace outside the checked tree.
+Schema and selection problems, including unknown tokens, append `- Module problems: <file>: <code>: <reason>; ...` to the session header. With no problems this line is absent. The Shepherd extension writes the same details to stderr once during launch, print, and preview. Routine costs produce no launch notice. `shepherd tool check` reports schema and name errors, selection errors, unknown-token warnings, budgets, and legacy metadata information. Charter findings use `charter-slot-duplicate`, `charter-key-undeclared`, `charter-key-required` and `charter-module-restatement`. Built-in finding paths are always literal `builtin/<name>.md`. Module checking uses launch's nearest enclosing lookup, including an enclosing workspace outside the checked tree.
 
 Costs use whitespace-separated body words, excluding recognized metadata. Inactive annotated candidates still get budget checks; built-ins get over-budget warnings without routine cost information. Shared totals count all published local bodies when a workspace has descendants, including degraded bodies, because publication is separate from effective selection. Unclosed bodies have unavailable costs and an explicitly incomplete subtotal. The opening prompt count includes selected and degraded fragments and the final header. If another composition failure forces a fallback estimate, readable local modules contribute stripped body words and unclosed metadata contributes none.
 

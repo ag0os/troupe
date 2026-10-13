@@ -682,7 +682,7 @@ describe("staged workspace findings", () => {
 			if (count === 601) {
 				expect(matches[0]).toMatchObject({ level: "info", file: "CURRENT.md" });
 				expect(matches[0]?.message).toContain(
-					"standing how-tos go to a doc with an action-named index line; standing rules to the charter; keep what is costly on first misuse",
+					"standing how-tos go to a doc with an action-named index line; standing values to the charter, rules to a module; keep what is costly on first misuse",
 				);
 			}
 		}
