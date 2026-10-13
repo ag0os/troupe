@@ -1,5 +1,6 @@
 import { join, relative, sep } from "node:path";
 import type { Finding } from "./check";
+import { charterFindings } from "./check-charter";
 import type { Config } from "./config";
 import {
 	type ModuleCatalog,
@@ -101,6 +102,7 @@ export function checkModules(
 ): Finding[] {
 	const catalog = moduleCatalog(workspace.dir, undefined, true);
 	const findings = moduleFindings(catalog, workspace.state);
+	findings.push(...charterFindings(catalog, workspace.state));
 	const locals = catalog.candidates.filter((m) => m.layer === "local");
 	const count = locals.reduce(
 		(total, m) => total + (m.body === undefined ? 0 : words(m.body)),

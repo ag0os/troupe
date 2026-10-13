@@ -1,20 +1,12 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument } from "yaml";
+import { CORE_SLOTS } from "./charter-slots";
 
 export const IDENTIFIER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const selectable = (value: string) =>
 	IDENTIFIER.test(value) && /^[a-z-]+$/.test(value);
 const keyComponent = (value: string) =>
 	IDENTIFIER.test(value) && /^[a-z]/.test(value);
-const CORE_KEYS = new Set([
-	"mission",
-	"role",
-	"what-lives-where",
-	"way-of-working",
-	"cadence",
-	"done",
-	"toolset",
-	"structure",
-]);
+const CORE_KEYS = new Set(Object.values(CORE_SLOTS).map((key) => key.slice(5)));
 const FIELDS = new Set([
 	"name",
 	"type",

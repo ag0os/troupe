@@ -45,7 +45,10 @@ function findings(files: Record<string, string>, marks = {}) {
 		new Date("2026-10-05"),
 		t.root,
 	).filter(
-		(f) => f.code.startsWith("module-") || f.code === "shared-over-mark",
+		(f) =>
+			f.code.startsWith("module-") ||
+			f.code.startsWith("charter-") ||
+			f.code === "shared-over-mark",
 	);
 }
 test("cost equality, one word over and inactive candidates exclude metadata", () => {
@@ -212,4 +215,369 @@ test("unclosed published subtotal within the mark has no shared-over-mark warnin
 	);
 	expect(result.filter((f) => f.code === "module-schema")).toHaveLength(1);
 	expect(result.some((f) => f.code === "shared-over-mark")).toBe(false);
+});
+
+test("charter declarations use selected modules, required wins and None is a value", () => {
+	const result = findings({
+		"root/.shepherd/charter.md":
+			"Modules: craft\n## Done\n\n- craft.value: None\n- craft.blank:   \n- inactive.value: unused\n- core.done: None\n",
+		"root/.shepherd/integrations/reader.md": doc(
+			"reader",
+			"rules",
+			"provides: craft\ndefault: true\ncharter-keys:\n  craft.value: required\n  craft.blank: required\n  core.done: required\n",
+		),
+		"root/.shepherd/integrations/other.md": doc(
+			"other",
+			"rules",
+			"charter-keys:\n  core.done: optional\n",
+		),
+		"root/.shepherd/integrations/inactive.md": doc(
+			"inactive",
+			"rules",
+			"applies-when:\n  has-children: true\ncharter-keys:\n  inactive.value: required\n",
+		),
+	});
+	expect(
+		result
+			.filter((f) => f.code === "charter-key-required")
+			.map((f) => f.message),
+	).toEqual([
+		'slot "core.done" required by reader is missing or empty',
+		'slot "craft.blank" required by reader is missing or empty',
+	]);
+	expect(result).toContainEqual(
+		expect.objectContaining({
+			code: "charter-key-required",
+			level: "warn",
+			line: 5,
+		}),
+	);
+	expect(result).toContainEqual(
+		expect.objectContaining({
+			code: "charter-key-undeclared",
+			line: 6,
+			message: 'slot "inactive.value" is not declared by the loaded modules',
+		}),
+	);
+	expect(result).toContainEqual(
+		expect.objectContaining({
+			code: "charter-key-undeclared",
+			line: 7,
+			message:
+				'slot "core.done" uses the heading form, not a module-key bullet',
+		}),
+	);
+});
+
+test("duplicate module slots error while repeated core headings warn", () => {
+	const result = findings({
+		"root/.shepherd/charter.md":
+			"## Done\nNone\n## DONE\nNone\n- software.extra: one\n* **software.extra:** two\n",
+	});
+	expect(result.filter((f) => f.code === "charter-slot-duplicate")).toEqual([
+		{
+			code: "charter-slot-duplicate",
+			level: "warn",
+			file: "charter.md",
+			line: 3,
+			message: 'slot "core.done" repeats line 1',
+		},
+		{
+			code: "charter-slot-duplicate",
+			level: "error",
+			file: "charter.md",
+			line: 6,
+			message: 'slot "software.extra" repeats line 5',
+		},
+	]);
+});
+
+test("incomplete declaration resolution suppresses undeclared and required only", () => {
+	for (const extra of ["unknown: true\n", "provides: craft\ndefault: true\n"]) {
+		const result = findings({
+			"root/.shepherd/charter.md":
+				"Modules: craft\n- software.extra: one\n- software.extra: two\n",
+			"root/.shepherd/integrations/a.md": doc("a", "rules", extra),
+			"root/.shepherd/integrations/b.md": doc(
+				"b",
+				"rules",
+				"provides: craft\ndefault: true\ncharter-keys:\n  craft.value: required\n",
+			),
+		});
+		expect(
+			result.filter((f) =>
+				["charter-key-required", "charter-key-undeclared"].includes(f.code),
+			),
+		).toEqual([]);
+		expect(result.some((f) => f.code === "charter-slot-duplicate")).toBe(true);
+	}
+	const unresolved = findings({
+		"root/.shepherd/charter.md": "Modules: a\n- software.extra: one\n",
+		"root/.shepherd/integrations/a.md": doc(
+			"a",
+			"rules",
+			"provides: craft\napplies-when:\n  has-children: true\n",
+		),
+	});
+	expect(unresolved.some((f) => f.code === "module-slot-unresolved")).toBe(
+		true,
+	);
+	expect(unresolved.some((f) => f.code === "charter-key-undeclared")).toBe(
+		false,
+	);
+});
+
+const repeated =
+	"Keep every synthetic project decision visible to the team and record the exact reason for each change before proceeding with the next task.";
+test("restatements normalize whole blocks and report first body with original source line", () => {
+	const result = findings({
+		"root/.shepherd/charter.md": `## Notes\n- ${repeated}\n\n${repeated}\n`,
+		"root/.shepherd/integrations/a.md": doc(
+			"a",
+			`# Rules\n\n* ${repeated}\n\n${repeated}\n`,
+		),
+		"root/.shepherd/integrations/b.md": doc("b", repeated),
+	});
+	expect(result.filter((f) => f.code === "charter-module-restatement")).toEqual(
+		[2, 4].map((line) => ({
+			code: "charter-module-restatement",
+			level: "info",
+			file: "charter.md",
+			line,
+			message:
+				"possible repeated rule: integrations/a.md:9; review ownership before removing text",
+		})),
+	);
+});
+
+test("restatement excludes short, fenced, quoted, slot, paraphrase and unmatched longer blocks", () => {
+	const result = findings({
+		"root/.shepherd/charter.md": `Short text.\n\n\`\`\`\n${repeated}\n\`\`\`\n\n> ${repeated}\n\n- a.value: ${repeated}\n  ${repeated}\n\nDifferent words express a similar idea about documenting all project decisions before continuing to work on the next item in the queue.\n\n${repeated} Additional unmatched text.\n`,
+		"root/.shepherd/integrations/a.md": doc("a", `Short text.\n${repeated}\n`),
+	});
+	expect(result.filter((f) => f.code === "charter-module-restatement")).toEqual(
+		[],
+	);
+});
+
+test("restatement order includes core and selected built-ins before inherited and local bodies", async () => {
+	const { readFileSync } = await import("node:fs");
+	const core = readFileSync(
+		join(import.meta.dir, "../../system-prompts/shepherd/core.md"),
+		"utf8",
+	);
+	const block = core
+		.split(/\r?\n\s*\r?\n/)
+		.find((p) => !p.startsWith("#") && words(p) >= 20);
+	if (!block) throw new Error("no core prose block");
+	const coreResult = findings({
+		"root/.shepherd/charter.md": block,
+		"root/.shepherd/integrations/a.md": doc("a", block),
+	});
+	expect(
+		coreResult.find((f) => f.code === "charter-module-restatement")?.message,
+	).toContain(
+		`possible repeated rule: core:${core.slice(0, core.indexOf(block)).split("\n").length};`,
+	);
+	const software = builtInModules().find((m) => m.name === "software.md");
+	const softwareBlock = software?.body
+		?.split(/\r?\n\s*\r?\n/)
+		.find((p) => !p.startsWith("#") && words(p) >= 20);
+	if (!softwareBlock || !software?.body)
+		throw new Error("no software prose block");
+	const files = {
+		"root/.shepherd/charter.md": `Modules: software\n\n${softwareBlock}\n`,
+		".shepherd/integrations/a.md": doc("a", softwareBlock),
+		"root/.shepherd/integrations/b.md": doc("b", softwareBlock),
+	};
+	expect(
+		findings(files).find((f) => f.code === "charter-module-restatement")
+			?.message,
+	).toContain(
+		`possible repeated rule: builtin/software.md:${software.bodyLine + software.body.slice(0, software.body.indexOf(softwareBlock)).split("\n").length - 1};`,
+	);
+	const inactive = findings({
+		...files,
+		"root/.shepherd/charter.md": softwareBlock,
+	});
+	expect(
+		inactive.find((f) => f.code === "charter-module-restatement")?.message,
+	).toContain("../../.shepherd/integrations/a.md:");
+});
+
+test("unknown tokens keep known declarations and absent required values have no invented line", () => {
+	const result = findings({
+		"root/.shepherd/charter.md": "Modules: unknown\n- reader.extra: unused\n",
+		"root/.shepherd/integrations/reader.md": doc(
+			"reader",
+			"rules",
+			"charter-keys:\n  reader.value: required\n  reader.optional: optional\n",
+		),
+	});
+	expect(result.find((f) => f.code === "charter-key-required")).toEqual({
+		code: "charter-key-required",
+		level: "warn",
+		file: "charter.md",
+		message: 'slot "reader.value" required by reader is missing or empty',
+	});
+	expect(
+		result.filter((f) => f.code === "charter-key-undeclared"),
+	).toHaveLength(1);
+});
+
+test("restatement normalization preserves case and punctuation with a twenty-word threshold", () => {
+	const twenty =
+		"one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+	const body = `# Rules\r\n\r\n1. one two three four five\r\n   six seven eight nine ten\r\n* eleven twelve thirteen fourteen fifteen\r\n   sixteen seventeen eighteen nineteen twenty\r\n`;
+	const result = findings({
+		"root/.shepherd/charter.md": `${twenty}\n\n${twenty.toUpperCase()}\n\n${twenty}.\n\n${twenty.split(" ").slice(0, 19).join(" ")}\n`,
+		"root/.shepherd/integrations/a.md": doc("a", body),
+	});
+	expect(result.filter((f) => f.code === "charter-module-restatement")).toEqual(
+		[
+			{
+				code: "charter-module-restatement",
+				level: "info",
+				file: "charter.md",
+				line: 1,
+				message:
+					"possible repeated rule: integrations/a.md:9; review ownership before removing text",
+			},
+		],
+	);
+});
+
+test("metadata failures still allow independent duplicates and degraded body restatements", () => {
+	const result = findings({
+		"root/.shepherd/charter.md": `- software.extra: one\n- software.extra: two\n\n${repeated}\n`,
+		"root/.shepherd/integrations/bad.md": doc(
+			"bad",
+			repeated,
+			"unknown: true\n",
+		),
+	});
+	expect(
+		result.filter((f) => f.code === "charter-slot-duplicate"),
+	).toHaveLength(1);
+	expect(
+		result.filter((f) => f.code === "charter-module-restatement"),
+	).toHaveLength(1);
+	expect(result.filter((f) => f.code === "charter-key-undeclared")).toEqual([]);
+});
+
+test("a list item's unindented continuation belongs to the entire match", () => {
+	const result = findings({
+		"root/.shepherd/charter.md": `- ${repeated}\nAdditional unmatched continuation.\n`,
+		"root/.shepherd/integrations/a.md": doc("a", repeated),
+	});
+	expect(result.filter((f) => f.code === "charter-module-restatement")).toEqual(
+		[],
+	);
+});
+
+test("file bullets cause no charter findings even when a filename repeats", () => {
+	const result = findings({
+		"root/.shepherd/charter.md":
+			"## Structure\n- package.json: scripts\n- biome.json: formatting\n- package.json: more scripts\n- index.ts: entry\n",
+	});
+	expect(result.filter((f) => f.code.startsWith("charter-"))).toEqual([]);
+});
+
+test("recognition uses valid candidate names and provides even when inactive", () => {
+	const result = findings({
+		"root/.shepherd/charter.md":
+			"- inactive.value: unused\n- craft.value: unused\n- invalid.value: prose\n- invalid.value: prose again\n- legacy.value: prose\n",
+		"root/.shepherd/integrations/inactive.md": doc(
+			"inactive",
+			"rules",
+			"provides: craft\napplies-when:\n  has-children: true\ncharter-keys:\n  craft.value: optional\n",
+		),
+		"root/.shepherd/integrations/invalid.md": doc(
+			"invalid",
+			"rules",
+			"unknown: true\n",
+		),
+		"root/.shepherd/integrations/legacy.md": "rules",
+	});
+	expect(result.some((f) => f.code === "charter-slot-duplicate")).toBe(false);
+	const valid = findings({
+		"root/.shepherd/charter.md":
+			"- inactive.value: unused\n- craft.value: unused\n",
+		"root/.shepherd/integrations/inactive.md": doc(
+			"inactive",
+			"rules",
+			"provides: craft\napplies-when:\n  has-children: true\ncharter-keys:\n  craft.value: optional\n",
+		),
+	});
+	expect(
+		valid.filter((f) => f.code === "charter-key-undeclared").map((f) => f.line),
+	).toEqual([1, 2]);
+});
+
+test("core bullets warn without duplicates and unknown core keys use the ordinary message", () => {
+	const result = findings({
+		"root/.shepherd/charter.md":
+			"- core.done: None\n- core.done: None\n- core.unknown: None\n- core.unknown: None\n",
+	});
+	expect(result.filter((f) => f.code.startsWith("charter-"))).toEqual(
+		[1, 2, 3, 4].map((line) => ({
+			code: "charter-key-undeclared",
+			level: "warn",
+			file: "charter.md",
+			line,
+			message:
+				line <= 2
+					? 'slot "core.done" uses the heading form, not a module-key bullet'
+					: 'slot "core.unknown" is not declared by the loaded modules',
+		})),
+	);
+});
+
+test("restatements match entire words and preserve the earliest valid source line", () => {
+	const phrase =
+		"open the issue and keep every synthetic project decision visible to the team while recording the exact reason for each change";
+	const result = findings({
+		"root/.shepherd/charter.md": phrase,
+		"root/.shepherd/integrations/a.md": doc(
+			"a",
+			`Re${phrase}\n\n${phrase}d\n\n${phrase}\n`,
+		),
+	});
+	expect(
+		result.find((f) => f.code === "charter-module-restatement")?.message,
+	).toBe(
+		"possible repeated rule: integrations/a.md:11; review ownership before removing text",
+	);
+	const unmatched = findings({
+		"root/.shepherd/charter.md": phrase,
+		"root/.shepherd/integrations/a.md": doc("a", `Re${phrase}\n\n${phrase}d\n`),
+	});
+	expect(unmatched.some((f) => f.code === "charter-module-restatement")).toBe(
+		false,
+	);
+});
+
+test("no charter does not warn about required keys but an empty charter does", async () => {
+	const { charterFindings } = await import("./check-charter");
+	const { parseModule } = await import("./module-format");
+	const raw = doc(
+		"reader",
+		"rules",
+		"charter-keys:\n  reader.value: required\n",
+	);
+	const candidate = {
+		...parseModule(raw, "reader.md"),
+		raw,
+		name: "reader.md",
+		source: "/workspace/.shepherd/integrations/reader.md",
+		path: "/workspace/.shepherd/integrations/reader.md",
+		layer: "local" as const,
+	};
+	const catalog = { candidates: [candidate], children: [], published: false };
+	expect(charterFindings(catalog, "/workspace/.shepherd")).toEqual([]);
+	expect(
+		charterFindings({ ...catalog, charter: "" }, "/workspace/.shepherd").filter(
+			(f) => f.code === "charter-key-required",
+		),
+	).toHaveLength(1);
 });

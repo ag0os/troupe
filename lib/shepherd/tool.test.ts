@@ -1319,3 +1319,63 @@ test("JSON check sees enclosing schema and duplicates outside checked workspaces
 		}),
 	);
 });
+
+test("charter finding JSON pins severities and lines, info visibility and error-only exit", async () => {
+	const { cwd, env } = fixture();
+	const sentence =
+		"Keep every synthetic project decision visible to the team and record the exact reason for each change before proceeding with the next task.";
+	mkdirSync(join(cwd, ".shepherd/integrations"), { recursive: true });
+	writeFileSync(
+		join(cwd, ".shepherd/integrations/reader.md"),
+		`---\nname: reader\ntype: domain\ndescription: rules\nbudget: 100\ncharter-keys:\n  reader.value: required\n---\n${sentence}\n`,
+	);
+	const charter = `## Done\nNone\n## Done\nNone\n- reader.extra: value\n- reader.value:\n\n${sentence}\n`;
+	writeFileSync(join(cwd, ".shepherd/charter.md"), charter);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(0);
+	const report = JSON.parse(output.text);
+	for (const [code, level, line] of [
+		["charter-slot-duplicate", "warn", 3],
+		["charter-key-undeclared", "warn", 5],
+		["charter-key-required", "warn", 6],
+		["charter-module-restatement", "info", 8],
+	]) {
+		expect(report.workspaces[0].findings).toContainEqual(
+			expect.objectContaining({ code, level, line, file: "charter.md" }),
+		);
+	}
+	expect((await runTool(["check"], {}, env)).text).not.toContain(
+		"possible repeated rule",
+	);
+	expect((await runTool(["check"], { all: true }, env)).text).toContain(
+		"possible repeated rule: integrations/reader.md:9",
+	);
+	writeFileSync(
+		join(cwd, ".shepherd/charter.md"),
+		`${charter}- reader.extra: again\n`,
+	);
+	const error = await runTool(["check"], { json: true }, env);
+	expect(error.code).toBe(1);
+	expect(JSON.parse(error.text).workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "charter-slot-duplicate",
+			level: "error",
+			line: 9,
+		}),
+	);
+});
+
+test("repeated filename bullets do not fail tool check", async () => {
+	const { cwd, env } = fixture();
+	writeFileSync(
+		join(cwd, ".shepherd/charter.md"),
+		"## Structure\n- package.json: scripts\n- biome.json: formatting\n- package.json: more scripts\n",
+	);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(0);
+	expect(
+		JSON.parse(output.text).workspaces[0].findings.filter(
+			(f: { code: string }) => f.code.startsWith("charter-"),
+		),
+	).toEqual([]);
+});
