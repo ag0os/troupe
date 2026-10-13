@@ -10,6 +10,7 @@ test("recognition preserves legacy thematic breaks and exact LF/CRLF body bytes"
 		"plain\n",
 		"---\n# Title\n",
 		"---\n# Title\n---\nbody\n",
+		"---\n# Title\nname: x\n---\nbody\n",
 		"---\nprose\n---\nbody\n",
 		" ---\nname: sample\n",
 		"---\nunknown: value\n---\nbody",
@@ -28,7 +29,7 @@ test("recognition preserves legacy thematic breaks and exact LF/CRLF body bytes"
 		);
 	}
 	expect(
-		parseModule("---\n\n# comment\nname: sample\nbody", "sample.md"),
+		parseModule("---\n\nname: sample\n# comment\nbody", "sample.md"),
 	).toMatchObject({
 		kind: "malformed",
 		body: undefined,
@@ -108,9 +109,9 @@ test("name mismatch is separate and symlink filename is authoritative", () => {
 	]);
 });
 
-test("reserved signature recognizes colon without space and ending delimiter at EOF", () => {
+test("reserved signature requires whitespace or end of line after colon", () => {
 	expect(parseModule("---\nname:sample\n---\nbody", "sample.md")).toMatchObject(
-		{ kind: "annotated", body: "body", problems: [{ code: "module-schema" }] },
+		{ kind: "legacy", body: "---\nname:sample\n---\nbody", problems: [] },
 	);
 	expect(parseModule(`---\n${fields}---`, "sample.md").body).toBe("");
 });
@@ -147,4 +148,20 @@ test("schema problems are ordered by source line including owned keys", () => {
 		"sample.md",
 	);
 	expect(result.problems.map((p) => p.line)).toEqual([7, 8]);
+});
+
+test("closing delimiter must occupy an exact complete line", () => {
+	const raw = `---\n${fields} ---\nbody`;
+	expect(parseModule(raw, "sample.md")).toMatchObject({
+		kind: "malformed",
+		body: undefined,
+	});
+});
+test("comments after the first field remain valid YAML", () => {
+	expect(
+		parseModule(
+			annotated(fields.replace("type:", "# comment\ntype:")),
+			"sample.md",
+		).problems,
+	).toEqual([]);
 });

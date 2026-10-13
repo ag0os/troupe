@@ -188,3 +188,18 @@ test("deduped local copies do not duplicate inherited degradation problems", asy
 		}),
 	);
 });
+
+test("ambiguous provider name lists the same-named nonprovider too", () => {
+	const r = launch(
+		{
+			"parent/.shepherd/integrations/alt.md": moduleText("alt"),
+			"parent/child/.shepherd/integrations/alt.md": provider("alt"),
+		},
+		"alt",
+	);
+	const conflict = r.problems.find((p) => p.code === "module-slot-conflict");
+	expect(conflict?.message).toContain("explicit provider name is ambiguous");
+	for (const m of r.catalog.candidates.filter((m) => m.name === "alt.md"))
+		expect(conflict?.message).toContain(m.source);
+	expect(r.selected.some((m) => m.metadata?.provides === "craft")).toBe(false);
+});

@@ -102,7 +102,7 @@ charter-keys: {}
 The prompt body starts here.
 ```
 
-Recognition has a reserved signature: line one must be exactly `---`, and the first nonblank, noncomment line after it must start at column zero with one of the eight field names below followed by `:`. A comment begins with optional horizontal whitespace and `#`. Both LF and CRLF work. A matching opener with a later complete `---` line is annotated; the first such line closes the metadata. Everything through that delimiter's line ending is stripped, preserving every subsequent body byte, including blank lines and trailing whitespace. With no closing delimiter, a matching opener is malformed and the file is skipped. Any other opener is a legacy thematic break, even when a later `---` exists. For example, `---` followed by `# Title` or ordinary prose loads whole. Reserve the field signature for metadata rather than opening legacy prose with it.
+Recognition has a reserved signature: line one must be exactly `---`, and the first nonblank line after it must start at column zero with one of the eight field names below followed by `:` and whitespace or end of line. A `#` line before the first field makes the file legacy; comments after the first field remain valid YAML comments. Both LF and CRLF work. A matching opener with a later complete `---` line is annotated; the first such line closes the metadata. Everything through that delimiter's line ending is stripped, preserving every subsequent body byte, including blank lines and trailing whitespace. With no closing delimiter, a matching opener is malformed and the file is skipped. Any other opener is a legacy thematic break, even when a later `---` exists. For example, `---` followed by `# Title` or ordinary prose loads whole. Reserve the field signature for metadata rather than opening legacy prose with it.
 
 | Field | Meaning |
 |-------|---------|
@@ -136,6 +136,8 @@ All valid candidates are collected before predicates and selection, including in
 Two explicit providers for a slot, ambiguous explicit names, or multiple eligible defaults for a slot request are conflicts. A requested slot with no eligible default, or an explicitly requested ineligible provider, is unresolved. No provider loads for an affected slot, and independently resolved slots continue loading. Unknown tokens warn and remain unselected. There is no implicit local winner over inherited alternatives. Distinct eligible nonproviders with the same name both load. Realpath deduplication removes local copies of inherited files before selection. Survivors keep their original layer and filename order, and the header lists the filenames that actually loaded.
 
 ### Failure policy and accounting
+
+A dotted bullet is a slot only when it is a `core.*` key or when a candidate module with valid metadata declares that exact key in `charter-keys`; candidates include every module the launcher sees, active or inactive, including the enclosing workspace's modules, and every other dotted bullet is ordinary prose.
 
 Invalid closed workspace metadata is reported and discarded in full. Its stripped body loads ungated, without provider identity, defaults, predicates, or charter declarations. Clearly intended but unclosed metadata is reported and skipped because its body cannot be safely separated. Invalid built-in metadata is a repository defect and composition throws.
 

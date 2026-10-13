@@ -1329,7 +1329,7 @@ test("charter finding JSON pins severities and lines, info visibility and error-
 		join(cwd, ".shepherd/integrations/reader.md"),
 		`---\nname: reader\ntype: domain\ndescription: rules\nbudget: 100\ncharter-keys:\n  reader.value: required\n---\n${sentence}\n`,
 	);
-	const charter = `## Done\nNone\n## Done\nNone\n- reader.extra: value\n- reader.value:\n\n${sentence}\n`;
+	const charter = `## Done\nNone\n## Done\nNone\n- software.grants: value\n- reader.value:\n\n${sentence}\n`;
 	writeFileSync(join(cwd, ".shepherd/charter.md"), charter);
 	const output = await runTool(["check"], { json: true }, env);
 	expect(output.code).toBe(0);
@@ -1352,7 +1352,7 @@ test("charter finding JSON pins severities and lines, info visibility and error-
 	);
 	writeFileSync(
 		join(cwd, ".shepherd/charter.md"),
-		`${charter}- reader.extra: again\n`,
+		`${charter}- software.grants: again\n`,
 	);
 	const error = await runTool(["check"], { json: true }, env);
 	expect(error.code).toBe(1);

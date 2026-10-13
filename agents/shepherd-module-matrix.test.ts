@@ -268,9 +268,9 @@ function afterDelimiterBlock(source: string): string | undefined {
 				? source.slice(end + 1)
 				: undefined;
 		}
-		if (!signature && line.trim() && !line.trimStart().startsWith("#")) {
+		if (!signature && line.trim()) {
 			if (
-				!/^(name|type|description|applies-when|provides|default|budget|charter-keys):( |$)/.test(
+				!/^(name|type|description|applies-when|provides|default|budget|charter-keys):(?:\s|$)/.test(
 					line,
 				)
 			) {
@@ -296,4 +296,15 @@ describe("original built-in body bytes", () => {
 			expect(Buffer.from(body ?? "")).toEqual(pinned);
 		});
 	}
+});
+
+test("independent instrument preserves heading openers and requires colon whitespace", () => {
+	for (const source of [
+		"---\n# Title\nname: x\n---\nbody",
+		"---\nname:sample\n---\nbody",
+	])
+		expect(afterDelimiterBlock(source)).toBeUndefined();
+	expect(
+		afterDelimiterBlock("---\n\nname:\tsample\n# comment\n---\nbody"),
+	).toBe("body");
 });

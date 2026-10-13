@@ -4,7 +4,13 @@ import { CORE_SLOTS, parseCharter } from "./charter-slots";
 test("canonical slots preserve multiline source, indentation, blank lines and None", () => {
 	const raw =
 		"## Way of working\r\nOrdinary prose.\r\n  * **software.grants:** Push.\r\n\r\n    Continue.\r\n  Stop.\r\n- **software.plans**: None\r\n- software.empty:   \r\n";
-	const { slots } = parseCharter(raw, ["software"]);
+	const { slots } = parseCharter(raw, [
+		"software.grants",
+		"software.plans",
+		"software.empty",
+		"software.value",
+		"software.other",
+	]);
 	expect(slots.filter((s) => s.kind === "module")).toMatchObject([
 		{
 			key: "software.grants",
@@ -33,7 +39,13 @@ test("eight case-insensitive level-two headings register optional core slots and
 test("case-sensitive keys, fences, blockquotes, Grants prose and core bullets", () => {
 	const { slots, blocks } = parseCharter(
 		"```md\n- software.hidden: code\n## Done\n```\n~~~\n- software.hidden: code\n~~~\n> - software.hidden: quote\n> ## Done\n- Software.grants: uppercase\n- Grants (software module, step 1): Push branches.\n- core.done: None\n- software.grants: None.\n- software.grants:\n",
-		["software"],
+		[
+			"software.grants",
+			"software.plans",
+			"software.empty",
+			"software.value",
+			"software.other",
+		],
 	);
 	expect(slots.map((s) => [s.key, s.line])).toEqual([
 		["core.done", 12],
@@ -49,7 +61,13 @@ test("case-sensitive keys, fences, blockquotes, Grants prose and core bullets", 
 test("core headings end at unknown level-two headings and slots cannot satisfy them", () => {
 	const { slots } = parseCharter(
 		"## Done\n- core.done: None\n- software.plans: here\n  continuation\n\n## Notes\nOther\n### Mission\nOther\n",
-		["software"],
+		[
+			"software.grants",
+			"software.plans",
+			"software.empty",
+			"software.value",
+			"software.other",
+		],
 	);
 	expect(slots[0]).toMatchObject({ key: "core.done", kind: "core", line: 1 });
 	expect(slots[0]?.value.trim()).toBe("");
@@ -70,7 +88,13 @@ test("complete list items retain nested lists and headings require separated clo
 test("unrecognized dotted bullets remain core prose and restatement blocks", () => {
 	const raw =
 		"## Structure\n- package.json: scripts\n- biome.json: formatting\n- package.json: more scripts\n- index.ts: entry\n";
-	const parsed = parseCharter(raw, ["software"]);
+	const parsed = parseCharter(raw, [
+		"software.grants",
+		"software.plans",
+		"software.empty",
+		"software.value",
+		"software.other",
+	]);
 	expect(parsed.slots).toHaveLength(1);
 	expect(parsed.slots[0]?.value).toBe(raw.slice("## Structure\n".length));
 	expect(parsed.blocks.map((b) => b.source)).toEqual([
@@ -166,8 +190,30 @@ test.each([
 ] as const)(
 	"fence and indentation table: %s",
 	(_, raw, expectedLines, expectedValues) => {
-		const parsed = parseCharter(raw, ["software"]);
+		const parsed = parseCharter(raw, [
+			"software.grants",
+			"software.plans",
+			"software.empty",
+			"software.value",
+			"software.other",
+		]);
 		expect(parsed.slots.map((s) => s.line)).toEqual([...expectedLines]);
 		expect(parsed.slots.map((s) => s.value)).toEqual([...expectedValues]);
 	},
 );
+
+test("only exact declared keys and core keys become slots", () => {
+	const prose =
+		"- software.md: file\n- notes.md: file\n- software.grant: typo\n- package.json: file\n";
+	const parsed = parseCharter(
+		`## Structure\n${prose}- software.grants: None\n- core.unknown: None\n`,
+		["software.grants", "notes.value"],
+	);
+	expect(parsed.slots.map((s) => s.key)).toEqual([
+		"core.structure",
+		"software.grants",
+		"core.unknown",
+	]);
+	expect(parsed.slots[0]?.value).toBe(prose);
+	expect(parsed.blocks.map((b) => b.source).join("")).toBe(prose);
+});

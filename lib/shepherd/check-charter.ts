@@ -13,15 +13,12 @@ export function charterFindings(
 ): Finding[] {
 	if (catalog.charter === undefined) return [];
 	const findings: Finding[] = [];
-	const namespaces = catalog.candidates.flatMap((module) =>
+	const declaredKeys = catalog.candidates.flatMap((module) =>
 		module.metadata && !module.problems.length
-			? [
-					module.metadata.name,
-					...(module.metadata.provides ? [module.metadata.provides] : []),
-				]
+			? Object.keys(module.metadata["charter-keys"])
 			: [],
 	);
-	const { slots, blocks } = parseCharter(catalog.charter, namespaces);
+	const { slots, blocks } = parseCharter(catalog.charter, declaredKeys);
 	const add = (
 		level: Finding["level"],
 		code: string,

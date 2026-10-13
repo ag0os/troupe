@@ -29,13 +29,13 @@ const indentation = (line: string) => {
 
 export function parseCharter(
 	raw: string,
-	namespaces: Iterable<string> = [],
+	declaredKeys: Iterable<string> = [],
 ): {
 	slots: CharterSlot[];
 	blocks: CharterBlock[];
 } {
 	const lines = raw.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-	const recognized = new Set(["core", ...namespaces]);
+	const recognized = new Set(declaredKeys);
 	const text = lines.map((line) => line.replace(/\r?\n$/, ""));
 	const excluded = new Set<number>();
 	let fence: { marker: string; length: number } | undefined;
@@ -65,7 +65,7 @@ export function parseCharter(
 		const match = line.match(moduleBullet);
 		if (!match) continue;
 		const key = match[1] ?? match[2] ?? match[3] ?? "";
-		if (!recognized.has(key.split(".")[0] ?? "")) continue;
+		if (!key.startsWith("core.") && !recognized.has(key)) continue;
 		let end = index + 1;
 		while (end < lines.length) {
 			const next = text[end] ?? "";

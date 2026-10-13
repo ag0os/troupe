@@ -117,7 +117,10 @@ export function moduleProblemDetails(
 ): string {
 	return problems.map((p) => `${p.file}: ${p.code}: ${p.message}`).join("; ");
 }
-export function resolveModules(catalog: ModuleCatalog): {
+export function resolveModules(
+	catalog: ModuleCatalog,
+	displaySource: (source: string) => string = (source) => source,
+): {
 	selected: ModuleCandidate[];
 	problems: ResolutionProblem[];
 } {
@@ -182,12 +185,11 @@ export function resolveModules(catalog: ModuleCatalog): {
 				!slots.has(token) && members.some((m) => m.metadata?.name === token),
 		);
 		if (!tokens.has(slot) && !explicitTokens.length) continue;
-		const sources = members.map((m) => m.source).join(", ");
-		const conflict = (reason: string) =>
+		const conflict = (reason: string, conflicting = members) =>
 			problems.push({
 				file: "charter.md",
 				code: "module-slot-conflict",
-				message: `slot "${slot}": ${reason}; candidates: ${sources}; no provider loaded`,
+				message: `slot "${slot}": ${reason}; candidates: ${conflicting.map((m) => displaySource(m.source)).join(", ")}; no provider loaded`,
 			});
 		const unresolved = (token: string, reason: string) =>
 			problems.push({
@@ -201,7 +203,14 @@ export function resolveModules(catalog: ModuleCatalog): {
 					annotated.filter((m) => m.metadata?.name === token).length > 1,
 			)
 		) {
-			conflict("explicit provider name is ambiguous");
+			conflict(
+				"explicit provider name is ambiguous",
+				annotated.filter(
+					(m) =>
+						members.includes(m) ||
+						explicitTokens.includes(m.metadata?.name ?? ""),
+				),
+			);
 			continue;
 		}
 		if (explicitTokens.length > 1) {

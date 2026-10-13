@@ -19,7 +19,13 @@ export function moduleFindings(
 		source.startsWith("builtin/") || source === "charter.md"
 			? source
 			: relative(state, source);
+	const inheritedPaths = new Set(
+		catalog.candidates
+			.filter((m) => m.layer === "inherited")
+			.map((m) => m.path),
+	);
 	for (const module of catalog.candidates) {
+		if (module.layer === "local" && inheritedPaths.has(module.path)) continue;
 		const file = fileOf(module.source);
 		for (const problem of module.problems)
 			findings.push({ ...problem, level: "error", file });
@@ -51,7 +57,7 @@ export function moduleFindings(
 	}
 	let selected: ReturnType<typeof resolveModules>["selected"] = [];
 	try {
-		const resolved = resolveModules(catalog);
+		const resolved = resolveModules(catalog, fileOf);
 		selected = resolved.selected;
 		for (const problem of resolved.problems)
 			if (!["module-schema", "module-name"].includes(problem.code))

@@ -273,7 +273,7 @@ test("charter declarations use selected modules, required wins and None is a val
 test("duplicate module slots error while repeated core headings warn", () => {
 	const result = findings({
 		"root/.shepherd/charter.md":
-			"## Done\nNone\n## DONE\nNone\n- software.extra: one\n* **software.extra:** two\n",
+			"## Done\nNone\n## DONE\nNone\n- software.grants: one\n* **software.grants:** two\n",
 	});
 	expect(result.filter((f) => f.code === "charter-slot-duplicate")).toEqual([
 		{
@@ -288,7 +288,7 @@ test("duplicate module slots error while repeated core headings warn", () => {
 			level: "error",
 			file: "charter.md",
 			line: 6,
-			message: 'slot "software.extra" repeats line 5',
+			message: 'slot "software.grants" repeats line 5',
 		},
 	]);
 });
@@ -297,7 +297,7 @@ test("incomplete declaration resolution suppresses undeclared and required only"
 	for (const extra of ["unknown: true\n", "provides: craft\ndefault: true\n"]) {
 		const result = findings({
 			"root/.shepherd/charter.md":
-				"Modules: craft\n- software.extra: one\n- software.extra: two\n",
+				"Modules: craft\n- software.grants: one\n- software.grants: two\n",
 			"root/.shepherd/integrations/a.md": doc("a", "rules", extra),
 			"root/.shepherd/integrations/b.md": doc(
 				"b",
@@ -313,7 +313,7 @@ test("incomplete declaration resolution suppresses undeclared and required only"
 		expect(result.some((f) => f.code === "charter-slot-duplicate")).toBe(true);
 	}
 	const unresolved = findings({
-		"root/.shepherd/charter.md": "Modules: a\n- software.extra: one\n",
+		"root/.shepherd/charter.md": "Modules: a\n- software.grants: one\n",
 		"root/.shepherd/integrations/a.md": doc(
 			"a",
 			"rules",
@@ -354,7 +354,11 @@ test("restatements normalize whole blocks and report first body with original so
 test("restatement excludes short, fenced, quoted, slot, paraphrase and unmatched longer blocks", () => {
 	const result = findings({
 		"root/.shepherd/charter.md": `Short text.\n\n\`\`\`\n${repeated}\n\`\`\`\n\n> ${repeated}\n\n- a.value: ${repeated}\n  ${repeated}\n\nDifferent words express a similar idea about documenting all project decisions before continuing to work on the next item in the queue.\n\n${repeated} Additional unmatched text.\n`,
-		"root/.shepherd/integrations/a.md": doc("a", `Short text.\n${repeated}\n`),
+		"root/.shepherd/integrations/a.md": doc(
+			"a",
+			`Short text.\n${repeated}\n`,
+			"charter-keys:\n  a.value: optional\n",
+		),
 	});
 	expect(result.filter((f) => f.code === "charter-module-restatement")).toEqual(
 		[],
@@ -408,7 +412,12 @@ test("restatement order includes core and selected built-ins before inherited an
 
 test("unknown tokens keep known declarations and absent required values have no invented line", () => {
 	const result = findings({
-		"root/.shepherd/charter.md": "Modules: unknown\n- reader.extra: unused\n",
+		"root/.shepherd/charter.md": "Modules: unknown\n- inactive.value: unused\n",
+		"root/.shepherd/integrations/inactive.md": doc(
+			"inactive",
+			"rules",
+			"applies-when:\n  has-children: true\ncharter-keys:\n  inactive.value: optional\n",
+		),
 		"root/.shepherd/integrations/reader.md": doc(
 			"reader",
 			"rules",
@@ -450,7 +459,7 @@ test("restatement normalization preserves case and punctuation with a twenty-wor
 
 test("metadata failures still allow independent duplicates and degraded body restatements", () => {
 	const result = findings({
-		"root/.shepherd/charter.md": `- software.extra: one\n- software.extra: two\n\n${repeated}\n`,
+		"root/.shepherd/charter.md": `- software.grants: one\n- software.grants: two\n\n${repeated}\n`,
 		"root/.shepherd/integrations/bad.md": doc(
 			"bad",
 			repeated,
@@ -484,7 +493,7 @@ test("file bullets cause no charter findings even when a filename repeats", () =
 	expect(result.filter((f) => f.code.startsWith("charter-"))).toEqual([]);
 });
 
-test("recognition uses valid candidate names and provides even when inactive", () => {
+test("recognition uses exact valid candidate keys even when inactive", () => {
 	const result = findings({
 		"root/.shepherd/charter.md":
 			"- inactive.value: unused\n- craft.value: unused\n- invalid.value: prose\n- invalid.value: prose again\n- legacy.value: prose\n",
@@ -512,7 +521,7 @@ test("recognition uses valid candidate names and provides even when inactive", (
 	});
 	expect(
 		valid.filter((f) => f.code === "charter-key-undeclared").map((f) => f.line),
-	).toEqual([1, 2]);
+	).toEqual([2]);
 });
 
 test("core bullets warn without duplicates and unknown core keys use the ordinary message", () => {
@@ -581,4 +590,66 @@ test("no charter does not warn about required keys but an empty charter does", a
 			(f) => f.code === "charter-key-required",
 		),
 	).toHaveLength(1);
+});
+
+test("file and undeclared key bullets stay prose even in candidate namespaces", () => {
+	const prose = `- software.md: ${repeated}\n`;
+	const result = findings({
+		"root/.shepherd/charter.md": `## Structure\n${prose}${prose}- notes.md: file\n- notes.md: file\n- software.grant: typo\n`,
+		"root/.shepherd/integrations/notes.md": doc("notes", prose),
+	});
+	expect(
+		result.filter((f) =>
+			["charter-slot-duplicate", "charter-key-undeclared"].includes(f.code),
+		),
+	).toEqual([]);
+	expect(
+		result.filter((f) => f.code === "charter-module-restatement"),
+	).toHaveLength(2);
+});
+test("check conflict candidate paths are workspace relative", () => {
+	const result = findings({
+		".shepherd/charter.md": "",
+		".shepherd/integrations/alt.md": doc("alt", "rules"),
+		"root/.shepherd/charter.md": "Modules: alt\n",
+		"root/.shepherd/integrations/alt.md": doc(
+			"alt",
+			"rules",
+			"provides: craft\n",
+		),
+	});
+	expect(result.find((f) => f.code === "module-slot-conflict")?.message).toBe(
+		'slot "craft": explicit provider name is ambiguous; candidates: ../../.shepherd/integrations/alt.md, integrations/alt.md; no provider loaded',
+	);
+});
+test("same-realpath local candidates report no repeated schema or cost findings", async () => {
+	const { moduleFindings } = await import("./check-modules");
+	const { moduleCatalog } = await import("./module-resolution");
+	for (const extra of ["unknown: true\n", ""]) {
+		const t = makeTree(
+			{
+				"parent/.shepherd/charter.md": "",
+				"parent/.shepherd/integrations/bad.md": doc("bad", "rules", extra),
+				"parent/child/.shepherd/charter.md": "",
+			},
+			{
+				symlinks: {
+					"parent/child/.shepherd/integrations/bad.md":
+						"parent/.shepherd/integrations/bad.md",
+				},
+			},
+		);
+		cleanups.push(t.cleanup);
+		const state = join(t.root, "parent/child/.shepherd");
+		const result = moduleFindings(
+			moduleCatalog(join(t.root, "parent/child")),
+			state,
+		);
+		expect(
+			result.filter((f) => ["module-schema", "module-cost"].includes(f.code)),
+		).toHaveLength(1);
+		expect(
+			result.find((f) => f.code === "module-duplicate")?.message,
+		).toContain("same file");
+	}
 });

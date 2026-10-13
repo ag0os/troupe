@@ -54,9 +54,9 @@ export function parseModule(raw: string, filename: string): ParsedModule {
 	};
 	if (lineText(0) !== "---") return legacy;
 	const significant = lines.findIndex(
-		(_, i) => i > 0 && !/^[ \t]*(?:#.*)?$/.test(lineText(i)),
+		(_, i) => i > 0 && !/^[ \t]*$/.test(lineText(i)),
 	);
-	const signature = lineText(significant).match(/^([a-z-]+):/)?.[1];
+	const signature = lineText(significant).match(/^([a-z-]+):(?:\s|$)/)?.[1];
 	if (!signature || !FIELDS.has(signature)) return legacy;
 	const close = lines.findIndex((_, i) => i > 0 && lineText(i) === "---");
 	if (close < 0)

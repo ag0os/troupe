@@ -107,7 +107,10 @@ describe("charter boundary text", () => {
 		}
 		const example = charter.match(/```markdown\n([\s\S]*?)```/)?.[1];
 		expect(example).toBeDefined();
-		const parsed = parseCharter(example ?? "", ["software"]);
+		const parsed = parseCharter(
+			example ?? "",
+			Object.keys(software.metadata?.["charter-keys"] ?? {}),
+		);
 		expect(
 			parsed.slots
 				.filter(({ kind }) => kind === "module")
@@ -162,10 +165,10 @@ describe("charter boundary text", () => {
 		const referenced = [
 			...new Set(
 				[
-					...(software.body ?? "").matchAll(
-						/\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*\b/g,
+					...`${software.body ?? ""} e.g. charter.md package.json`.matchAll(
+						/`([a-z][a-z0-9]*(?:-[a-z0-9]+)*\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)`/g,
 					),
-				].map(([key]) => key),
+				].map(([, key]) => key),
 			),
 		].sort();
 		const declared = Object.keys(
@@ -189,9 +192,22 @@ describe("charter guide recognition and duplicate headings", () => {
 		expect(charter).toContain("Repeated core headings produce a warning.");
 	});
 
-	test("recognizes dotted slots only in core or known module namespaces", () => {
+	test("recognizes dotted slots only for core or exact declared candidate keys", () => {
 		expect(charter).toContain(
-			"A dotted bullet is a slot only when its namespace is `core` or a known module's name or slot; any other dotted bullet is ordinary prose.",
+			"A dotted bullet is a slot only when it is a `core.*` key or when a candidate module with valid metadata declares that exact key in `charter-keys`",
 		);
 	});
+});
+
+test("guide and failure policy state exact candidate key recognition", () => {
+	const sentence =
+		"A dotted bullet is a slot only when it is a `core.*` key or when a candidate module with valid metadata declares that exact key in `charter-keys`; candidates include every module the launcher sees, active or inactive, including the enclosing workspace's modules, and every other dotted bullet is ordinary prose.";
+	expect(readFileSync(join(prompts, "guides/charter.md"), "utf8")).toContain(
+		sentence,
+	);
+	expect(
+		readFileSync(join(import.meta.dir, "../../docs/SHEPHERD.md"), "utf8").split(
+			"### Failure policy and accounting",
+		)[1],
+	).toContain(sentence);
 });
