@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_HANDOFF_CEILINGS,
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
@@ -46,6 +47,7 @@ describe("loadConfig", () => {
 			marks: DEFAULT_MARKS,
 			windows: DEFAULT_WINDOWS,
 			start: DEFAULT_START,
+			handoffCeilings: DEFAULT_HANDOFF_CEILINGS,
 			codex: {},
 			problems: [],
 		});
@@ -94,6 +96,7 @@ describe("loadConfig", () => {
 			},
 			windows: { doneDays: 35, currentStaleDays: 10, pendingDays: 16 },
 			start: { journalWords: 1_600 },
+			handoffCeilings: DEFAULT_HANDOFF_CEILINGS,
 			sessionPrefix: "flock-2",
 			codex: {
 				home: join(home, ".codex-work"),
@@ -306,4 +309,60 @@ describe("loadConfig", () => {
 			"sessionPrefix",
 		]);
 	});
+});
+
+describe("handoff ceilings", () => {
+	test("layers individual model ceilings without losing other entries", () => {
+		const home = fixture();
+		const outer = join(home, "outer");
+		const inner = join(outer, "inner");
+		writeJson(join(home, ".config", "shepherd", "config.json"), {
+			handoffCeilings: { "gpt-custom": 85, "claude-custom": 42 },
+		});
+		writeJson(workspaceFile(outer), { handoffCeilings: { "gpt-custom": 90 } });
+		writeJson(workspaceFile(inner), {
+			handoffCeilings: { "claude-custom": 47.5 },
+		});
+		const config = loadConfig({
+			home,
+			env: {},
+			workspaceChain: [outer, inner],
+		});
+		expect(config.problems).toEqual([]);
+		expect(config.handoffCeilings).toEqual({
+			claude: 45,
+			codex: 80,
+			default: 45,
+			"gpt-custom": 90,
+			"claude-custom": 47.5,
+		});
+	});
+
+	for (const scope of ["user", "workspace"] as const) {
+		for (const value of [0, -1, 101, "80", null]) {
+			test(`rejects ceiling ${JSON.stringify(value)} in the ${scope} layer`, () => {
+				const home = fixture();
+				const workspace = join(home, "work");
+				const file =
+					scope === "user"
+						? join(home, ".config", "shepherd", "config.json")
+						: workspaceFile(workspace);
+				writeJson(file, {
+					marks: { current: 99 },
+					handoffCeilings: { "gpt-custom": value },
+				});
+				const config = loadConfig({
+					home,
+					env: {},
+					workspaceChain: [workspace],
+				});
+				expect(config.problems).toHaveLength(1);
+				expect(config.problems[0]).toMatchObject({
+					file,
+					key: "handoffCeilings.gpt-custom",
+				});
+				expect(config.marks.current).toBe(DEFAULT_MARKS.current);
+			});
+		}
+	}
 });

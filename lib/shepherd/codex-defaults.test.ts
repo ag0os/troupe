@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexDefaults, passthroughModelToken } from "./codex-defaults";
-import { type Config, DEFAULT_START } from "./config";
+import { type Config, DEFAULT_HANDOFF_CEILINGS, DEFAULT_START } from "./config";
 import { launchKind } from "./session-name";
 import type { ToolEnv } from "./sessions";
 import { fakeToolEnv, makeTree } from "./test-support";
@@ -26,6 +26,7 @@ function config(codex: Config["codex"] = {}): Config {
 		marks: { opening: 1, charter: 1, current: 1, shared: 1 },
 		windows: { doneDays: 1, currentStaleDays: 1, pendingDays: 14 },
 		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 		codex,
 		problems: [],
 	};

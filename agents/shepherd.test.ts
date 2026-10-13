@@ -474,7 +474,8 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 			.replaceAll(base, "<ROOT>")
 			.replace("- Date: 2026-10-02", "- Date: <DATE>")
 			.replace(/^- Session name:.*\n/m, "")
-			.replace(/^- Codex home:.*\n/m, "");
+			.replace(/^- Codex home:.*\n/m, "")
+			.replace(/^- Model:.*\n/m, "");
 	/**
 	 * What a legacy capture still vouches for, brought to today's shape rather
 	 * than captured again: the charter now follows the local modules, and the
@@ -1108,6 +1109,7 @@ describe("composition order (B-008, AC #1)", () => {
 					`- State directory: ${cwd}/.shepherd`,
 					"- Date: 2026-10-02",
 					`- Backend: ${label}`,
+					`- Model: backend default (unknown); handoff ceiling: ${backend === "claude" ? 45 : 80}% of context window`,
 					backend === "claude"
 						? "- Session name: ws-1002 (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)"
 						: "- Session name: not set (Codex takes no name at launch: name it with its rename dialog, suggested ws-1002, then record the name the host reports)",
@@ -1948,5 +1950,106 @@ test("journal clock notice reaches stderr separately from the JSON exit message"
 		} finally {
 			stderr.mockRestore();
 		}
+	}
+});
+
+describe("model handoff header", () => {
+	test("names backend defaults when the CLI model is unknown", async () => {
+		const { cwd } = build("plain");
+		for (const backend of BACKENDS) {
+			const envelope = await preview(["--backend", backend], cwd);
+			expect(envelope.systemPrompt).toContain(
+				`- Model: backend default (unknown); handoff ceiling: ${backend === "claude" ? 45 : 80}% of context window`,
+			);
+		}
+	});
+
+	test("resolves framework and passthrough models including unknown families", async () => {
+		const { cwd } = build("plain");
+		write(
+			join(cwd, ".shepherd/config.json"),
+			JSON.stringify({ handoffCeilings: { "gpt-custom": 92 } }),
+		);
+		for (const [backend, args, model, ceiling] of [
+			["claude", ["--model", "sonnet"], "sonnet", 45],
+			["codex", ["--model", "gpt-custom"], "gpt-custom", 92],
+			["codex", ["--", "-m", "gpt-5.6-sol"], "gpt-5.6-sol", 80],
+			["claude", ["--", "--model=claude-opus-4-6"], "claude-opus-4-6", 45],
+			["codex", ["--model", "other-model"], "other-model", 45],
+		] as const) {
+			const envelope = await preview(["--backend", backend, ...args], cwd);
+			expect(envelope.systemPrompt).toContain(
+				`- Model: ${model}; handoff ceiling: ${ceiling}% of context window`,
+			);
+		}
+	});
+
+	test("configured Codex model applies only to new interactive launches", async () => {
+		const { cwd } = build("plain");
+		const home = join(root, "handoff-home");
+		write(
+			join(home, ".config/shepherd/config.json"),
+			JSON.stringify({
+				codex: { model: "gpt-custom" },
+				handoffCeilings: { "gpt-custom": 91 },
+			}),
+		);
+		for (const [overrides, expected] of [
+			[{}, "gpt-custom; handoff ceiling: 91%"],
+			[
+				{ mode: "print", args: ["hi"] },
+				"backend default (unknown); handoff ceiling: 80%",
+			],
+			[
+				{ passthrough: ["resume"] },
+				"saved conversation (unknown); handoff ceiling: 80%",
+			],
+			[
+				{ passthrough: ["fork"] },
+				"saved conversation (unknown); handoff ceiling: 80%",
+			],
+			[
+				{ passthrough: ["--", "-m", "text"] },
+				"gpt-custom; handoff ceiling: 91%",
+			],
+		] as [Partial<PrepareContext>, string][]) {
+			const result = await shepherd.prepare(
+				context("codex", cwd, overrides),
+				fakeToolEnv({ cwd, home, env: {} }),
+			);
+			if ("exit" in result) throw new Error("unexpected exit");
+			expect(result.systemPromptFragments?.at(-1)).toContain(
+				`- Model: ${expected}`,
+			);
+		}
+	});
+
+	test("core uses the header ceiling within the 3400 word budget", () => {
+		const core = text("system-prompts/shepherd/core.md");
+		expect(core).toContain("using your model's header ceiling");
+		expect(core).not.toContain("40 to 50 percent");
+		expect(core).toContain("at its model's ceiling");
+		expect(core.trim().split(/\s+/).length).toBeLessThanOrEqual(3400);
+	});
+});
+
+test("handoff family and fallback defaults can be configured", async () => {
+	const { cwd } = build("plain");
+	write(
+		join(cwd, ".shepherd/config.json"),
+		JSON.stringify({ handoffCeilings: { claude: 48, codex: 88, default: 55 } }),
+	);
+	for (const [backend, model, ceiling] of [
+		["claude", "haiku", 48],
+		["codex", "gpt-5", 88],
+		["codex", "other", 55],
+	] as const) {
+		const envelope = await preview(
+			["--backend", backend, "--model", model],
+			cwd,
+		);
+		expect(envelope.systemPrompt).toContain(
+			`- Model: ${model}; handoff ceiling: ${ceiling}% of context window`,
+		);
 	}
 });

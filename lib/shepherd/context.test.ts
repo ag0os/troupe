@@ -10,6 +10,7 @@ import {
 import { promptWords } from "./compose";
 import {
 	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
@@ -31,6 +32,7 @@ function config(opening: number = DEFAULT_MARKS.opening): Config {
 		marks: { ...DEFAULT_MARKS, opening },
 		windows: { ...DEFAULT_WINDOWS },
 		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 		codex: {},
 		problems: [],
 	};

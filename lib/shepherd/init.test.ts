@@ -2,7 +2,12 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
-import { DEFAULT_MARKS, DEFAULT_START, DEFAULT_WINDOWS } from "./config";
+import {
+	DEFAULT_HANDOFF_CEILINGS,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { renderTemplate, TEMPLATES } from "./guides";
 import {
 	applyInit,
@@ -323,6 +328,7 @@ describe("init", () => {
 			marks: { ...DEFAULT_MARKS },
 			windows: { ...DEFAULT_WINDOWS },
 			start: { ...DEFAULT_START },
+			handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 			codex: {},
 			problems: [],
 		};
@@ -348,6 +354,7 @@ describe("init", () => {
 			marks: { ...DEFAULT_MARKS },
 			windows: { ...DEFAULT_WINDOWS },
 			start: { ...DEFAULT_START },
+			handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 			codex: {},
 			problems: [],
 		};

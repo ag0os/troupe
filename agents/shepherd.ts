@@ -50,7 +50,7 @@ import {
 	codexDefaults,
 	passthroughModelToken,
 } from "../lib/shepherd/codex-defaults";
-import { composeFragments } from "../lib/shepherd/compose";
+import { composeFragments, modelHeaderLine } from "../lib/shepherd/compose";
 import {
 	type ConfigProblem,
 	loadConfig,
@@ -290,11 +290,20 @@ export function prepare(
 			exit: { message: `${defaults.error}\n`, code: 2, stream: "stderr" },
 		};
 	}
+	const tailModel = passthroughModel?.startsWith("--model=")
+		? passthroughModel.slice("--model=".length)
+		: passthroughModel
+			? passthrough[passthrough.indexOf(passthroughModel) + 1]
+			: undefined;
+	const model = ctx.modelFromFlag
+		? ctx.model
+		: (tailModel ?? defaults?.model ?? ctx.model);
 	const systemPromptFragments = composeFragments(
 		ctx.cwd,
 		BACKEND_LABELS[ctx.backend],
 		enclosing,
 		[
+			modelHeaderLine(config, ctx.backend, model, naming.kind !== "new"),
 			...naming.headerLines,
 			...(defaults?.headerLine ? [defaults.headerLine] : []),
 		],

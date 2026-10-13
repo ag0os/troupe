@@ -110,7 +110,7 @@ For Claude children, the runner removes an inherited `CLAUDE_PROJECT_DIR`. It do
 
 ## Extensions
 
-A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, or both. Both hooks may be synchronous or asynchronous. `prepare(ctx)` receives resolved flags, positionals, the verbatim backend passthrough, cwd, backend, whether the model came from `--model`, effective mode, preview state, the compiled spec, an abort signal, and a cancellable `runCommand` helper. `runCommand({ argv, cwd?, env? })` returns a promise for `{ exitCode, stdout, stderr }`. Preparation may return:
+A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, or both. Both hooks may be synchronous or asynchronous. `prepare(ctx)` receives resolved flags, positionals, the verbatim backend passthrough, cwd, backend, the resolved framework or declaration model (`ctx.model`), whether the model came from `--model`, effective mode, preview state, the compiled spec, an abort signal, and a cancellable `runCommand` helper. `runCommand({ argv, cwd?, env? })` returns a promise for `{ exitCode, stdout, stderr }`. Preparation may return:
 
 - extra system prompt fragments or a replacement initial prompt;
 - Claude allow rules and additional directories;

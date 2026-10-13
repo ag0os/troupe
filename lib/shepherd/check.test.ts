@@ -5,6 +5,7 @@ import { checkWorkspace, type Finding } from "./check";
 import { FIXED_PATHS } from "./checkpoint";
 import {
 	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
@@ -37,6 +38,7 @@ function config(overrides: Partial<Config> = {}): Config {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
 		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 		codex: {},
 		problems: [],
 		...overrides,

@@ -34,7 +34,9 @@ The session prompt is layered, in order:
 | Inherited integrations | `.shepherd/integrations/*.md` of the nearest enclosing workspace (a parent directory with its own `.shepherd/`) | no, read at launch |
 | Workspace integrations | `.shepherd/integrations/*.md` in the launch directory | no, read at launch |
 | Workspace charter | `.shepherd/charter.md` in the launch directory | no, read at launch |
-| Session context header | generated (cwd, state dir, local date, backend, session name, Codex home when selected, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
+| Session context header | generated (cwd, state dir, local date, backend, model and handoff ceiling, session name, Codex home when selected, enclosing workspace, workspaces beneath, charter status, loaded modules) | no |
+
+The line beside Backend gives the selected model and its handoff ceiling, for example `- Model: gpt-5.6-sol; handoff ceiling: 80% of context window`. The launcher uses the framework `--model`, `-m` or `--model` after `--`, interactive Codex configuration, or a declaration model. When none selects a model, the CLI decides: the header says `backend default (unknown)` and uses the backend ceiling. Resumes and forks without an explicit model say `saved conversation (unknown)`; their saved model is not available to the launcher. Hand off before quality degrades, raise the handoff unprompted as you approach the header's ceiling, and check usage periodically through the host.
 
 On new interactive launches the header has a `Session name` line; resumes emit no such line. The line uses these wordings (with `forge-1006` as the example name):
 
@@ -228,7 +230,23 @@ For init, doctor and guide, exit 0 means done. Doctor exits 1 when it finds at l
 
 ### Configuration
 
-Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, `start`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, `start`, and the noninherited `sessionPrefix`. `windows.pendingDays` (default 14) is the age in days a `pending.md` bullet must exceed to be reported stale; `start.journalWords` (default 1,500) is the journal budget of `tool start` when `--budget` is not given. Both are positive integers. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
+Configuration is layered from the user file at `$XDG_CONFIG_HOME/shepherd/config.json`, or `~/.config/shepherd/config.json` when `XDG_CONFIG_HOME` is unset, followed by `.shepherd/config.json` files from enclosing workspaces through the current workspace. User configuration may set `marks`, `windows`, `start`, `handoffCeilings`, and `codex` values for `home` or `homeFile`, `model`, and `effort`. Workspace configuration may set `marks`, `windows`, `start`, `handoffCeilings`, and the noninherited `sessionPrefix`. `windows.pendingDays` (default 14) is the age in days a `pending.md` bullet must exceed to be reported stale; `start.journalWords` (default 1,500) is the journal budget of `tool start` when `--budget` is not given. Both are positive integers. Unknown or misplaced keys are errors. Run `shepherd --help` for the generated option reference.
+
+`handoffCeilings` maps model IDs to percentages of the context window. Values must be numbers greater than 0 and at most 100; fractional percentages are allowed. Individual entries merge from user to enclosing workspaces to the current workspace, and an invalid entry rejects its entire file with a `ConfigProblem`, like other keys. Exact model IDs win. Reserved entries `claude` and `codex` supply family defaults (45% and 80%), and `default` supplies the conservative fallback (45%) for an unrecognized model. Claude IDs and the `opus`, `sonnet`, `haiku` aliases use `claude`; GPT and Codex IDs use `codex`. These family names match exactly or with a hyphen suffix. When the model is unknown, the selected backend supplies the default. For example, in either configuration layer:
+
+```json
+{
+  "handoffCeilings": {
+    "claude": 45,
+    "codex": 80,
+    "default": 45,
+    "claude-opus-4-6": 48,
+    "gpt-5.6-sol": 85
+  }
+}
+```
+
+The built-in Claude figure is the midpoint of the previous 40 to 50% advice. Codex/GPT starts at 80%. Configuration lets each model's observed behavior determine its ceiling.
 
 ## Backends
 

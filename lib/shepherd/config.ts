@@ -15,6 +15,12 @@ export const DEFAULT_WINDOWS = {
 	currentStaleDays: 7,
 } as const;
 
+export const DEFAULT_HANDOFF_CEILINGS = {
+	claude: 45,
+	codex: 80,
+	default: 45,
+} as const;
+
 export const DEFAULT_START = {
 	journalWords: 1_500,
 } as const;
@@ -53,6 +59,7 @@ export type Config = {
 	marks: Marks;
 	windows: Windows;
 	start: Start;
+	handoffCeilings: Record<string, number>;
 	sessionPrefix?: string;
 	codex: CodexConfig;
 	problems: ConfigProblem[];
@@ -96,16 +103,22 @@ const codexSchema = z
 		path: ["homeFile"],
 		message: "cannot be used together with home",
 	});
+const handoffCeilingsSchema = z.record(
+	z.string().min(1),
+	z.number().positive().max(100),
+);
 const userSchema = z.strictObject({
 	marks: marksSchema.optional(),
 	windows: windowsSchema.optional(),
 	start: startSchema.optional(),
+	handoffCeilings: handoffCeilingsSchema.optional(),
 	codex: codexSchema.optional(),
 });
 const workspaceSchema = z.strictObject({
 	marks: marksSchema.optional(),
 	windows: windowsSchema.optional(),
 	start: startSchema.optional(),
+	handoffCeilings: handoffCeilingsSchema.optional(),
 	sessionPrefix: z
 		.string()
 		.regex(
@@ -213,12 +226,14 @@ function readLayer<T>(
 }
 
 function applyLayer(
-	config: Pick<Config, "marks" | "windows" | "start">,
-	layer: Pick<UserLayer, "marks" | "windows" | "start">,
+	config: Pick<Config, "marks" | "windows" | "start" | "handoffCeilings">,
+	layer: Pick<UserLayer, "marks" | "windows" | "start" | "handoffCeilings">,
 ): void {
 	if (layer.marks) Object.assign(config.marks, layer.marks);
 	if (layer.windows) Object.assign(config.windows, layer.windows);
 	if (layer.start) Object.assign(config.start, layer.start);
+	if (layer.handoffCeilings)
+		Object.assign(config.handoffCeilings, layer.handoffCeilings);
 }
 
 export function loadConfig({
@@ -230,6 +245,7 @@ export function loadConfig({
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
 		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 		codex: {},
 		problems: [],
 	};
@@ -256,4 +272,25 @@ export function loadConfig({
 	}
 
 	return config;
+}
+
+/** Exact model, recognized family, then the conservative unknown-model default. */
+export function handoffCeiling(
+	config: Pick<Config, "handoffCeilings">,
+	backend: "claude" | "codex",
+	model?: string,
+): number {
+	const ceilings = config.handoffCeilings;
+	if (model !== undefined && Object.hasOwn(ceilings, model)) {
+		return ceilings[model] as number;
+	}
+	const family =
+		model === undefined
+			? backend
+			: /^(claude|opus|sonnet|haiku)(-|$)/.test(model)
+				? "claude"
+				: /^(gpt|codex)(-|$)/.test(model)
+					? "codex"
+					: "default";
+	return ceilings[family] ?? DEFAULT_HANDOFF_CEILINGS[family];
 }

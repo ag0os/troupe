@@ -113,8 +113,9 @@ export function createPrepareContext(
 			enumerable: false,
 		},
 		modelFromFlag: { value: invocation.modelFromFlag, enumerable: false },
+		model: { value: invocation.model, enumerable: false },
 	}) as typeof context &
-		Pick<PrepareContext, "passthrough" | "modelFromFlag">;
+		Pick<PrepareContext, "passthrough" | "modelFromFlag" | "model">;
 	return Object.freeze(completeContext);
 }
 
