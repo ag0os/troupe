@@ -125,6 +125,8 @@ export interface PrepareContext {
 	readonly backend: Backend;
 	/** Whether `model` came from `--model`; always set by the runner. */
 	readonly modelFromFlag: boolean;
+	/** Framework flag or declaration model, before prepare overrides. */
+	readonly model?: string;
 	/** Effective mode after `--print`, not `spec.mode`. */
 	readonly mode: AgentMode;
 	/** True under `--show-prompt`. */

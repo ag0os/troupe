@@ -21,6 +21,7 @@ import {
 } from "./archive";
 import {
 	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
@@ -42,6 +43,7 @@ function config(doneDays: number = DEFAULT_WINDOWS.doneDays): Config {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS, doneDays },
 		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 		codex: {},
 		problems: [],
 	};

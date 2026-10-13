@@ -49,8 +49,9 @@ import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
 import {
 	codexDefaults,
 	passthroughModelToken,
+	passthroughModelValue,
 } from "../lib/shepherd/codex-defaults";
-import { composeFragments } from "../lib/shepherd/compose";
+import { composeFragments, modelHeaderLine } from "../lib/shepherd/compose";
 import {
 	type ConfigProblem,
 	loadConfig,
@@ -265,7 +266,7 @@ export function prepare(
 		};
 	}
 	const passthrough = ctx.passthrough;
-	const passthroughModel = passthroughModelToken(passthrough);
+	const passthroughModel = passthroughModelToken(passthrough, ctx.backend);
 	if (ctx.modelFromFlag && passthroughModel) {
 		return {
 			exit: {
@@ -290,11 +291,16 @@ export function prepare(
 			exit: { message: `${defaults.error}\n`, code: 2, stream: "stderr" },
 		};
 	}
+	const tailModel = passthroughModelValue(passthrough, ctx.backend);
+	const model = ctx.modelFromFlag
+		? ctx.model
+		: (tailModel ?? defaults?.model ?? ctx.model);
 	const systemPromptFragments = composeFragments(
 		ctx.cwd,
 		BACKEND_LABELS[ctx.backend],
 		enclosing,
 		[
+			modelHeaderLine(config, ctx.backend, model, naming.kind !== "new"),
 			...naming.headerLines,
 			...(defaults?.headerLine ? [defaults.headerLine] : []),
 		],

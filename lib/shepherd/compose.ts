@@ -18,6 +18,11 @@ import softwareDoc from "../../system-prompts/shepherd/integrations/software.md"
 	type: "text",
 };
 import { PROMPT_SEPARATOR } from "../agent-format/schema";
+import {
+	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
+	handoffCeiling,
+} from "./config";
 import { dayOf } from "./dates";
 import { defaultSessionName } from "./session-name";
 import { words } from "./text";
@@ -49,6 +54,25 @@ function builtInIntegrations(applies: {
 		...(applies.root ? [rootDoc] : []),
 		...(applies.software ? [softwareDoc] : []),
 	];
+}
+
+export function modelHeaderLine(
+	config: Pick<Config, "handoffCeilings">,
+	backend: "claude" | "codex",
+	model?: string,
+	keepsConversation = false,
+): string {
+	model ||= undefined;
+	const overrides = Object.entries(config.handoffCeilings)
+		.filter(([key]) => !["claude", "codex", "default"].includes(key))
+		.map(([key, value]) => `${key} ${value}%`)
+		.join(", ");
+	const label =
+		model ??
+		(keepsConversation
+			? "saved conversation (unknown)"
+			: "backend default (unknown)");
+	return `- Model: ${label}; handoff ceiling: ${handoffCeiling(config, backend, model)}% of context window; delegates: Claude ${handoffCeiling(config, "claude")}%, Codex ${handoffCeiling(config, "codex")}%, other backends ${handoffCeiling(config, "other")}%${overrides ? `; model overrides: ${overrides}` : ""}`;
 }
 
 export function composeFragments(
@@ -107,8 +131,10 @@ export function composeFragments(
 	];
 }
 
-/** The composed Claude system prompt's word count for a workspace. */
+/** Estimate the default Claude system prompt for a workspace. */
 export function promptWords(dir: string, now: Date = new Date()): number {
+	// Model flags and configured delegate overrides can change this default estimate.
+	const config = { handoffCeilings: DEFAULT_HANDOFF_CEILINGS };
 	const name = defaultSessionName(dir, now, undefined, false);
 	return words(
 		composeFragments(
@@ -116,6 +142,7 @@ export function promptWords(dir: string, now: Date = new Date()): number {
 			"claude-cli",
 			findEnclosingWorkspace(dir),
 			[
+				modelHeaderLine(config, "claude"),
 				`- Session name: ${name} (set by the launcher: use it as it stands in CURRENT.md and in messages, do not rename yourself)`,
 			],
 			now,

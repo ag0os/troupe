@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { applyArchive, planArchive } from "./archive";
 import {
 	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
@@ -414,6 +415,7 @@ describe("journal chain", () => {
 				marks: { ...DEFAULT_MARKS },
 				windows: { ...DEFAULT_WINDOWS },
 				start: { ...DEFAULT_START },
+				handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
 				codex: {},
 				problems: [],
 			};
