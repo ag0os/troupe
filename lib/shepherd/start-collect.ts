@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Assessment, assessCheckpoint } from "./checkpoint";
 import type { Config } from "./config";
+import { localTimestamp } from "./dates";
 import { TEMPLATES } from "./guides";
 import type { ToolEnv } from "./sessions";
 import { type ChainEntry, proseLines, words } from "./text";
@@ -149,7 +150,7 @@ export function collectStart(
 	);
 	const data: StartData = {
 		workspace: workspace.name,
-		now: toolEnv.clock().toISOString(),
+		now: localTimestamp(toolEnv.clock()),
 		binary: toolEnv.execPath ?? process.execPath,
 		assessment,
 		current: current ?? "CURRENT.md is missing",

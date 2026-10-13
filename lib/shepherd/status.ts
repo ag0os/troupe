@@ -193,13 +193,20 @@ function timestamp(ms: number): string {
 export function recordFreshness(
 	workspace: Workspace,
 	toolEnv: Pick<ToolEnv, "home">,
+	options: { excludeRunningSession?: Date } = {},
 ): string | undefined {
-	const lastActivity = latestClaudeTranscriptMtime(toolEnv, workspace.dir);
-	if (lastActivity === undefined) return undefined;
 	const lastRecord = Math.max(
 		writtenMtime(workspace, "CURRENT.md"),
 		writtenMtime(workspace, "journal.md"),
 	);
+	const lastActivity = latestClaudeTranscriptMtime(
+		toolEnv,
+		workspace.dir,
+		options.excludeRunningSession
+			? { lastRecord, now: options.excludeRunningSession }
+			: undefined,
+	);
+	if (lastActivity === undefined) return undefined;
 	const gapMinutes = Math.round((lastActivity - lastRecord) / 60_000);
 	const when = `last Shepherd activity ${timestamp(lastActivity)}, CURRENT/journal last written ${timestamp(lastRecord)}`;
 	if (gapMinutes <= 10) return `record up to date (${when})`;

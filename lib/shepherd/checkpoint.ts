@@ -517,7 +517,10 @@ export function assessCheckpoint(
 		changed,
 		evidenceLost,
 		dropped,
-		freshness: recordFreshness(workspace, toolEnv) ?? "unknown",
+		freshness:
+			recordFreshness(workspace, toolEnv, {
+				excludeRunningSession: toolEnv.clock(),
+			}) ?? "unknown",
 		lock:
 			lock.status === "free"
 				? "free"

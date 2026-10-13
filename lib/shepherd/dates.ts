@@ -27,6 +27,13 @@ export function dayOf(date: Date): string {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+/** Local date and time with the UTC offset. */
+export function localTimestamp(date: Date): string {
+	const pad = (value: number) => String(value).padStart(2, "0");
+	const offset = -date.getTimezoneOffset();
+	return `${dayOf(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
+}
+
 /** YYYY-MM of a date in local time. */
 export function monthOf(date: Date): string {
 	return dayOf(date).slice(0, 7);

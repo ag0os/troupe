@@ -34,6 +34,41 @@ function config(codex: Config["codex"] = {}): Config {
 }
 
 describe("Claude adapter", () => {
+	test("excludes only a recent newest transcript born after the record", () => {
+		const script = `
+			import { spyOn } from "bun:test";
+			import * as fs from "node:fs";
+			let birthtimeMs = 1000;
+			let mtimeMs = 4000;
+			spyOn(fs, "readdirSync").mockImplementation(() => ["previous.jsonl", "newest.jsonl"]);
+			spyOn(fs, "statSync").mockImplementation((path) => path.endsWith("newest.jsonl")
+				? { birthtimeMs, mtimeMs }
+				: { birthtimeMs: 1000, mtimeMs: 2000 });
+			const { latestClaudeTranscriptMtime } = await import(${JSON.stringify(join(import.meta.dir, "sessions.ts"))});
+			const result = [];
+			for (const [birth, modified, clock] of [
+				[1000, 4000, 5000],
+				[0, 4000, 5000],
+				[-1000, 4000, 5000],
+				[3000, 4000, 304000],
+				[3000, 4000, 304001],
+				[3000, 4000, 3999],
+			]) {
+				birthtimeMs = birth;
+				mtimeMs = modified;
+				result.push(latestClaudeTranscriptMtime({ home: "/home" }, "/work", {
+					lastRecord: 2500, now: new Date(clock),
+				}));
+			}
+			console.log(JSON.stringify(result));
+		`;
+		const child = Bun.spawnSync([process.execPath, "-e", script]);
+		expect(child.exitCode).toBe(0);
+		expect(JSON.parse(child.stdout.toString())).toEqual([
+			4000, 4000, 4000, 2000, 4000, 4000,
+		]);
+	});
+
 	test("keeps named live sessions and skips malformed, dead and unnamed entries", () => {
 		const home = fixture({
 			".claude/sessions/101.json": JSON.stringify({

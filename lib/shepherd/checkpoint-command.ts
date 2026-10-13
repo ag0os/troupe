@@ -6,7 +6,7 @@ import {
 	type HeldState,
 	nextCheckpoint,
 } from "./checkpoint-write";
-import { dayOf } from "./dates";
+import { localTimestamp } from "./dates";
 import { appendEntries } from "./journal";
 import {
 	LockError,
@@ -50,11 +50,6 @@ function appendRefusal(
 	return failure(
 		`journal changed during the apply; ${appendPending ? `${count} accepted lines appended; the append of line ${count + 1} failed and may or may not be in the journal: read it. The accepted lines already appended stay.` : `your ${count} accepted lines are appended and stay.`} Run the dry run again. Re-running --accept-dropped would journal them again. Restore or move the line instead, or accept it again knowing it will be journaled twice.${detail}`,
 	);
-}
-function writtenAt(date: Date): string {
-	const pad = (value: number) => String(value).padStart(2, "0");
-	const offset = -date.getTimezoneOffset();
-	return `${dayOf(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
 }
 function displayTime(written: string): string {
 	return written.slice(0, 16).replace("T", " ");
@@ -317,7 +312,7 @@ export async function runCheckpoint(
 						return appendRefusal(unaccounted.length);
 				}
 				const next = nextCheckpoint(held, {
-					written: writtenAt(toolEnv.clock()),
+					written: localTimestamp(toolEnv.clock()),
 					session: options.session,
 					appended,
 				});

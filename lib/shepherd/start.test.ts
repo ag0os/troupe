@@ -1,5 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { checkWorkspace } from "./check";
 import {
@@ -11,6 +17,7 @@ import { loadConfig } from "./config";
 import { TEMPLATES } from "./guides";
 import { renderStart, runStart, startJson } from "./start";
 import { collectStart } from "./start-collect";
+import { recordFreshness } from "./status";
 import { fakeToolEnv, makeTree } from "./test-support";
 import { words } from "./text";
 import { discoverTree } from "./tree";
@@ -64,6 +71,60 @@ function fixture(files: Record<string, string> = {}) {
 	};
 	return { tree, workspace, env, config, collect, certify, put };
 }
+
+for (const predecessorMinutes of [undefined, 39, 20]) {
+	test(`start ignores its fresh transcript with predecessor ${predecessorMinutes} minutes ago while status still measures it`, () => {
+		const f = fixture();
+		const dir = join(
+			f.env.home,
+			".claude/projects",
+			f.workspace.dir.replace(/[^A-Za-z0-9]/g, "-"),
+		);
+		mkdirSync(dir, { recursive: true });
+		const self = join(dir, "self.jsonl");
+		writeFileSync(self, "activity");
+		const now = new Date(statSync(self).birthtimeMs + 1000);
+		f.env.clock = () => new Date(now);
+		const record = new Date(now.getTime() - 40 * 60_000);
+		for (const file of ["CURRENT.md", "journal.md"])
+			utimesSync(join(f.workspace.state, file), record, record);
+		utimesSync(self, now, now);
+		if (predecessorMinutes !== undefined) {
+			const predecessor = join(dir, "predecessor.jsonl");
+			writeFileSync(predecessor, "old activity");
+			const modified = new Date(now.getTime() - predecessorMinutes * 60_000);
+			utimesSync(predecessor, modified, modified);
+		}
+		const data = f.collect();
+		expect(data.assessment.freshness).toStartWith(
+			predecessorMinutes === 20 ? "STALE? 20 min" : "record up to date",
+		);
+		expect(renderStart(data, [])).toContain(data.assessment.freshness);
+		expect(recordFreshness(f.workspace, f.env)).toStartWith("STALE? 40 min");
+	});
+}
+
+test("start header uses the local date and UTC-3 offset at 23:30", () => {
+	const f = fixture();
+	const script = `
+		import { collectStart } from ${JSON.stringify(join(import.meta.dir, "start-collect.ts"))};
+		import { renderStart } from ${JSON.stringify(join(import.meta.dir, "start.ts"))};
+		import { fakeToolEnv } from ${JSON.stringify(join(import.meta.dir, "test-support.ts"))};
+		const env = fakeToolEnv({
+			home: ${JSON.stringify(f.env.home)},
+			clock: () => new Date("2026-10-14T02:30:00Z"),
+		});
+		const data = collectStart(${JSON.stringify(f.workspace)}, env, ${JSON.stringify(f.config)});
+		console.log(JSON.stringify({ now: data.now, text: renderStart(data, []) }));
+	`;
+	const child = Bun.spawnSync([process.execPath, "-e", script], {
+		env: { ...process.env, TZ: "America/Argentina/Salta" },
+	});
+	expect(child.exitCode).toBe(0);
+	const result = JSON.parse(child.stdout.toString());
+	expect(result.now).toBe("2026-10-13T23:30:00-03:00");
+	expect(result.text).toContain("2026-10-13T23:30:00-03:00");
+});
 
 test("no checkpoint prints fallback section dates and RECONCILE", () => {
 	const f = fixture();
