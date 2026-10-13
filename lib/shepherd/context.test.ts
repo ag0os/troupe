@@ -219,3 +219,33 @@ test("source collection and context imports exclude check and renderer", () => {
 			expect(statement).not.toMatch(/from\s+["']\.\/(?:check|start)["']/);
 	}
 });
+
+test("fallback counts stripped readable bodies; degradation composes successfully", () => {
+	const raw =
+		"---\nname: sample\ntype: domain\ndescription: rules\nbudget: bad\n---\none two\n";
+	const { workspace } = fixture(
+		{
+			"root/.shepherd/charter.md": "charter",
+			"root/.shepherd/integrations/sample.md": raw,
+		},
+		{ symlinks: { "root/.shepherd/integrations/broken.md": "missing" } },
+	);
+	let problem = "";
+	expect(
+		contextTiers(workspace, config(), (message) => {
+			problem = message;
+		}).loaded,
+	).toBe(3);
+	expect(problem).not.toBe("");
+	const good = fixture({
+		"root/.shepherd/charter.md": "charter",
+		"root/.shepherd/integrations/sample.md": raw,
+	});
+	let failed = false;
+	expect(
+		contextTiers(good.workspace, config(), () => {
+			failed = true;
+		}).loaded,
+	).toBe(promptWords(good.workspace.dir));
+	expect(failed).toBe(false);
+});

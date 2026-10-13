@@ -1,3 +1,10 @@
+---
+name: shared
+type: domain
+description: Shared reference files and conventions for child workspaces
+budget: 250
+charter-keys: {}
+---
 # Integration: Shared layer
 
 Reference files live in `shared/` of a root workspace's `.shepherd/`. If the header's Enclosing workspace line names one, that is the root and the files are under `<enclosing>/.shepherd/shared/`, readable from here; if it says none, this layer is yours: the files are in your own `.shepherd/shared/`, you keep them (the root module says how once workspaces sit beneath you), and the outbox rule below does not apply. Read each when its moment first comes in a session, and again if it changed since:

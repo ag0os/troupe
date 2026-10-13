@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promptWords } from "./compose";
 import type { Config } from "./config";
+import { parseModule } from "./module-format";
 import type { ToolEnv } from "./sessions";
 import { collectStart, type StartWords } from "./start-collect";
 import { mdFiles, read, words, wordsIn } from "./text";
@@ -21,11 +22,16 @@ export type ContextTiers = {
 	over: string[];
 };
 
-function readableWords(paths: readonly string[]): number {
+function readableWords(paths: readonly string[], modules = false): number {
 	let count = 0;
 	for (const path of paths) {
 		try {
-			if (existsSync(path)) count += words(read(path));
+			if (existsSync(path))
+				count += words(
+					modules
+						? (parseModule(read(path), basename(path)).body ?? "")
+						: read(path),
+				);
 		} catch {
 			// A readable fragment still contributes when another one is broken.
 		}
@@ -117,10 +123,9 @@ export function contextTiers(
 	try {
 		loaded = promptWords(workspace.dir);
 	} catch (error) {
-		loaded = readableWords([
-			join(state, "charter.md"),
-			...localIntegrationFiles(state),
-		]);
+		loaded =
+			readableWords([join(state, "charter.md")]) +
+			readableWords(localIntegrationFiles(state), true);
 		onPromptError?.(
 			error instanceof Error ? error.message : "could not compose prompt",
 		);

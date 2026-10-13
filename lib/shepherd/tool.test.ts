@@ -1249,3 +1249,265 @@ test("journal human output ends with a newline", async () => {
 	expect(output.code).toBe(0);
 	expect(output.text.endsWith("\n")).toBe(true);
 });
+
+test("module findings preserve JSON, lines, all visibility and error-only exit", async () => {
+	const { cwd, env } = fixture();
+	mkdirSync(join(cwd, ".shepherd/integrations"), { recursive: true });
+	writeFileSync(
+		join(cwd, ".shepherd/integrations/bad.md"),
+		"---\nname: bad\ntype: domain\ndescription: rules\nbudget: 3\nextra: true\n---\nbody\n",
+	);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(1);
+	const report = JSON.parse(output.text);
+	expect(report.workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "module-schema",
+			level: "error",
+			file: "integrations/bad.md",
+			line: 6,
+		}),
+	);
+	writeFileSync(join(cwd, ".shepherd/integrations/bad.md"), "legacy");
+	const warn = await runTool(["check"], {}, env);
+	expect(warn.code).toBe(0);
+	expect(warn.text).not.toContain("module-frontmatter-missing");
+	expect((await runTool(["check"], { all: true }, env)).text).toContain(
+		"legacy module: loaded unchanged",
+	);
+});
+
+test("JSON check sees enclosing schema and duplicates outside checked workspaces", async () => {
+	const { moduleCatalog, resolveModules } = await import("./module-resolution");
+	const tree = makeTree({
+		"parent/.shepherd/integrations/bad.md":
+			"---\nname: bad\ntype: domain\ndescription: rules\nbudget: x\n---\ninherited body\n",
+		"parent/child/.shepherd/charter.md": "",
+		"parent/child/.shepherd/CURRENT.md": "Updated: 2026-10-05\n",
+		"parent/child/.shepherd/integrations/bad.md": "local body\n",
+	});
+	cleanups.push(tree.cleanup);
+	const cwd = join(tree.root, "parent/child");
+	const catalog = moduleCatalog(cwd);
+	const inherited = catalog.candidates.find((m) => m.layer === "inherited");
+	if (!inherited) throw new Error("missing inherited module");
+	const launch = resolveModules(catalog);
+	const output = await runTool(
+		["check"],
+		{ json: true },
+		fakeToolEnv({ home: tree.root, cwd }),
+	);
+	expect(output.code).toBe(1);
+	const report = JSON.parse(output.text);
+	expect(report.workspaces.map((w: { dir: string }) => w.dir)).toEqual([cwd]);
+	expect(report.workspaces[0].findings).toContainEqual({
+		...inherited.problems[0],
+		code: "module-schema",
+		level: "error",
+		file: "../../.shepherd/integrations/bad.md",
+	});
+	expect(launch.problems[0]?.file).toBe(inherited.source);
+	expect(
+		launch.selected.filter((m) => m.name === "bad.md").map((m) => m.layer),
+	).toEqual(["inherited", "local"]);
+	expect(report.workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "module-duplicate",
+			file: "integrations/bad.md",
+			message:
+				"local bad.md has the same name as the inherited module; both load at launch",
+		}),
+	);
+});
+
+test("charter finding JSON pins severities and lines, info visibility and error-only exit", async () => {
+	const { cwd, env } = fixture();
+	const sentence =
+		"Keep every synthetic project decision visible to the team and record the exact reason for each change before proceeding with the next task.";
+	mkdirSync(join(cwd, ".shepherd/integrations"), { recursive: true });
+	writeFileSync(
+		join(cwd, ".shepherd/integrations/reader.md"),
+		`---\nname: reader\ntype: domain\ndescription: rules\nbudget: 100\ncharter-keys:\n  reader.value: required\n---\n${sentence}\n`,
+	);
+	const charter = `## Done\nNone\n## Done\nNone\n- software.grants: value\n- reader.value:\n\n${sentence}\n`;
+	writeFileSync(join(cwd, ".shepherd/charter.md"), charter);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(0);
+	const report = JSON.parse(output.text);
+	for (const [code, level, line] of [
+		["charter-slot-duplicate", "warn", 3],
+		["charter-key-undeclared", "warn", 5],
+		["charter-key-required", "warn", 6],
+		["charter-module-restatement", "info", 8],
+	]) {
+		expect(report.workspaces[0].findings).toContainEqual(
+			expect.objectContaining({ code, level, line, file: "charter.md" }),
+		);
+	}
+	expect((await runTool(["check"], {}, env)).text).not.toContain(
+		"possible repeated rule",
+	);
+	expect((await runTool(["check"], { all: true }, env)).text).toContain(
+		"possible repeated rule: integrations/reader.md:9",
+	);
+	writeFileSync(
+		join(cwd, ".shepherd/charter.md"),
+		`${charter}- software.grants: again\n`,
+	);
+	const error = await runTool(["check"], { json: true }, env);
+	expect(error.code).toBe(1);
+	expect(JSON.parse(error.text).workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "charter-slot-duplicate",
+			level: "error",
+			line: 9,
+		}),
+	);
+});
+
+test("repeated filename bullets do not fail tool check", async () => {
+	const { cwd, env } = fixture();
+	writeFileSync(
+		join(cwd, ".shepherd/charter.md"),
+		"## Structure\n- package.json: scripts\n- biome.json: formatting\n- package.json: more scripts\n",
+	);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(0);
+	expect(
+		JSON.parse(output.text).workspaces[0].findings.filter(
+			(f: { code: string }) => f.code.startsWith("charter-"),
+		),
+	).toEqual([]);
+});
+
+const softwareUnknownMessage = (key: string) =>
+	`"${key}" is not a slot any module declares (read as prose); declared software keys: software.attribution, software.grants, software.merge-grant, software.plans`;
+
+test.each([
+	[
+		"typo",
+		"- software.grant: push branches\n",
+		{},
+		[1],
+		[softwareUnknownMessage("software.grant")],
+		0,
+	],
+	[
+		"known namespace filename",
+		"- software.md: notes\n",
+		{},
+		[1],
+		[softwareUnknownMessage("software.md")],
+		0,
+	],
+	[
+		"unknown namespace",
+		"- package.json: scripts\n- index.ts: entry\n",
+		{},
+		[],
+		[],
+		0,
+	],
+	[
+		"inactive namespace",
+		"- dormant.typo: notes\n",
+		{
+			".shepherd/integrations/dormant.md":
+				"---\nname: dormant\ntype: domain\ndescription: rules\nbudget: 100\napplies-when:\n  has-children: false\ncharter-keys:\n  dormant.value: optional\n---\nrules\n",
+		},
+		[1],
+		[
+			'"dormant.typo" is not a slot any module declares (read as prose); declared dormant keys: dormant.value',
+		],
+		0,
+	],
+	[
+		"enclosing provider namespace",
+		"- craft.typo: notes\n",
+		{
+			"../.shepherd/charter.md": "",
+			"../.shepherd/integrations/reader.md":
+				"---\nname: reader\ntype: domain\ndescription: rules\nbudget: 100\nprovides: craft\ncharter-keys:\n  craft.value: optional\n---\nrules\n",
+		},
+		[1],
+		[
+			'"craft.typo" is not a slot any module declares (read as prose); declared craft keys: craft.value',
+		],
+		0,
+	],
+	[
+		"repeated unknown bullet",
+		"- software.grant: push\n* **software.grant:** again\n",
+		{},
+		[1, 2],
+		[
+			softwareUnknownMessage("software.grant"),
+			softwareUnknownMessage("software.grant"),
+		],
+		0,
+	],
+	[
+		"broken namespace",
+		"- broken.typo: notes\n",
+		{
+			".shepherd/integrations/broken.md":
+				"---\nname: broken\ntype: domain\ndescription: rules\nbudget: invalid\ncharter-keys:\n  broken.value: optional\n---\nrules\n",
+		},
+		[],
+		[],
+		1,
+	],
+	[
+		"excluded syntax",
+		"```\n- software.grant: code\n```\n> - software.grant: quote\n- Software.grant: case\n- core.unknown: existing slot\n",
+		{},
+		[],
+		[],
+		0,
+	],
+	[
+		"known namespace without keys",
+		"- empty.typo: notes\n",
+		{
+			".shepherd/integrations/empty.md":
+				"---\nname: empty\ntype: domain\ndescription: rules\nbudget: 100\n---\nrules\n",
+		},
+		[1],
+		[
+			'"empty.typo" is not a slot any module declares (read as prose); declared empty keys: none',
+		],
+		0,
+	],
+] as const)(
+	"unknown dotted charter keys: %s",
+	async (_, charter, files, lines, messages, exit) => {
+		const { cwd, env } = fixture();
+		for (const [path, raw] of Object.entries(files)) {
+			const target = join(cwd, path);
+			mkdirSync(join(target, ".."), { recursive: true });
+			writeFileSync(target, raw);
+		}
+		writeFileSync(join(cwd, ".shepherd/charter.md"), charter);
+		const output = await runTool(["check"], { json: true }, env);
+		expect(output.code).toBe(exit);
+		const findings = JSON.parse(output.text).workspaces[0].findings;
+		const unknown = findings.filter(
+			(f: { code: string }) => f.code === "charter-key-unknown",
+		);
+		expect(unknown.map((f: { line: number }) => f.line)).toEqual([...lines]);
+		expect(unknown.map((f: { message: string }) => f.message)).toEqual([
+			...messages,
+		]);
+		for (const finding of unknown)
+			expect(finding).toMatchObject({ level: "warn", file: "charter.md" });
+		expect(
+			findings.some(
+				(f: { code: string }) => f.code === "charter-slot-duplicate",
+			),
+		).toBe(false);
+		if (lines.length)
+			expect((await runTool(["check"], {}, env)).text).toContain(
+				"is not a slot any module declares (read as prose)",
+			);
+	},
+);

@@ -1,3 +1,10 @@
+---
+name: inter-agent
+type: capability
+description: Exchange messages with other agent sessions
+budget: 400
+charter-keys: {}
+---
 # Integration: Inter agent messaging
 
 Some harnesses expose direct agent to agent messaging. In Claude Code these are the `ListAgents` and `SendMessage` tools, which can reach subagents you spawned, other local sessions on the machine, and the account's cloud or remote sessions. Use this channel to check on and coordinate co sessions without touching their terminals.
