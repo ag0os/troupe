@@ -7,6 +7,7 @@
     "compile": "bun scripts/compile.ts",
     "compile:all": "bun scripts/compile-all.ts",
     "watch": "bun scripts/watch-agents.ts",
+    "evals:shepherd": "bun evals/shepherd/run.ts",
     "lint": "biome check --write .",
     "format": "biome format --write .",
     "check": "biome check .",
