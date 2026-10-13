@@ -217,3 +217,19 @@ test("only exact declared keys and core keys become slots", () => {
 	expect(parsed.slots[0]?.value).toBe(prose);
 	expect(parsed.blocks.map((b) => b.source).join("")).toBe(prose);
 });
+
+test("unknown dotted bullets are reported separately while preserving prose", () => {
+	const prose =
+		"- software.grant: typo\n  continuation\n* **software.md:** notes\n- **software.grant**: repeated\n";
+	const parsed = parseCharter(
+		`## Structure\n${prose}- software.grants: None\n`,
+		["software.grants"],
+	);
+	expect(parsed.unknownBullets).toEqual([
+		{ key: "software.grant", line: 2 },
+		{ key: "software.md", line: 4 },
+		{ key: "software.grant", line: 5 },
+	]);
+	expect(parsed.slots[0]?.value).toBe(prose);
+	expect(parsed.blocks.map((b) => b.source).join("")).toBe(prose);
+});

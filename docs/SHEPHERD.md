@@ -137,7 +137,7 @@ Two explicit providers for a slot, ambiguous explicit names, or multiple eligibl
 
 ### Failure policy and accounting
 
-A dotted bullet is a slot only when it is a `core.*` key or when a candidate module with valid metadata declares that exact key in `charter-keys`; candidates include every module the launcher sees, active or inactive, including the enclosing workspace's modules, and every other dotted bullet is ordinary prose.
+A dotted bullet is a slot only when it is a `core.*` key or when a candidate module with valid metadata declares that exact key in `charter-keys`; candidates include every module the launcher sees, active or inactive, including the enclosing workspace's modules, and every other dotted bullet is ordinary prose. `tool check` warns with `charter-key-unknown` when an ordinary dotted bullet names an undeclared key in a valid candidate module's name or provided namespace, including inactive and enclosing modules; it stays prose and the warning does not change exit codes.
 
 Invalid closed workspace metadata is reported and discarded in full. Its stripped body loads ungated, without provider identity, defaults, predicates, or charter declarations. Clearly intended but unclosed metadata is reported and skipped because its body cannot be safely separated. Invalid built-in metadata is a repository defect and composition throws.
 

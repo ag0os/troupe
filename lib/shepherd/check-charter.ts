@@ -13,12 +13,23 @@ export function charterFindings(
 ): Finding[] {
 	if (catalog.charter === undefined) return [];
 	const findings: Finding[] = [];
-	const declaredKeys = catalog.candidates.flatMap((module) =>
-		module.metadata && !module.problems.length
-			? Object.keys(module.metadata["charter-keys"])
-			: [],
+	const validModules = catalog.candidates.filter(
+		(module) => module.metadata && !module.problems.length,
 	);
-	const { slots, blocks } = parseCharter(catalog.charter, declaredKeys);
+	const declaredKeys = validModules.flatMap((module) =>
+		Object.keys(module.metadata?.["charter-keys"] ?? {}),
+	);
+	const namespaces = new Set(
+		validModules.flatMap((module) =>
+			[module.metadata?.name, module.metadata?.provides].filter(
+				(name): name is string => name !== undefined,
+			),
+		),
+	);
+	const { slots, blocks, unknownBullets } = parseCharter(
+		catalog.charter,
+		declaredKeys,
+	);
 	const add = (
 		level: Finding["level"],
 		code: string,
@@ -32,6 +43,19 @@ export function charterFindings(
 			message,
 			...(line === undefined ? {} : { line }),
 		});
+	for (const bullet of unknownBullets) {
+		const namespace = bullet.key.split(".")[0] ?? "";
+		if (!namespaces.has(namespace)) continue;
+		const keys = [...new Set(declaredKeys)]
+			.filter((key) => key.startsWith(`${namespace}.`))
+			.sort();
+		add(
+			"warn",
+			"charter-key-unknown",
+			`"${bullet.key}" is not a slot any module declares (read as prose); declared ${namespace} keys: ${keys.join(", ") || "none"}`,
+			bullet.line,
+		);
+	}
 	const seen = new Map<string, number>();
 	for (const slot of slots) {
 		if (slot.kind === "module" && slot.key.startsWith("core.")) continue;

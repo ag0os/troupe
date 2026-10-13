@@ -211,3 +211,18 @@ test("guide and failure policy state exact candidate key recognition", () => {
 		)[1],
 	).toContain(sentence);
 });
+
+test("guide and failure policy explain unknown dotted key warnings", () => {
+	const sentence =
+		"`tool check` warns with `charter-key-unknown` when an ordinary dotted bullet names an undeclared key in a valid candidate module's name or provided namespace, including inactive and enclosing modules; it stays prose and the warning does not change exit codes.";
+	expect(
+		readFileSync(join(prompts, "guides/charter.md"), "utf8").split(
+			"## Slots and the boundary",
+		)[1],
+	).toContain(sentence);
+	expect(
+		readFileSync(join(import.meta.dir, "../../docs/SHEPHERD.md"), "utf8").split(
+			"### Failure policy and accounting",
+		)[1],
+	).toContain(sentence);
+});

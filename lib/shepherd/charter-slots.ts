@@ -33,6 +33,7 @@ export function parseCharter(
 ): {
 	slots: CharterSlot[];
 	blocks: CharterBlock[];
+	unknownBullets: { key: string; line: number }[];
 } {
 	const lines = raw.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 	const recognized = new Set(declaredKeys);
@@ -56,6 +57,15 @@ export function parseCharter(
 			fence = { marker: open[1][0] ?? "", length: open[1].length };
 			excluded.add(index);
 		}
+	}
+	const unknownBullets: { key: string; line: number }[] = [];
+	for (const [index, line] of text.entries()) {
+		if (excluded.has(index)) continue;
+		const match = line.match(moduleBullet);
+		if (!match) continue;
+		const key = match[1] ?? match[2] ?? match[3] ?? "";
+		if (!key.startsWith("core.") && !recognized.has(key))
+			unknownBullets.push({ key, line: index + 1 });
 	}
 	const slots: CharterSlot[] = [];
 	const slotLines = new Set<number>();
@@ -149,7 +159,11 @@ export function parseCharter(
 		blocks.push({ source: lines.slice(index, end).join(""), line: index + 1 });
 		index = end - 1;
 	}
-	return { slots: slots.sort((a, b) => a.line - b.line), blocks };
+	return {
+		slots: slots.sort((a, b) => a.line - b.line),
+		blocks,
+		unknownBullets,
+	};
 }
 
 export function normalizedText(

@@ -1379,3 +1379,135 @@ test("repeated filename bullets do not fail tool check", async () => {
 		),
 	).toEqual([]);
 });
+
+const softwareUnknownMessage = (key: string) =>
+	`"${key}" is not a slot any module declares (read as prose); declared software keys: software.attribution, software.grants, software.merge-grant, software.plans`;
+
+test.each([
+	[
+		"typo",
+		"- software.grant: push branches\n",
+		{},
+		[1],
+		[softwareUnknownMessage("software.grant")],
+		0,
+	],
+	[
+		"known namespace filename",
+		"- software.md: notes\n",
+		{},
+		[1],
+		[softwareUnknownMessage("software.md")],
+		0,
+	],
+	[
+		"unknown namespace",
+		"- package.json: scripts\n- index.ts: entry\n",
+		{},
+		[],
+		[],
+		0,
+	],
+	[
+		"inactive namespace",
+		"- dormant.typo: notes\n",
+		{
+			".shepherd/integrations/dormant.md":
+				"---\nname: dormant\ntype: domain\ndescription: rules\nbudget: 100\napplies-when:\n  has-children: false\ncharter-keys:\n  dormant.value: optional\n---\nrules\n",
+		},
+		[1],
+		[
+			'"dormant.typo" is not a slot any module declares (read as prose); declared dormant keys: dormant.value',
+		],
+		0,
+	],
+	[
+		"enclosing provider namespace",
+		"- craft.typo: notes\n",
+		{
+			"../.shepherd/charter.md": "",
+			"../.shepherd/integrations/reader.md":
+				"---\nname: reader\ntype: domain\ndescription: rules\nbudget: 100\nprovides: craft\ncharter-keys:\n  craft.value: optional\n---\nrules\n",
+		},
+		[1],
+		[
+			'"craft.typo" is not a slot any module declares (read as prose); declared craft keys: craft.value',
+		],
+		0,
+	],
+	[
+		"repeated unknown bullet",
+		"- software.grant: push\n* **software.grant:** again\n",
+		{},
+		[1, 2],
+		[
+			softwareUnknownMessage("software.grant"),
+			softwareUnknownMessage("software.grant"),
+		],
+		0,
+	],
+	[
+		"broken namespace",
+		"- broken.typo: notes\n",
+		{
+			".shepherd/integrations/broken.md":
+				"---\nname: broken\ntype: domain\ndescription: rules\nbudget: invalid\ncharter-keys:\n  broken.value: optional\n---\nrules\n",
+		},
+		[],
+		[],
+		1,
+	],
+	[
+		"excluded syntax",
+		"```\n- software.grant: code\n```\n> - software.grant: quote\n- Software.grant: case\n- core.unknown: existing slot\n",
+		{},
+		[],
+		[],
+		0,
+	],
+	[
+		"known namespace without keys",
+		"- empty.typo: notes\n",
+		{
+			".shepherd/integrations/empty.md":
+				"---\nname: empty\ntype: domain\ndescription: rules\nbudget: 100\n---\nrules\n",
+		},
+		[1],
+		[
+			'"empty.typo" is not a slot any module declares (read as prose); declared empty keys: none',
+		],
+		0,
+	],
+] as const)(
+	"unknown dotted charter keys: %s",
+	async (_, charter, files, lines, messages, exit) => {
+		const { cwd, env } = fixture();
+		for (const [path, raw] of Object.entries(files)) {
+			const target = join(cwd, path);
+			mkdirSync(join(target, ".."), { recursive: true });
+			writeFileSync(target, raw);
+		}
+		writeFileSync(join(cwd, ".shepherd/charter.md"), charter);
+		const output = await runTool(["check"], { json: true }, env);
+		expect(output.code).toBe(exit);
+		const findings = JSON.parse(output.text).workspaces[0].findings;
+		const unknown = findings.filter(
+			(f: { code: string }) => f.code === "charter-key-unknown",
+		);
+		expect(unknown.map((f: { line: number }) => f.line)).toEqual([...lines]);
+		expect(unknown.map((f: { message: string }) => f.message)).toEqual([
+			...messages,
+		]);
+		for (const finding of unknown)
+			expect(finding).toMatchObject({ level: "warn", file: "charter.md" });
+		expect(
+			findings.some(
+				(f: { code: string }) => f.code === "charter-slot-duplicate",
+			),
+		).toBe(false);
+		if (lines.length)
+			expect((await runTool(["check"], {}, env)).text).toContain(
+				"is not a slot any module declares (read as prose)",
+			);
+	},
+);
