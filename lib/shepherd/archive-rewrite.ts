@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { mdFiles, read, walk } from "./text";
+import { mdFiles, read, symlinkComponent, walk } from "./text";
 import type { Workspace } from "./tree";
 
 const STATES = ["todo", "in-progress", "done"] as const;
@@ -52,6 +52,7 @@ function rewriteFile(
 	target: Workspace,
 	moves: readonly ArchivedItem[],
 	home?: string,
+	onSkip?: (file: string, reason: string) => void,
 ): boolean {
 	const before = read(file);
 	let text = before;
@@ -97,6 +98,16 @@ function rewriteFile(
 		);
 	}
 	if (text === before) return false;
+	try {
+		const linked = symlinkComponent(target.state, relative(target.state, file));
+		if (linked) {
+			onSkip?.(file, `${linked} is a symlink`);
+			return false;
+		}
+	} catch {
+		onSkip?.(file, `${relative(target.state, file)} cannot be inspected`);
+		return false;
+	}
 	writeFileSync(file, text);
 	return true;
 }
@@ -106,12 +117,14 @@ export function rewriteArchiveReferences(
 	workspaces: readonly Workspace[],
 	moves: readonly ArchivedItem[],
 	home?: string,
+	onSkip?: (file: string, reason: string) => void,
 ): string[] {
 	if (moves.length === 0) return [];
 	const rewritten: string[] = [];
 	for (const workspace of workspaces) {
 		for (const file of liveFiles(workspace)) {
-			if (rewriteFile(file, workspace, moves, home)) rewritten.push(file);
+			if (rewriteFile(file, workspace, moves, home, onSkip))
+				rewritten.push(file);
 		}
 	}
 	return rewritten;

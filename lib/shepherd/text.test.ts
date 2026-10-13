@@ -325,7 +325,6 @@ describe("journal chain", () => {
 		writeFileSync(join(root, "journal.md"), "## 2026-10-01\n- Third\n");
 		const chain = journalChain(root);
 		expect(chain.files).toEqual([
-			"archive/journal/2026-08-empty.md",
 			"archive/journal/2026-08.md",
 			"archive/journal/2026-09.md",
 			"journal.md",
@@ -479,4 +478,102 @@ describe("journal slip helpers", () => {
 			{ day: "2026-10-01", line: 8, previous: "2026-10-04" },
 		]);
 	});
+});
+
+describe("journal reader integrity", () => {
+	test("unreadable journal fences carry a structured opening line", () => {
+		writeFileSync(join(root, "journal.md"), "# Journal\n```\npasted\n");
+		expect(journalChain(root).unreadable[0]?.line).toBe(2);
+	});
+
+	test("a different or shorter fence cannot close the opening fence", () => {
+		expect(
+			journalEntries("~~~~\n```\n~~~~\n- visible\n").map(({ text }) => text),
+		).toEqual(["visible"]);
+		expect(
+			journalEntries(
+				"````\n```\n- hidden\n```` trailing\n- hidden too\n````\n- visible\n",
+			).map(({ text }) => text),
+		).toEqual(["visible"]);
+	});
+
+	test("rotation between the current read and archive listing retains unreviewed entries", () => {
+		mkdirSync(join(root, "archive/journal"), { recursive: true });
+		writeFileSync(
+			join(root, "archive/journal/2026-08.md"),
+			"## 2026-08-31\n- boundary\n",
+		);
+		writeFileSync(join(root, "journal.md"), "## 2026-09-30\n- unreviewed\n");
+		let rotated = false;
+		const chain = journalChain(root, () => {
+			rotated = true;
+			writeFileSync(
+				join(root, "archive/journal/2026-09.md"),
+				"## 2026-09-30\n- unreviewed\n",
+			);
+			writeFileSync(join(root, "journal.md"), "# Journal\n");
+		});
+		expect(
+			chain.entries.filter(({ text }) => text === "unreviewed").length,
+		).toBeGreaterThanOrEqual(1);
+		expect(rotated).toBe(true);
+	});
+
+	test("walk skips state and unlock lock directories including temporary siblings", () => {
+		for (const name of [
+			".state.lock",
+			".state.lock.1.tmp",
+			".state.lock.1.uuid.gone",
+			".unlock.lock",
+			".unlock.lock.1.tmp",
+			".unlock.lock.1.uuid.gone",
+		]) {
+			mkdirSync(join(root, name));
+			writeFileSync(join(root, name, "hidden.md"), "hidden");
+		}
+		writeFileSync(join(root, "visible.md"), "visible");
+		expect(mdFiles(root)).toEqual([join(root, "visible.md")]);
+	});
+
+	test("walk skips files and directories removed between listing and inspection", () => {
+		mkdirSync(join(root, "gone"));
+		writeFileSync(join(root, "gone.md"), "gone");
+		writeFileSync(join(root, "visible.md"), "visible");
+		expect(
+			walk(
+				root,
+				(path) => path.endsWith(".md"),
+				[],
+				(path) => {
+					if (path.endsWith("gone") || path.endsWith("gone.md"))
+						rmSync(path, { recursive: true });
+				},
+			),
+		).toEqual([join(root, "visible.md")]);
+	});
+
+	test("journalChain ignores non-month Markdown files", () => {
+		mkdirSync(join(root, "archive/journal"), { recursive: true });
+		writeFileSync(join(root, "archive/journal/README.md"), "- ignored\n");
+		writeFileSync(
+			join(root, "archive/journal/2026-09.md"),
+			"## 2026-09-01\n- archived\n",
+		);
+		expect(journalChain(root).entries.map(({ text }) => text)).toEqual([
+			"archived",
+		]);
+	});
+});
+
+test("journal sections split only at dated headings outside fences", () => {
+	const text =
+		"preamble\n## 2026-09-30\n```\n## 2026-10-01\n```\n## 2026-10-02\n- keep\n";
+	const sections = journalSections(text);
+	expect(sections.days.map(({ date }) => date)).toEqual([
+		"2026-09-30",
+		"2026-10-02",
+	]);
+	expect(
+		sections.preamble + sections.days.map(({ body }) => body).join(""),
+	).toBe(text);
 });

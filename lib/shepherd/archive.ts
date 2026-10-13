@@ -15,9 +15,11 @@ import {
 	closedDate,
 	journalChain,
 	journalEntries,
+	journalFenceProblem,
 	journalSections,
 	read,
 	summaryLine,
+	symlinkComponent,
 } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
@@ -59,6 +61,7 @@ export type ArchivePlan = {
 	applied: boolean;
 	workspaces: ArchiveWorkspacePlan[];
 	rewrittenFiles: string[];
+	skippedRewrites?: { file: string; reason: string }[];
 };
 
 type ConfigSource = Config | ((workspace: Workspace) => Config);
@@ -77,6 +80,19 @@ function unsafeFile(path: string, display: string): string | undefined {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		return `${display} cannot be inspected`;
 	}
+}
+
+function unsafeComponent(state: string, file: string): string | undefined {
+	try {
+		const linked = symlinkComponent(state, file);
+		return linked ? `${linked} is a symlink` : undefined;
+	} catch {
+		return `${file} cannot be inspected`;
+	}
+}
+
+function unsafeDestination(state: string, file: string): string | undefined {
+	return unsafeComponent(state, file) ?? unsafeFile(join(state, file), file);
 }
 
 function journalMoves(workspace: Workspace, today: Date): JournalArchiveMove[] {
@@ -126,7 +142,7 @@ function buildJournalTexts(
 		const existing = built.get(move.to) ?? `# Journal ${move.month}\n\n`;
 		built.set(
 			move.to,
-			`${existing}${move.days.map((body) => body.trimEnd()).join("\n\n")}\n`,
+			`${existing}${existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n"}${move.days.map((body) => body.trimEnd()).join("\n\n")}\n`,
 		);
 	}
 	const journal = texts.get("journal.md");
@@ -187,6 +203,16 @@ function chainTexts(texts: ReadonlyMap<string, string>): string[] {
 	);
 }
 
+function simulatedFenceProblem(
+	texts: ReadonlyMap<string, string>,
+): string | undefined {
+	for (const [file, text] of texts) {
+		const problem = journalFenceProblem(text);
+		if (problem) return `${file} ${problem.reason}`;
+	}
+	return undefined;
+}
+
 function checkJournalSequence(state: string, moves: ArchiveMove[]): void {
 	const pending = moves.filter(
 		(move): move is JournalArchiveMove =>
@@ -201,7 +227,14 @@ function checkJournalSequence(state: string, moves: ArchiveMove[]): void {
 	const before = chainTexts(texts);
 	const accepted: JournalArchiveMove[] = [];
 	for (const move of pending) {
-		const after = chainTexts(buildJournalTexts(texts, [...accepted, move]));
+		const simulated = buildJournalTexts(texts, [...accepted, move]);
+		const fenceProblem = simulatedFenceProblem(simulated);
+		if (fenceProblem) {
+			move.status = "skipped";
+			move.detail = fenceProblem;
+			continue;
+		}
+		const after = chainTexts(simulated);
 		if (
 			before.length === after.length &&
 			before.every((text, i) => text === after[i])
@@ -286,8 +319,11 @@ export function planArchive(
 				...itemMoves(workspace, config.windows.doneDays, today),
 			];
 			for (const move of moves) {
-				if (move.kind !== "journal") continue;
-				const problem = unsafeFile(join(workspace.state, move.to), move.to);
+				const problem =
+					unsafeComponent(workspace.state, move.to) ??
+					(move.kind === "journal"
+						? unsafeFile(join(workspace.state, move.to), move.to)
+						: undefined);
 				if (problem) {
 					move.status = "skipped";
 					move.detail = problem;
@@ -296,10 +332,7 @@ export function planArchive(
 			const indexProblem = moves.some(
 				(move) => move.kind === "item" && move.status === "planned",
 			)
-				? unsafeFile(
-						join(workspace.state, "archive", "INDEX.md"),
-						"archive/INDEX.md",
-					)
+				? unsafeDestination(workspace.state, "archive/INDEX.md")
 				: undefined;
 			if (indexProblem) {
 				for (const move of moves) {
@@ -340,11 +373,17 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 		);
 		return;
 	}
+	const temporary = "journal.md.tmp";
+	const temporaryProblem = unsafeDestination(workspace.state, temporary);
+	if (temporaryProblem) {
+		skipJournalMoves(pending, temporaryProblem);
+		return;
+	}
 	const archive = join(workspace.state, "archive", "journal");
 	for (const move of pending) {
 		const target = join(workspace.state, move.to);
 		const problem =
-			unsafeFile(target, move.to) ??
+			unsafeDestination(workspace.state, move.to) ??
 			(existsSync(target) && !original.has(move.to)
 				? `${move.to} is missing from journal texts`
 				: undefined);
@@ -353,6 +392,11 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 	const accepted = pending.filter(({ status }) => status !== "skipped");
 	if (!accepted.length) return;
 	const texts = buildJournalTexts(original, accepted);
+	const fenceProblem = simulatedFenceProblem(texts);
+	if (fenceProblem) {
+		skipJournalMoves(accepted, fenceProblem);
+		return;
+	}
 	mkdirSync(archive, { recursive: true });
 	for (const move of accepted) {
 		const text = texts.get(move.to);
@@ -372,7 +416,11 @@ function applyJournalMoves(workspace: ArchiveWorkspacePlan): void {
 	const journal = texts.get("journal.md");
 	if (journal === undefined)
 		throw new Error("missing journal text for journal.md");
-	writeFileSync(join(workspace.state, "journal.md"), journal);
+	writeFileSync(join(workspace.state, temporary), journal);
+	renameSync(
+		join(workspace.state, temporary),
+		join(workspace.state, "journal.md"),
+	);
 }
 
 function applyItemMoves(workspace: ArchiveWorkspacePlan): void {
@@ -381,10 +429,7 @@ function applyItemMoves(workspace: ArchiveWorkspacePlan): void {
 			move.kind === "item" && move.status !== "skipped",
 	);
 	if (!pending.length) return;
-	const indexProblem = unsafeFile(
-		join(workspace.state, "archive", "INDEX.md"),
-		"archive/INDEX.md",
-	);
+	const indexProblem = unsafeDestination(workspace.state, "archive/INDEX.md");
 	if (indexProblem) {
 		for (const move of pending) {
 			move.status = "skipped";
@@ -398,6 +443,12 @@ function applyItemMoves(workspace: ArchiveWorkspacePlan): void {
 		if (move.kind !== "item" || move.status === "skipped") continue;
 		const source = join(workspace.state, move.from);
 		const target = join(workspace.state, move.to);
+		const problem = unsafeComponent(workspace.state, move.to);
+		if (problem) {
+			move.status = "skipped";
+			move.detail = problem;
+			continue;
+		}
 		if (existsSync(target)) {
 			move.status = "skipped";
 			move.detail = `${move.to} already exists`;
@@ -456,19 +507,23 @@ export function applyArchive(
 				: [],
 		),
 	);
+	const skippedRewrites: { file: string; reason: string }[] = [];
 	applied.rewrittenFiles = rewriteArchiveReferences(
 		tree.workspaces,
 		moves,
 		home,
+		(file, reason) => skippedRewrites.push({ file, reason }),
 	);
+	if (skippedRewrites.length) applied.skippedRewrites = skippedRewrites;
 	return applied;
 }
 
 /** Exit 1 exactly when at least one operation could not be performed. */
 export function archiveExitCode(plan: ArchivePlan): 0 | 1 {
-	return plan.workspaces.some((workspace) =>
-		workspace.moves.some(({ status }) => status === "skipped"),
-	)
+	return plan.skippedRewrites?.length ||
+		plan.workspaces.some((workspace) =>
+			workspace.moves.some(({ status }) => status === "skipped"),
+		)
 		? 1
 		: 0;
 }
@@ -519,6 +574,9 @@ export function renderArchive(plan: ArchivePlan): string {
 			`Rewrote references in ${plan.rewrittenFiles.length} file(s):`,
 			...plan.rewrittenFiles.map((file) => `  ${file}`),
 		);
+	}
+	for (const { file, reason } of plan.skippedRewrites ?? []) {
+		lines.push(`  skip rewrite ${file}: ${reason}`);
 	}
 	return lines.join("\n");
 }

@@ -9,7 +9,7 @@ import { dayOf } from "./dates";
 import { renderTemplate, TEMPLATES } from "./guides";
 import { LockError, type LockOptions, withStateLock } from "./lock";
 import type { ToolEnv } from "./sessions";
-import { journalChain, proseLines } from "./text";
+import { journalChain, journalFenceProblem, proseLines } from "./text";
 
 export type AppendedEntry = {
 	line: number;
@@ -52,6 +52,8 @@ export async function appendEntries(
 		const appended: AppendedEntry[] = [];
 		for (const text of texts) {
 			const before = readJournal(state, toolEnv);
+			const fence = journalFenceProblem(before);
+			if (fence) throw new JournalPathError(`journal.md ${fence.reason}`);
 			const now = toolEnv.clock();
 			const day = dayOf(now);
 			const pad = (value: number) => String(value).padStart(2, "0");

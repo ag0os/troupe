@@ -364,7 +364,7 @@ async function runCheck(
 		: result(renderFindings(reports, flags.all === true), total.error ? 1 : 0);
 }
 
-function archiveJson(plan: ReturnType<typeof planArchive>) {
+export function archiveJson(plan: ReturnType<typeof planArchive>) {
 	return {
 		applied: plan.applied,
 		workspaces: plan.workspaces.map((workspace) => ({
@@ -378,6 +378,7 @@ function archiveJson(plan: ReturnType<typeof planArchive>) {
 			})),
 		})),
 		rewrites: plan.rewrittenFiles,
+		skippedRewrites: plan.skippedRewrites ?? [],
 	};
 }
 
@@ -542,7 +543,10 @@ export async function runTool(
 				flags.json === true,
 				{ lock: archiveLockOptions },
 			);
-			return journal;
+			return {
+				...journal,
+				...result(journal.text, journal.code, journal.stream),
+			};
 		}
 		if (command === "checkpoint") {
 			const checkpoint = await runCheckpoint(

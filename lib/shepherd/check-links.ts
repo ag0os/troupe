@@ -140,7 +140,14 @@ export function checkLinks(
 
 	for (const file of files) {
 		const level: FindingLevel = doneStatus.has(file) ? "info" : "error";
-		for (const { n, line } of proseLines(read(file))) {
+		let text: string;
+		try {
+			text = read(file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
+		for (const { n, line } of proseLines(text)) {
 			for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
 				const source = match[1];
 				if (!source) continue;

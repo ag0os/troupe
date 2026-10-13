@@ -252,7 +252,7 @@ for (const live of ["", "## 2026-10-09\n## 2026-10-10\n"])
 	test(`lost boundary with ${live ? "empty headings" : "rotated journal"} uses the last two archived sections`, () => {
 		const f = fixture();
 		f.lost();
-		f.put("archive/journal/1.md", `## 2026-10-05\n- older\n${journal}`);
+		f.put("archive/journal/2026-09.md", `## 2026-10-05\n- older\n${journal}`);
 		f.put("journal.md", live);
 		const held = f.capture();
 		expect(held.range).toMatchObject({
@@ -272,8 +272,8 @@ for (const live of ["", "## 2026-10-09\n## 2026-10-10\n"])
 	});
 test("empty latest archive is skipped", () => {
 	const f = fixture({
-		"archive/journal/1.md": journal,
-		"archive/journal/2.md": "## 2026-10-09\n",
+		"archive/journal/2026-09.md": journal,
+		"archive/journal/2026-10.md": "## 2026-10-09\n",
 		"journal.md": "",
 	});
 	const held = f.capture();
@@ -291,7 +291,7 @@ test("duplicate date headings retain separate fallback sections", () => {
 });
 test("fallback beginning in journal leaves prior archive and orphans uncertified", () => {
 	const f = fixture({
-		"archive/journal/1.md": "## 2026-10-05\n- old\n",
+		"archive/journal/2026-09.md": "## 2026-10-05\n- old\n",
 		"journal.md": `- orphan\n${journal}`,
 	});
 	const held = f.capture();
@@ -307,7 +307,7 @@ for (const boundary of ["lost", "valid"] as const)
 		const f = fixture();
 		if (boundary === "lost") f.lost();
 		else f.apply();
-		f.put("archive/journal/1.md", journal);
+		f.put("archive/journal/2026-09.md", journal);
 		f.put("journal.md", "- orphan\n## 2026-10-08\n- C\n");
 		const held = f.capture();
 		expect(held.range.ok).toBe(false);
@@ -539,7 +539,7 @@ test("repairing an invalid baseline preserves the referenced snapshot until rena
 test("lost boundary with archived A and B followed only by orphan O refuses", () => {
 	const f = fixture();
 	f.lost();
-	f.put("archive/journal/1.md", journal);
+	f.put("archive/journal/2026-09.md", journal);
 	f.put("journal.md", "- O\n");
 	const held = f.capture();
 	expect(held.range).toMatchObject({ ok: false });
@@ -570,7 +570,7 @@ test("commit never replaces a referenced snapshot even with an unexpected snapsh
 
 test("section identity survives copied, re-read and extended chains", () => {
 	const f = fixture({
-		"archive/journal/1.md": "## 2026-10-05\n- old\n",
+		"archive/journal/2026-09.md": "## 2026-10-05\n- old\n",
 		"journal.md": "## 2026-10-07\n- A\n## 2026-10-07\n- B\n",
 	});
 	const held = f.capture();
@@ -596,7 +596,7 @@ test("section identity survives copied, re-read and extended chains", () => {
 });
 test("fenced heading-like text leaves assessment and capture fallback in agreement", () => {
 	const f = fixture({
-		"archive/journal/1.md": "## 2026-10-05\n- old\n",
+		"archive/journal/2026-09.md": "## 2026-10-05\n- old\n",
 		"journal.md":
 			"## 2026-10-07\n- A\n```\n## 2026-10-08\n```\n- B\n## 2026-10-09\n- C\n",
 	});

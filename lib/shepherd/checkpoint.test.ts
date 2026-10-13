@@ -216,14 +216,14 @@ describe("checkpoint journal assessment", () => {
 	test("rotation preserves the boundary and all rotated unreviewed entries", () => {
 		const f = fixture();
 		f.certify();
-		f.put("archive/journal/2026-10-07.md", `${original}- 11:00 third\n`);
-		f.put("archive/journal/2026-10-08.md", "## 2026-10-08\n- 12:00 fourth\n");
+		f.put("archive/journal/2026-09.md", `${original}- 11:00 third\n`);
+		f.put("archive/journal/2026-10.md", "## 2026-10-08\n- 12:00 fourth\n");
 		f.put("journal.md", "## 2026-10-09\n- 13:00 fifth\n");
 		const a = f.assess();
 		expect(a.boundary).toMatchObject({
 			state: "found",
 			position: 2,
-			file: "archive/journal/2026-10-07.md",
+			file: "archive/journal/2026-09.md",
 		});
 		expect(a.unreviewed.entries.map((e) => e.text)).toEqual([
 			"11:00 third",
@@ -257,20 +257,20 @@ describe("checkpoint journal assessment", () => {
 	});
 	test("empty current headings fall back to archived entries", () => {
 		const f = fixture({
-			"archive/journal/old.md": original,
+			"archive/journal/2026-07.md": original,
 			"journal.md": "## 2026-10-08\n## 2026-10-09\n",
 		});
 		const a = f.assess();
 		expect(a.unreviewed.sections?.map((s) => s.file)).toEqual([
-			"archive/journal/old.md",
-			"archive/journal/old.md",
+			"archive/journal/2026-07.md",
+			"archive/journal/2026-07.md",
 		]);
 		expect(a.unreviewed.entries).toHaveLength(2);
 	});
 	test("an empty latest archive falls back to the preceding archive", () => {
 		const f = fixture({
-			"archive/journal/1.md": original,
-			"archive/journal/2.md": "## 2026-10-08\n",
+			"archive/journal/2026-09.md": original,
+			"archive/journal/2026-10.md": "## 2026-10-08\n",
 			"journal.md": "",
 		});
 		expect(f.assess().unreviewed.entries).toHaveLength(2);
@@ -295,20 +295,20 @@ describe("checkpoint journal assessment", () => {
 	});
 	test("orphans outside fallback range remain reported", () => {
 		const f = fixture({
-			"archive/journal/1.md": "- orphan\n## 2026-10-05\n- old\n",
+			"archive/journal/2026-09.md": "- orphan\n## 2026-10-05\n- old\n",
 		});
 		const a = f.assess();
 		expect(a.orphans).toHaveLength(1);
 		expect(a.unreviewed.entries.some((e) => e.day === undefined)).toBe(false);
 		expect(a.reasons).toContain(
-			"1 entries without a heading (archive/journal/1.md:1)",
+			"1 entries without a heading (archive/journal/2026-09.md:1)",
 		);
 		expect(a.uncertified).toBe(2);
 	});
 	test("an orphan after the boundary requires reconcile", () => {
 		const f = fixture();
 		f.certify();
-		f.put("archive/journal/1.md", original);
+		f.put("archive/journal/2026-09.md", original);
 		f.put("journal.md", "- orphan\n");
 		const a = f.assess();
 		expect(a.boundary.state).toBe("found");
@@ -449,10 +449,10 @@ describe("checkpoint records and verdict", () => {
 			c.journal.from = "lost";
 			c.evidence["memories/copy.md"] = contentHash("copy");
 		});
-		f.put("archive/journal/0.md", "- orphan\n");
-		f.put("archive/journal/1.md", "");
-		f.remove("archive/journal/1.md");
-		mkdirSync(join(f.workspace.state, "archive/journal/1.md"));
+		f.put("archive/journal/2026-08.md", "- orphan\n");
+		f.put("archive/journal/2026-09.md", "");
+		f.remove("archive/journal/2026-09.md");
+		mkdirSync(join(f.workspace.state, "archive/journal/2026-09.md"));
 		f.put("pending.md", "new");
 		f.put("memories/copy.md", "edited");
 		f.put("CURRENT.md", "# Current\n");

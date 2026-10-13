@@ -314,3 +314,14 @@ test("local time crosses midnight while waiting for the lock in a TZ child", asy
 		headingAdded: true,
 	});
 });
+
+test("a locked batch refuses an unclosed fence before appending any entry", async () => {
+	const before = "## 2026-10-05\n- 12:00 visible\n````\n```\noutput\n";
+	const { state, path, env } = fixture(before);
+	await expect(
+		appendEntries(state, ["first", "second"], env, { locked: true }),
+	).rejects.toThrow(
+		"journal.md fence opened at line 3 is never closed; close or remove it",
+	);
+	expect(readFileSync(path, "utf8")).toBe(before);
+});

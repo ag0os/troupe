@@ -403,13 +403,15 @@ test("evidence edited after validation records held hash and next assessment los
 
 test("dry run includes every archived range entry and whole changed or appeared file", async () => {
 	const f = fixture({
-		"archive/journal/1.md": "## 2026-10-05\n- archived full entry\n",
+		"archive/journal/2026-09.md": "## 2026-10-05\n- archived full entry\n",
 		"journal.md": "## 2026-10-06\n- live full entry\n",
 		"work/todo/item/STATUS.md": "old status\n",
 	});
 	const dry = await f.dry();
 	expect(dry.code).toBe(0);
-	expect(dry.text).toContain("  - archive/journal/1.md:2 archived full entry");
+	expect(dry.text).toContain(
+		"  - archive/journal/2026-09.md:2 archived full entry",
+	);
 	expect(dry.text).toContain("  - 2 live full entry");
 	expect(dry.text).toContain(`--- CURRENT.md ---\n${current.trimEnd()}`);
 	expect(existsSync(join(f.workspace.state, ".state.lock"))).toBe(false);
@@ -575,7 +577,7 @@ console.log((await runCheckpoint(workspace, env, { apply: true, token, json: tru
 test("refused range omits prior certified history and retains the uncertified count", async () => {
 	const f = fixture();
 	await f.apply();
-	f.put("archive/journal/1.md", journal);
+	f.put("archive/journal/2026-09.md", journal);
 	f.put("journal.md", "- orphan\n## 2026-10-08\n- new entry\n");
 	const result = await f.dry(true);
 	expect(result.code).toBe(1);

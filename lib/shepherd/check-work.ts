@@ -7,6 +7,7 @@ import { daysBetween, localDate, monthOf } from "./dates";
 import {
 	closedDate,
 	frontmatter,
+	journalChain,
 	journalDuplicateHeadings,
 	journalMisorderedHeadings,
 	journalOrphans,
@@ -194,6 +195,18 @@ export function checkWork(
 				}
 			}
 		}
+	}
+
+	for (const { file, reason, line } of journalChain(workspace.state)
+		.unreadable) {
+		if (line !== undefined)
+			add(
+				"warn",
+				"journal-fence-unclosed",
+				join(workspace.state, file),
+				reason,
+				line,
+			);
 	}
 
 	const journal = join(workspace.state, "journal.md");

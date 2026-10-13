@@ -70,8 +70,10 @@ function fencedLines(text: string): { text: string; fenced: boolean }[] {
 		const marker = text.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
 		const wasFenced = fence !== undefined;
 		if (marker?.[1] !== undefined) {
-			if (fence === undefined) fence = marker[1];
-			else if (
+			if (fence === undefined) {
+				if (marker[1][0] !== "`" || !marker[2]?.includes("`"))
+					fence = marker[1];
+			} else if (
 				marker[1][0] === fence[0] &&
 				marker[1].length >= fence.length &&
 				!marker[2]?.trim()

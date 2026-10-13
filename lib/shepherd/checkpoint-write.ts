@@ -27,7 +27,7 @@ import {
 	readItemStates,
 } from "./current-prev";
 import type { ToolEnv } from "./sessions";
-import { type ChainEntry, journalEntries } from "./text";
+import { type ChainEntry, journalChain } from "./text";
 import type { Workspace } from "./tree";
 import { findEnclosingWorkspace, STATE_DIR } from "./workspace";
 
@@ -168,37 +168,16 @@ export function captureState(
 		if (hash?.startsWith("unsafe:"))
 			unsafe.push({ path, reason: hash.slice(7) });
 	}
-	const chain: ChainEntry[] = [];
-	const unreadable: HeldState["unreadable"] = [];
-	const archive = join(state, "archive/journal");
-	let archives: string[] = [];
-	try {
-		if (lstatSync(archive).isSymbolicLink()) throw new Error("is a symlink");
-		archives = readdirSync(archive)
-			.filter((file) => file.endsWith(".md"))
-			.sort()
-			.map((file) => `archive/journal/${file}`);
-	} catch (error) {
-		if (!absent(error))
-			unreadable.push({ file: "archive/journal", reason: message(error) });
-	}
-	let previousId = "root";
-	for (const file of [...archives, "journal.md"]) {
-		const held = read(join(state, file));
-		if (held.bytes === null) {
-			if (held.hash !== null || file !== "journal.md")
-				unreadable.push({ file, reason: held.hash?.slice(7) ?? "is missing" });
-			continue;
-		}
-		const text = Buffer.from(held.bytes).toString("utf8");
-		const entries = journalEntries(text, previousId).map((entry) => ({
-			...entry,
-			file,
-		}));
-
-		chain.push(...entries);
-		previousId = entries.at(-1)?.id ?? previousId;
-	}
+	const { entries: chain, unreadable } = journalChain(
+		state,
+		undefined,
+		(path) => {
+			const held = read(path);
+			if (held.bytes === null)
+				throw new Error(held.hash?.slice(7) ?? "is missing");
+			return Buffer.from(held.bytes).toString("utf8");
+		},
+	);
 	const destinationBytes: HeldState["destinationBytes"] = {};
 	const destinations: HeldState["destinations"] = {};
 	function destination(key: string, path = join(state, key)) {

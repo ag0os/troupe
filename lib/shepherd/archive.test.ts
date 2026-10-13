@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import {
 	existsSync,
 	lstatSync,
@@ -25,7 +26,9 @@ import {
 	DEFAULT_WINDOWS,
 } from "./config";
 import { makeTree } from "./test-support";
+import * as text from "./text";
 import { journalChain } from "./text";
+import { archiveJson } from "./tool";
 import { discoverTree, selectWorkspaces } from "./tree";
 
 const cleanups: Array<() => void> = [];
@@ -648,3 +651,157 @@ test("renderArchive shows dry-run and applied output", () => {
 		"\nroot: 1 move(s)\n  journal: 1 day(s) of 2026-09 -> archive/journal/2026-09.md",
 	);
 });
+
+test("rotation separates an appended heading from the existing final bullet", () => {
+	const { workspace, tree } = fixture({
+		"root/.shepherd/archive/journal/2026-09.md":
+			"## 2026-09-01\n- 09:00 first\n",
+		"root/.shepherd/journal.md": "## 2026-09-30\n- 10:00 next\n",
+	});
+	const applied = applyArchive(
+		planArchive([workspace], config(), new Date(2026, 9, 1)),
+		tree,
+	);
+	expect(applied.workspaces[0]?.moves[0]?.status).toBe("moved");
+	expect(
+		readFileSync(join(workspace.state, "archive/journal/2026-09.md"), "utf8"),
+	).toContain("- 09:00 first\n\n## 2026-09-30\n");
+});
+
+test("item archive refuses a symlinked parent destination", () => {
+	const { workspace, tree, root } = fixture({
+		"root/.shepherd/work/done/release/STATUS.md":
+			"---\nclosed: 2026-08-01\n---\n# release: Shipped\n",
+	});
+	const outside = join(root, "outside");
+	mkdirSync(outside);
+	symlinkSync(outside, join(workspace.state, "archive"));
+	const applied = applyArchive(
+		planArchive([workspace], config(), new Date(2026, 9, 1)),
+		tree,
+	);
+	expect(applied.workspaces[0]?.moves[0]).toMatchObject({
+		status: "skipped",
+		detail: "archive is a symlink",
+	});
+	expect(readdirSync(outside)).toEqual([]);
+	expect(existsSync(join(workspace.state, "work/done/release/STATUS.md"))).toBe(
+		true,
+	);
+});
+
+test("rotation keeps a fenced dated heading with its enclosing section", () => {
+	const journal =
+		"## 2026-09-30\n- old\n```\n## 2026-10-01\nexample\n```\n## 2026-10-02\n- keep\n";
+	const { workspace, tree } = fixture({ "root/.shepherd/journal.md": journal });
+	const applied = applyArchive(
+		planArchive([workspace], config(), new Date(2026, 9, 5)),
+		tree,
+	);
+	expect(journalChain(workspace.state).unreadable).toEqual([]);
+	expect(
+		readFileSync(join(workspace.state, "archive/journal/2026-09.md"), "utf8"),
+	).toContain("```\n## 2026-10-01\nexample\n```");
+	expect(applied.workspaces[0]?.moves[0]?.status).toBe("moved");
+});
+
+test("rotation simulation refuses a proposed section with an unclosed fence", () => {
+	const { workspace } = fixture({
+		"root/.shepherd/journal.md": "## 2026-09-30\n- old\n",
+	});
+	const original = text.journalSections;
+	const parser = spyOn(text, "journalSections").mockImplementationOnce(
+		(input) => {
+			const parsed = original(input);
+			const day = parsed.days[0];
+			if (!day) throw new Error("missing day section");
+			day.body += "```\n";
+			return parsed;
+		},
+	);
+	try {
+		const plan = planArchive([workspace], config(), new Date(2026, 9, 5));
+		expect(plan.workspaces[0]?.moves[0]?.status).toBe("skipped");
+		expect(plan.workspaces[0]?.moves[0]?.detail).toContain(
+			"fence opened at line",
+		);
+	} finally {
+		parser.mockRestore();
+	}
+});
+
+test("apply refuses a simulated fence problem before either rotation write", () => {
+	const journal = "## 2026-09-30\n- old\n";
+	const { workspace, tree } = fixture({ "root/.shepherd/journal.md": journal });
+	const plan = planArchive([workspace], config(), new Date(2026, 9, 5));
+	const move = plan.workspaces[0]?.moves[0];
+	if (move?.kind !== "journal") throw new Error("expected journal move");
+	move.days[0] += "```\n";
+	const applied = applyArchive(plan, tree);
+	expect(applied.workspaces[0]?.moves[0]?.status).toBe("skipped");
+	expect(applied.workspaces[0]?.moves[0]?.detail).toContain(
+		"fence opened at line",
+	);
+	expect(readFileSync(join(workspace.state, "journal.md"), "utf8")).toBe(
+		journal,
+	);
+	expect(existsSync(join(workspace.state, "archive"))).toBe(false);
+});
+
+test("cross-workspace reference rewrites skip a symlinked archive with the reason", () => {
+	const { root, workspace, tree } = fixture({
+		"root/child/.shepherd/charter.md": "Child",
+		"root/child/.shepherd/work/done/release/STATUS.md":
+			"---\nclosed: 2026-08-01\n---\n# release: Shipped\n",
+		"outside/INDEX.md": "child/.shepherd/work/done/release\n",
+	});
+	symlinkSync(join(root, "outside"), join(workspace.state, "archive"));
+	const child = tree.workspaces.find(({ name }) => name === "child");
+	if (!child) throw new Error("missing child");
+	const before = readFileSync(join(root, "outside/INDEX.md"), "utf8");
+	const applied = applyArchive(
+		planArchive([child], config(), new Date(2026, 9, 5)),
+		tree,
+	);
+	expect(readFileSync(join(root, "outside/INDEX.md"), "utf8")).toBe(before);
+	expect(applied.workspaces[0]?.moves[0]?.status).toBe("moved");
+	expect(renderArchive(applied)).toContain("archive is a symlink");
+	expect(archiveJson(applied).skippedRewrites).toEqual([
+		expect.objectContaining({ reason: "archive is a symlink" }),
+	]);
+});
+
+for (const phase of ["plan", "apply"] as const) {
+	test(`archive ${phase} skips component inspection errors without throwing`, () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/work/done/release/STATUS.md":
+				"---\nclosed: 2026-08-01\n---\n# release: Shipped\n",
+		});
+		mkdirSync(join(workspace.state, "archive"));
+		const plan =
+			phase === "apply"
+				? planArchive([workspace], config(), new Date(2026, 9, 5))
+				: undefined;
+		const original = fs.lstatSync;
+		const stat = spyOn(fs, "lstatSync").mockImplementation(((
+			...args: Parameters<typeof fs.lstatSync>
+		) => {
+			const [path] = args;
+			if (String(path) === join(workspace.state, "archive/2026-08"))
+				throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+			return Reflect.apply(original, fs, args);
+		}) as typeof fs.lstatSync);
+		try {
+			const result = plan
+				? applyArchive(plan, tree)
+				: planArchive([workspace], config(), new Date(2026, 9, 5));
+			expect(result.workspaces[0]?.moves[0]?.status).toBe("skipped");
+			expect(result.workspaces[0]?.moves[0]?.detail).toContain(
+				"cannot be inspected",
+			);
+			expect(existsSync(join(workspace.state, "work/done/release"))).toBe(true);
+		} finally {
+			stat.mockRestore();
+		}
+	});
+}

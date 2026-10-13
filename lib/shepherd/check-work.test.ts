@@ -455,3 +455,24 @@ test("report-no-discoveries accepts closing hashes and trailing whitespace", () 
 			.map(({ file }) => file),
 	).toEqual(["work/todo/release/not-heading-report.md"]);
 });
+
+test("warns about unclosed fences in current and archived journals with opening lines", () => {
+	const { workspace } = fixture({
+		"root/.shepherd/journal.md": "# Journal\n## 2026-10-05\n```\noutput\n",
+		"root/.shepherd/archive/journal/2026-09.md":
+			"# Journal\n~~~~\n```\noutput\n",
+	});
+	const findings = checkWork(workspace, config(), TODAY).filter(
+		({ code }) => code === "journal-fence-unclosed",
+	);
+	expect(
+		findings.map(({ file, line, level }) => ({ file, line, level })),
+	).toEqual([
+		{ file: "archive/journal/2026-09.md", line: 2, level: "warn" },
+		{ file: "journal.md", line: 3, level: "warn" },
+	]);
+	for (const finding of findings)
+		expect(finding.message).toContain(
+			`fence opened at line ${finding.line} is never closed; close or remove it`,
+		);
+});

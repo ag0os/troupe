@@ -492,6 +492,7 @@ describe("runTool output", () => {
 				},
 			],
 			rewrites: [],
+			skippedRewrites: [],
 		});
 		expect(
 			existsSync(join(cwd, ".shepherd/archive/journal/2026-09.md")),
@@ -1227,17 +1228,24 @@ test("stamped journal JSON remains parseable and carries the notice separately",
 	});
 	expect(JSON.parse(output.text).text).toEndWith(" A discovery");
 	expect(output.text).not.toContain("time comes from the clock");
-	expect(output.text.endsWith("\n")).toBe(false);
+	expect(output.text.endsWith("\n")).toBe(true);
 });
 
-test("a refused journal append preserves its exact text and separate notice", async () => {
+test("a refused journal append ends with a newline and preserves its separate notice", async () => {
 	const { env } = fixture();
 	expect(await runTool(["journal", "09:30 UTC:"], { json: true }, env)).toEqual(
 		{
 			code: 1,
 			stream: "stderr",
-			text: "nothing to append",
+			text: "nothing to append\n",
 			notice: "time comes from the clock",
 		},
 	);
+});
+
+test("journal human output ends with a newline", async () => {
+	const { env } = fixture();
+	const output = await runTool(["journal", "recorded"], {}, env);
+	expect(output.code).toBe(0);
+	expect(output.text.endsWith("\n")).toBe(true);
 });

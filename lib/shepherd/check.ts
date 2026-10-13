@@ -35,11 +35,24 @@ export type Finding = {
 
 function symlinksUnder(dir: string): string[] {
 	const links: string[] = [];
-	for (const entry of readdirSync(dir)) {
+	let entries: string[];
+	try {
+		entries = readdirSync(dir);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return links;
+		throw error;
+	}
+	for (const entry of entries) {
+		if (entry.startsWith(".state.lock") || entry.startsWith(".unlock.lock"))
+			continue;
 		const path = join(dir, entry);
-		const stat = lstatSync(path);
-		if (stat.isSymbolicLink()) links.push(path);
-		else if (stat.isDirectory()) links.push(...symlinksUnder(path));
+		try {
+			const stat = lstatSync(path);
+			if (stat.isSymbolicLink()) links.push(path);
+			else if (stat.isDirectory()) links.push(...symlinksUnder(path));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
 	}
 	return links;
 }
