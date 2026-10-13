@@ -274,23 +274,23 @@ export function loadConfig({
 	return config;
 }
 
-/** Exact model, recognized family, then the conservative unknown-model default. */
+/** Exact model, recognized family, known backend, then the fallback. */
 export function handoffCeiling(
 	config: Pick<Config, "handoffCeilings">,
-	backend: "claude" | "codex",
+	backend: string,
 	model?: string,
 ): number {
+	model ||= undefined;
 	const ceilings = config.handoffCeilings;
 	if (model !== undefined && Object.hasOwn(ceilings, model)) {
 		return ceilings[model] as number;
 	}
-	const family =
-		model === undefined
-			? backend
-			: /^(claude|opus|sonnet|haiku)(-|$)/.test(model)
-				? "claude"
-				: /^(gpt|codex)(-|$)/.test(model)
-					? "codex"
-					: "default";
+	const family = /^(claude|opus|sonnet|haiku)(-|$)/.test(model ?? "")
+		? "claude"
+		: /^(gpt|codex)(-|$)/.test(model ?? "")
+			? "codex"
+			: backend === "claude" || backend === "codex"
+				? backend
+				: "default";
 	return ceilings[family] ?? DEFAULT_HANDOFF_CEILINGS[family];
 }

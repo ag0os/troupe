@@ -62,12 +62,17 @@ export function modelHeaderLine(
 	model?: string,
 	keepsConversation = false,
 ): string {
+	model ||= undefined;
+	const overrides = Object.entries(config.handoffCeilings)
+		.filter(([key]) => !["claude", "codex", "default"].includes(key))
+		.map(([key, value]) => `${key} ${value}%`)
+		.join(", ");
 	const label =
 		model ??
 		(keepsConversation
 			? "saved conversation (unknown)"
 			: "backend default (unknown)");
-	return `- Model: ${label}; handoff ceiling: ${handoffCeiling(config, backend, model)}% of context window`;
+	return `- Model: ${label}; handoff ceiling: ${handoffCeiling(config, backend, model)}% of context window; delegates: Claude ${handoffCeiling(config, "claude")}%, Codex ${handoffCeiling(config, "codex")}%, other backends ${handoffCeiling(config, "other")}%${overrides ? `; model overrides: ${overrides}` : ""}`;
 }
 
 export function composeFragments(
@@ -126,9 +131,9 @@ export function composeFragments(
 	];
 }
 
-/** The composed Claude system prompt's word count for a workspace. */
+/** Estimate the default Claude system prompt for a workspace. */
 export function promptWords(dir: string, now: Date = new Date()): number {
-	// The default-model header has the same word count for any percentage.
+	// Model flags and configured delegate overrides can change this default estimate.
 	const config = { handoffCeilings: DEFAULT_HANDOFF_CEILINGS };
 	const name = defaultSessionName(dir, now, undefined, false);
 	return words(

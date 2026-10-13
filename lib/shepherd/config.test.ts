@@ -6,6 +6,7 @@ import {
 	DEFAULT_MARKS,
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
+	handoffCeiling,
 	loadConfig,
 	splitConfigProblems,
 } from "./config";
@@ -364,5 +365,39 @@ describe("handoff ceilings", () => {
 				expect(config.marks.current).toBe(DEFAULT_MARKS.current);
 			});
 		}
+	}
+});
+
+test("handoffCeiling uses exact entries, family boundaries, backend and default", () => {
+	const config = {
+		handoffCeilings: { claude: 48, codex: 88, default: 55, "gpt-5": 91 },
+	};
+	for (const [backend, model, expected] of [
+		["claude", "gpt-5", 91],
+		["claude", "gpt-4", 88],
+		["codex", "claude-opus", 48],
+		["other", "claude", 48],
+		["other", "opus", 48],
+		["other", "sonnet-latest", 48],
+		["other", "haiku", 48],
+		["other", "gpt", 88],
+		["other", "codex-mini", 88],
+		["other", "gpt4", 55],
+		["other", "claudette", 55],
+		["claude", "gpt4", 48],
+		["codex", "claudette", 88],
+		["codex", "o3", 88],
+		["codex", "o4-mini", 88],
+		["other", "o3", 55],
+		["claude", undefined, 48],
+		["codex", undefined, 88],
+		["other", undefined, 55],
+		["codex", "", 88],
+	] as const) {
+		expect({
+			backend,
+			model,
+			ceiling: handoffCeiling(config, backend, model),
+		}).toEqual({ backend, model, ceiling: expected });
 	}
 });

@@ -49,6 +49,7 @@ import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
 import {
 	codexDefaults,
 	passthroughModelToken,
+	passthroughModelValue,
 } from "../lib/shepherd/codex-defaults";
 import { composeFragments, modelHeaderLine } from "../lib/shepherd/compose";
 import {
@@ -265,7 +266,7 @@ export function prepare(
 		};
 	}
 	const passthrough = ctx.passthrough;
-	const passthroughModel = passthroughModelToken(passthrough);
+	const passthroughModel = passthroughModelToken(passthrough, ctx.backend);
 	if (ctx.modelFromFlag && passthroughModel) {
 		return {
 			exit: {
@@ -290,11 +291,7 @@ export function prepare(
 			exit: { message: `${defaults.error}\n`, code: 2, stream: "stderr" },
 		};
 	}
-	const tailModel = passthroughModel?.startsWith("--model=")
-		? passthroughModel.slice("--model=".length)
-		: passthroughModel
-			? passthrough[passthrough.indexOf(passthroughModel) + 1]
-			: undefined;
+	const tailModel = passthroughModelValue(passthrough, ctx.backend);
 	const model = ctx.modelFromFlag
 		? ctx.model
 		: (tailModel ?? defaults?.model ?? ctx.model);

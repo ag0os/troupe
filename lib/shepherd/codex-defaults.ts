@@ -18,14 +18,43 @@ function backendOptions(passthrough: readonly string[]): readonly string[] {
 	return end === -1 ? passthrough : passthrough.slice(0, end);
 }
 
-/** The first passthrough token that gives the backend a model. */
+/** Model flags, then the last Codex model assignment, before the separator. */
 export function passthroughModelToken(
 	passthrough: readonly string[],
+	backend: "claude" | "codex" = "codex",
 ): string | undefined {
-	return backendOptions(passthrough).find(
-		(token) =>
-			token === "-m" || token === "--model" || token.startsWith("--model="),
+	const options = backendOptions(passthrough);
+	return (
+		options.find(
+			(token, index) =>
+				((token === "-m" || token === "--model") &&
+					Boolean(options[index + 1])) ||
+				(token.startsWith("--model=") && token !== "--model="),
+		) ??
+		(backend === "codex"
+			? options.findLast(
+					(token, index) =>
+						token.startsWith("model=") &&
+						["-c", "--config"].includes(options[index - 1] ?? ""),
+				)
+			: undefined)
 	);
+}
+
+/** Model flags take precedence over Codex configuration assignments. */
+export function passthroughModelValue(
+	passthrough: readonly string[],
+	backend: "claude" | "codex",
+): string | undefined {
+	const token = passthroughModelToken(passthrough, backend);
+	const value = token?.startsWith("model=")
+		? token.slice("model=".length).replace(/^"(.*)"$/, "$1")
+		: token?.startsWith("--model=")
+			? token.slice("--model=".length)
+			: token
+				? backendOptions(passthrough)[passthrough.indexOf(token) + 1]
+				: undefined;
+	return value || undefined;
 }
 
 function hasPassthroughEffort(passthrough: readonly string[]): boolean {
