@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import {
 	existsSync,
@@ -9,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { checkWorkspace } from "./check";
 import { assessCheckpoint, readCheckpoint } from "./checkpoint";
 import { type CheckpointHooks, runCheckpoint } from "./checkpoint-command";
 import {
@@ -16,10 +18,13 @@ import {
 	commitCheckpoint,
 	nextCheckpoint,
 } from "./checkpoint-write";
+import { loadConfig } from "./config";
 import { contentHash } from "./current-prev";
 import { appendEntries } from "./journal";
+import { runStart } from "./start";
 import { fakeClock, fakeToolEnv, makeTree } from "./test-support";
 import { journalChain } from "./text";
+import { discoverTree } from "./tree";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -83,7 +88,7 @@ function fixture(files: Record<string, string> = {}) {
 }
 
 for (const dropped of ["none", "accounted", "unaccounted"] as const)
-	test(`dry run suggests one safe apply command with session for ${dropped} dropped lines`, async () => {
+	test(`dry run prints an apply command requiring placeholder replacement for ${dropped} dropped lines`, async () => {
 		const f = fixture();
 		await f.apply();
 		if (dropped !== "none") {
@@ -94,33 +99,30 @@ for (const dropped of ["none", "accounted", "unaccounted"] as const)
 		const dry = await f.dry();
 		const facts = JSON.parse((await f.dry(true)).text);
 		const command = dry.text.split("then: ").at(-1) ?? "";
-		const args = [
-			"tool",
-			"checkpoint",
-			"--apply",
-			"--token",
-			facts.token,
-			"--session",
-			"YOUR_SESSION_NAME",
-			...(dropped === "unaccounted" ? ["--accept-dropped", "REASON"] : []),
-		];
 		expect(dry.code).toBe(0);
 		expect(facts.apply).toBe(command);
 		expect(command).toBe(
-			`shepherd tool checkpoint --apply --token ${facts.token} --session YOUR_SESSION_NAME${dropped === "unaccounted" ? ' --accept-dropped "REASON"' : ""}`,
+			`shepherd tool checkpoint --apply --token ${facts.token} --session <your session name>${dropped === "unaccounted" ? ' --accept-dropped "<why each line may go>"' : ""}`,
 		);
-		expect(command).not.toMatch(/[<>;|&\n`$]/);
-		const syntax = Bun.spawn(["bash", "-n", "-c", command], {
-			stderr: "pipe",
+		const shell = spawnSync("bash", ["-n", "-c", command], {
+			encoding: "utf8",
 		});
-		expect(await syntax.exited).toBe(0);
-		const shell = Bun.spawn(
-			["bash", "-c", `shepherd() { printf '%s\\n' "$@"; }; ${command}`],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		const output = await new Response(shell.stdout).text();
-		expect(await shell.exited).toBe(0);
-		expect(output).toBe(`${args.join("\n")}\n`);
+		if (shell.status === 0) {
+			const bin = join(f.workspace.dir, "bin");
+			mkdirSync(bin);
+			const stub = join(bin, "shepherd");
+			writeFileSync(stub, "#!/bin/sh\necho shepherd-stub-ran\n");
+			fs.chmodSync(stub, 0o755);
+			const pasted = spawnSync("bash", ["-c", command], {
+				cwd: f.workspace.dir,
+				env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+				encoding: "utf8",
+			});
+			expect(pasted.status).not.toBe(0);
+			expect(pasted.stdout).not.toContain("shepherd-stub-ran");
+		} else {
+			expect(shell.stderr).toContain("syntax error");
+		}
 	});
 
 test("throw after the second append write reports one confirmed line and an uncertain second", async () => {
@@ -529,10 +531,10 @@ test("dry run token applies and assessment is CLEAN", async () => {
 	const token = dry.text.match(/^token: (.+)$/m)?.[1];
 	expect(token).toMatch(/^r0-[a-f0-9]{12}$/);
 	expect(dry.text).toStartWith(
-		"checkpoint: no checkpoint -> would write revision 1\njournal: 2 entries since the boundary, journal.md:2 to 4 (all shown below)",
+		"checkpoint: no checkpoint -> would write revision 1\njournal: 2 entries in the fallback range, journal.md:2 to 4 (all shown below)",
 	);
 	expect(dry.text).toEndWith(
-		`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${token} --session YOUR_SESSION_NAME`,
+		`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${token} --session <your session name>`,
 	);
 	expect((await f.apply(token)).code).toBe(0);
 	expect(f.assess().verdict).toBe("CLEAN");
@@ -735,3 +737,205 @@ for (const json of [false, true])
 			spy?.mockRestore();
 		}
 	});
+
+for (const flag of ["session", "acceptDropped"] as const)
+	for (const value of [
+		"",
+		"   ",
+		"YOUR_SESSION_NAME",
+		"REASON",
+		"<replace me>",
+		" <why each line may go> ",
+	])
+		test(`placeholder ${flag} ${JSON.stringify(value)} refuses before lock`, async () => {
+			const f = fixture();
+			let locked = false;
+			const result = await runCheckpoint(
+				f.workspace,
+				f.env,
+				{
+					apply: true,
+					token: captureState(f.workspace, f.env).token,
+					json: false,
+					[flag]: value,
+				},
+				{
+					afterLock: () => {
+						locked = true;
+					},
+				},
+			);
+			expect(result.code).toBe(1);
+			expect(result.text).toBe(
+				`replace the placeholder in --${flag === "session" ? "session" : "accept-dropped"} with a real value`,
+			);
+			expect(locked).toBe(false);
+		});
+
+test("dry run distinguishes fallback and boundary ranges", async () => {
+	const f = fixture();
+	expect((await f.dry()).text).toContain(
+		"journal: 2 entries in the fallback range",
+	);
+	expect((await f.apply()).code).toBe(0);
+	expect((await f.dry()).text).toContain(
+		"journal: 0 entries since the boundary",
+	);
+	f.put("journal.md", "## 2026-10-08\n- replaced history\n");
+	expect((await f.dry()).text).toContain(
+		"journal: 1 entries in the fallback range",
+	);
+});
+
+for (const loss of [
+	"empty",
+	"missing",
+	"unsafe",
+	"moved",
+	"edited",
+	"legacy",
+] as const)
+	test(`lost evidence ${loss} is carried into the next apply`, async () => {
+		const warning = "- Warning: never paste the deploy key into a brief.";
+		const f = fixture({ "CURRENT.md": `# Current\n${warning}\n` });
+		expect((await f.apply()).code).toBe(0);
+		f.put("memories/backup.md", `${warning}\n`);
+		f.put("CURRENT.md", "# Current\n");
+		expect((await f.apply()).code).toBe(0);
+		expect(f.checkpoint().evidenceLines).toEqual({
+			"memories/backup.md": [warning],
+		});
+		if (loss === "legacy") {
+			const checkpoint = f.checkpoint();
+			delete checkpoint.evidenceLines;
+			f.put("checkpoint.json", JSON.stringify(checkpoint));
+		}
+		f.put(
+			"memories/backup.md",
+			loss === "edited" ? `${warning}\nOther text\n` : "",
+		);
+		if (loss === "missing" || loss === "unsafe") f.remove("memories/backup.md");
+		if (loss === "unsafe")
+			symlinkSync(
+				"../CURRENT.md",
+				join(f.workspace.state, "memories/backup.md"),
+			);
+		if (loss === "moved") f.put("memories/other.md", `${warning}\n`);
+		const accounted = loss === "moved" || loss === "edited";
+		const text =
+			loss === "legacy"
+				? "memories/backup.md held the copy of a dropped CURRENT line; its text was not recorded"
+				: warning;
+		const assessment = f.assess();
+		expect(assessment.evidenceLost).toHaveLength(1);
+		const dry = await f.dry();
+		const facts = JSON.parse((await f.dry(true)).text);
+		const lines = accounted
+			? facts.dropped.accounted
+			: facts.dropped.unaccounted;
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatchObject({
+			line: 0,
+			text,
+			carriedFrom: "memories/backup.md",
+		});
+		if (accounted) {
+			expect((await f.apply()).code).toBe(0);
+			const holder =
+				loss === "moved" ? "memories/other.md" : "memories/backup.md";
+			expect(f.checkpoint().evidenceLines).toEqual({ [holder]: [warning] });
+			expect(Object.keys(f.checkpoint().evidence)).toEqual([holder]);
+		} else {
+			expect(dry.text).toContain(
+				`NOT accounted for: 1\n  - ${text} (copy was in memories/backup.md)`,
+			);
+			expect(assessment.reasons).toContain(
+				"1 CURRENT lines dropped and not accounted for",
+			);
+			const start = runStart(
+				f.workspace,
+				discoverTree(f.workspace.dir),
+				f.env,
+				loadConfig({
+					home: f.workspace.dir,
+					env: {},
+					workspaceChain: [f.workspace.dir],
+				}),
+				{ json: false, today: f.env.now },
+			);
+			expect(start.code).toBe(0);
+			expect(start.text).toContain(
+				"1 CURRENT lines dropped and not accounted for",
+			);
+			expect(start.text).toContain(text);
+			expect((await f.apply()).code).toBe(1);
+			expect((await f.apply(undefined, {}, "retired by owner")).code).toBe(0);
+			expect(f.read("journal.md")).toContain(
+				`dropped from CURRENT (retired by owner): ${text}`,
+			);
+			expect(f.checkpoint().evidenceLines).toEqual({});
+		}
+	});
+
+test("unchanged evidence becomes ordinary content after one apply", async () => {
+	const f = fixture();
+	await f.apply();
+	f.put("memories/copy.md", "Preserve this important line\n");
+	f.put("CURRENT.md", "# Current\nRetain another important fact\n");
+	await f.apply();
+	expect(JSON.parse((await f.dry(true)).text).dropped.candidates).toEqual([]);
+	await f.apply();
+	expect(f.checkpoint().evidence).toEqual({});
+	expect(f.checkpoint().evidenceLines).toEqual({});
+});
+
+test("lost snapshot keeps lost evidence text through dry run, start, check and apply", async () => {
+	const warning = "- Warning: never paste the deploy key into a brief.";
+	const f = fixture({ "CURRENT.md": `# Current\n${warning}\n` });
+	expect((await f.apply()).code).toBe(0);
+	f.put("memories/a.md", `${warning}\n`);
+	f.put("CURRENT.md", "# Current\n");
+	expect((await f.apply()).code).toBe(0);
+	expect(f.checkpoint().evidenceLines).toEqual({ "memories/a.md": [warning] });
+	f.put("memories/a.md", "");
+	f.remove("checkpoints");
+	const dry = await f.dry();
+	expect(dry.text).toContain(
+		"invalid checkpoint: snapshot missing or does not match",
+	);
+	expect(dry.text).toContain(
+		`NOT accounted for: 1\n  - ${warning} (copy was in memories/a.md)`,
+	);
+	const tree = discoverTree(f.workspace.dir);
+	const config = loadConfig({
+		home: f.workspace.dir,
+		env: {},
+		workspaceChain: [f.workspace.dir],
+	});
+	const start = runStart(f.workspace, tree, f.env, config, {
+		json: false,
+		today: f.env.now,
+	});
+	expect(start.text).toContain("snapshot missing or does not match");
+	expect(start.text).toContain("1 CURRENT lines dropped and not accounted for");
+	expect(start.text).toContain(warning);
+	const findings = checkWorkspace(f.workspace, tree, config, f.env.now);
+	expect(
+		findings.some(
+			({ code, message }) =>
+				code === "checkpoint-invalid" && message.includes("snapshot missing"),
+		),
+	).toBe(true);
+	expect(findings.some(({ code }) => code === "evidence-lost")).toBe(true);
+	expect(
+		findings.some(
+			({ code, message }) =>
+				code === "current-line-dropped" && message.includes(warning),
+		),
+	).toBe(true);
+	expect((await f.apply()).code).toBe(1);
+	expect((await f.apply(undefined, {}, "retired by owner")).code).toBe(0);
+	expect(f.read("journal.md")).toContain(
+		`dropped from CURRENT (retired by owner): ${warning}`,
+	);
+});

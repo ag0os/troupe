@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { checkLinks, decodedLinkTarget } from "./check-links";
 import { checkWork } from "./check-work";
-import { readCheckpoint } from "./checkpoint";
+import { carriedEvidence, hashPaths, readCheckpoint } from "./checkpoint";
 import type { Config } from "./config";
 import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
@@ -182,6 +182,18 @@ export function checkWorkspace(
 	} else if (checkpoint.status === "invalid") {
 		add("error", "checkpoint-invalid", checkpointPath, checkpoint.reason);
 	} else {
+		const evidenceHashes = hashPaths(
+			workspace,
+			Object.keys(checkpoint.checkpoint.evidence),
+		);
+		for (const path of Object.keys(checkpoint.checkpoint.evidence).sort())
+			if (evidenceHashes[path] !== checkpoint.checkpoint.evidence[path])
+				add(
+					"warn",
+					"evidence-lost",
+					join(workspace.state, path),
+					`${path} held the copy of a dropped CURRENT line; check the copy is still there`,
+				);
 		const baseline = readBaseline(
 			workspace.state,
 			checkpoint.checkpoint.snapshot,
@@ -189,14 +201,17 @@ export function checkWorkspace(
 		);
 		if (baseline.status === "lost") {
 			add("error", "checkpoint-invalid", checkpointPath, baseline.reason);
-		} else if (
-			baseline.status === "ok" &&
+		}
+		if (
+			baseline.status !== "none" &&
 			existsSync(join(workspace.state, "CURRENT.md"))
 		) {
+			const baselineText = baseline.status === "ok" ? baseline.text : "";
 			const result = droppedLines({
-				baseline: baseline.text,
+				baseline: baselineText,
+				carried: carriedEvidence(checkpoint.checkpoint, evidenceHashes),
 				current: read(join(workspace.state, "CURRENT.md")),
-				...readDroppedSources(workspace, baseline.text),
+				...readDroppedSources(workspace, baselineText),
 			});
 			for (const dropped of result.unaccounted) {
 				add(

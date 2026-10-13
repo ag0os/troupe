@@ -11,6 +11,7 @@ import {
 import { join, relative, resolve } from "node:path";
 import {
 	type Checkpoint,
+	carriedEvidence,
 	coveredPaths,
 	FIXED_PATHS,
 	fallbackSections,
@@ -267,13 +268,29 @@ export function captureState(
 				? { text: baselineRead.text, hash: baselineRead.hash }
 				: undefined,
 	};
+	const evidenceHashes: Record<string, string | null> = {};
+	if (checkpoint && baselineRead.status !== "none")
+		for (const path of Object.keys(checkpoint.evidence))
+			evidenceHashes[path] =
+				path.startsWith("enclosing:") && !enclosing
+					? null
+					: read(
+							path.startsWith("enclosing:")
+								? join(
+										enclosing ?? workspace.dir,
+										STATE_DIR,
+										path.slice("enclosing:".length),
+									)
+								: join(state, path),
+						).hash;
 	const current = files["CURRENT.md"]?.bytes;
-	if (held.baseline && current != null)
+	if (baselineRead.status !== "none" && current != null)
 		held.dropped = droppedLines({
 			current: Buffer.from(current).toString("utf8"),
-			baseline: held.baseline.text,
+			baseline: held.baseline?.text ?? "",
 			items,
 			destinations,
+			carried: checkpoint ? carriedEvidence(checkpoint, evidenceHashes) : [],
 		});
 	const ranged = { ...held, range: certifyRange(held) };
 	const result = { ...ranged, token: checkpointToken(ranged) };
@@ -363,11 +380,14 @@ export function nextCheckpoint(
 	])
 		files[path] = held.files[path]?.hash ?? null;
 	const evidence: Checkpoint["evidence"] = {};
+	const evidenceLines: Record<string, string[]> = {};
 	for (const line of held.dropped?.accounted ?? []) {
 		const bytes = held.destinationBytes[line.foundIn];
 		if (bytes === undefined)
 			throw new Error(`missing held evidence: ${line.foundIn}`);
 		evidence[line.foundIn] = contentHash(bytes);
+		evidenceLines[line.foundIn] ??= [];
+		evidenceLines[line.foundIn]?.push(line.text);
 	}
 	const revision = held.revision + 1;
 	return {
@@ -384,6 +404,7 @@ export function nextCheckpoint(
 		},
 		files,
 		evidence,
+		evidenceLines,
 	};
 }
 

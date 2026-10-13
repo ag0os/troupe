@@ -807,3 +807,36 @@ describe("T9 fix round 1", () => {
 		).toEqual([1, 3, 5, 9]);
 	});
 });
+
+test("check reports lost evidence and its carried CURRENT text", () => {
+	const warning = "Warning: never paste the deploy key into a brief.";
+	const current = "# Current\n";
+	const { workspace, tree } = fixture({
+		"root/.shepherd/CURRENT.md": current,
+		"root/.shepherd/checkpoints/CURRENT.r2": current,
+		"root/.shepherd/memories/backup.md": "",
+		"root/.shepherd/checkpoint.json": JSON.stringify({
+			schema: 1,
+			revision: 2,
+			written: "now",
+			snapshot: "checkpoints/CURRENT.r2",
+			journal: { from: null, to: null, count: 0 },
+			files: Object.fromEntries(
+				FIXED_PATHS.map((path) => [
+					path,
+					path === "CURRENT.md" ? contentHash(current) : null,
+				]),
+			),
+			evidence: { "memories/backup.md": contentHash(warning) },
+			evidenceLines: { "memories/backup.md": [warning] },
+		}),
+	});
+	const findings = checkWorkspace(workspace, tree, config(), TODAY);
+	expect(finding(findings, "evidence-lost")).toMatchObject({
+		level: "warn",
+		file: "memories/backup.md",
+		message:
+			"memories/backup.md held the copy of a dropped CURRENT line; check the copy is still there",
+	});
+	expect(finding(findings, "current-line-dropped").message).toContain(warning);
+});

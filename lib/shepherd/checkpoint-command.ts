@@ -73,7 +73,9 @@ function droppedText(held: HeldState): string[] {
 		`dropped from CURRENT, NOT accounted for: ${held.dropped?.unaccounted.length ?? 0}`,
 	];
 	for (const line of held.dropped?.unaccounted ?? []) {
-		lines.push(`  - ${line.text}`);
+		lines.push(
+			`  - ${line.text}${line.carriedFrom ? ` (copy was in ${line.carriedFrom})` : ""}`,
+		);
 		lines.push(
 			line.nearest
 				? `    nearest: ${line.nearest.path}:${line.nearest.line} (${line.nearest.percent} percent of words; not a match)`
@@ -94,6 +96,7 @@ function unsafeReason(held: HeldState): string | undefined {
 function refusedRange(held: HeldState): {
 	entries: ChainEntry[];
 	uncertified: number;
+	fromReset: boolean;
 } {
 	const from = held.chain.findIndex(
 		(entry) => entry.id === held.checkpoint?.journal.from,
@@ -112,6 +115,7 @@ function refusedRange(held: HeldState): {
 	return {
 		entries: held.chain.slice(start),
 		uncertified: found ? Math.max(0, from) : start,
+		fromReset: !found,
 	};
 }
 function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
@@ -153,7 +157,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	const refused = !held.range.ok ? held.range.message : unsafeReason(held);
 	const selected = held.range.ok ? held.range : refusedRange(held);
 	const range = selected.entries;
-	const apply = `shepherd tool checkpoint --apply --token ${held.token} --session YOUR_SESSION_NAME${held.dropped?.unaccounted.length ? ' --accept-dropped "REASON"' : ""}`;
+	const apply = `shepherd tool checkpoint --apply --token ${held.token} --session <your session name>${held.dropped?.unaccounted.length ? ' --accept-dropped "<why each line may go>"' : ""}`;
 	const facts = {
 		revision: held.revision,
 		nextRevision: held.revision + 1,
@@ -188,7 +192,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 			: "";
 	const lines = [
 		`checkpoint: ${checkpoint} -> would write revision ${held.revision + 1}`,
-		`journal: ${range.length} entries since the boundary${span}`,
+		`journal: ${range.length} entries ${!selected.fromReset ? "since the boundary" : "in the fallback range"}${span}`,
 		...range.map((entry) => `  - ${location(entry)} ${entry.text}`),
 		`new boundary: ${boundary(last ?? held.chain.at(-1))}`,
 		`uncertified history before the range: ${facts.uncertified} entries`,
@@ -224,6 +228,21 @@ export async function runCheckpoint(
 			stream: "stderr",
 		};
 	if (!options.apply) return dryRun(workspace, toolEnv, options.json);
+	for (const [flag, value] of [
+		["session", options.session],
+		["accept-dropped", options.acceptDropped],
+	]) {
+		if (value === undefined) continue;
+		const trimmed = value.trim();
+		if (
+			!trimmed ||
+			trimmed === "YOUR_SESSION_NAME" ||
+			trimmed === "REASON" ||
+			(trimmed.startsWith("<") && trimmed.endsWith(">"))
+		)
+			return failure(`replace the placeholder in --${flag} with a real value`);
+	}
+
 	try {
 		return await withStateLock(
 			workspace.state,

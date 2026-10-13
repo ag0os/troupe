@@ -574,3 +574,25 @@ describe("readItemStates", () => {
 		});
 	});
 });
+
+test("carried lines are distinct, never exempt, and skip CURRENT or baseline candidates", () => {
+	const text = "- [task](work/done/task/STATUS.md) warning";
+	const carried = assess("", {
+		carried: [{ text, from: "memories/copy.md" }],
+		items: { task: "done" },
+	});
+	expect(carried.unaccounted[0]).toMatchObject({
+		line: 0,
+		text,
+		carriedFrom: "memories/copy.md",
+	});
+	const baseline = assess(text);
+	expect(droppedDigest(carried)).not.toBe(droppedDigest(baseline));
+	expect(
+		assess(text, { carried: [{ text, from: "memories/copy.md" }] }).candidates,
+	).toHaveLength(1);
+	expect(
+		assess("", { current: text, carried: [{ text, from: "memories/copy.md" }] })
+			.candidates,
+	).toEqual([]);
+});

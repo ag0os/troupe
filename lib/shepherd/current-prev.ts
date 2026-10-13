@@ -24,6 +24,7 @@ export type DroppedInput = {
 	baseline: string;
 	items: Record<string, ItemState>;
 	destinations: Record<string, string>;
+	carried?: { text: string; from: string }[];
 };
 export type Disposition =
 	| { kind: "accounted"; path: string }
@@ -36,11 +37,22 @@ export type DroppedCandidate = {
 	normalized: string;
 	disposition: Disposition;
 	nearest?: Nearest;
+	carriedFrom?: string;
 };
 export type DroppedResult = {
 	candidates: DroppedCandidate[];
-	accounted: { line: number; text: string; foundIn: string }[];
-	unaccounted: { line: number; text: string; nearest?: Nearest }[];
+	accounted: {
+		line: number;
+		text: string;
+		foundIn: string;
+		carriedFrom?: string;
+	}[];
+	unaccounted: {
+		line: number;
+		text: string;
+		nearest?: Nearest;
+		carriedFrom?: string;
+	}[];
 };
 
 function normalize(line: string): string {
@@ -133,21 +145,13 @@ export function droppedLines(input: DroppedInput): DroppedResult {
 				words: contentWords(text),
 			})),
 		);
-	let liveSessions = false;
-	fencedLines(input.baseline).forEach(({ text, fenced }, index) => {
-		if (!fenced && /^## /.test(text))
-			liveSessions = /^## Live sessions\s*$/.test(text);
-		const normalized = normalize(text);
-		if (
-			liveSessions ||
-			(!fenced && /^ {0,3}#{1,6}(?:\s|$)/.test(text)) ||
-			(!fenced && /^Updated:/.test(text)) ||
-			!/\p{L}/u.test(text) ||
-			current.has(normalized)
-		)
-			return;
-		const line = index + 1;
-		const reason = exemptions.get(index);
+	function addCandidate(
+		line: number,
+		text: string,
+		normalized: string,
+		reason?: string,
+		carriedFrom?: string,
+	) {
 		const found = destinations.find(
 			(destination) =>
 				destination.path !== "journal.md" &&
@@ -158,10 +162,22 @@ export function droppedLines(input: DroppedInput): DroppedResult {
 			: found
 				? { kind: "accounted", path: found.path }
 				: { kind: "unaccounted" };
-		const candidate: DroppedCandidate = { line, text, normalized, disposition };
+		const origin = carriedFrom === undefined ? {} : { carriedFrom };
+		const candidate: DroppedCandidate = {
+			line,
+			text,
+			normalized,
+			disposition,
+			...origin,
+		};
 		result.candidates.push(candidate);
 		if (disposition.kind === "accounted") {
-			result.accounted.push({ line, text, foundIn: disposition.path });
+			result.accounted.push({
+				line,
+				text,
+				foundIn: disposition.path,
+				...origin,
+			});
 		} else if (disposition.kind === "unaccounted") {
 			const words = contentWords(text);
 			let best = 0;
@@ -179,25 +195,53 @@ export function droppedLines(input: DroppedInput): DroppedResult {
 			}
 			result.unaccounted.push(
 				candidate.nearest
-					? { line, text, nearest: candidate.nearest }
-					: { line, text },
+					? { line, text, nearest: candidate.nearest, ...origin }
+					: { line, text, ...origin },
 			);
 		}
+	}
+	let liveSessions = false;
+	fencedLines(input.baseline).forEach(({ text, fenced }, index) => {
+		if (!fenced && /^## /.test(text))
+			liveSessions = /^## Live sessions\s*$/.test(text);
+		const normalized = normalize(text);
+		if (
+			liveSessions ||
+			(!fenced && /^ {0,3}#{1,6}(?:\s|$)/.test(text)) ||
+			(!fenced && /^Updated:/.test(text)) ||
+			!/\p{L}/u.test(text) ||
+			current.has(normalized)
+		)
+			return;
+		const line = index + 1;
+		const reason = exemptions.get(index);
+		addCandidate(line, text, normalized, reason);
 	});
+	const seen = new Set(
+		result.candidates.map((candidate) => candidate.normalized),
+	);
+	for (const { text, from } of input.carried ?? []) {
+		const normalized = normalize(text);
+		if (current.has(normalized) || seen.has(normalized)) continue;
+		seen.add(normalized);
+		addCandidate(0, text, normalized, undefined, from);
+	}
 	return result;
 }
 
 /** Hash candidate normalization and explicit dispositions in baseline order. */
 export function droppedDigest(result: DroppedResult): string {
-	const lines = result.candidates.map(({ normalized, disposition }) => {
-		const value =
-			disposition.kind === "accounted"
-				? `accounted:${disposition.path}`
-				: disposition.kind === "exempt"
-					? `exempt:${disposition.reason}`
-					: "unaccounted";
-		return `${normalized}\t${value}`;
-	});
+	const lines = result.candidates.map(
+		({ normalized, disposition, carriedFrom }) => {
+			const value =
+				disposition.kind === "accounted"
+					? `accounted:${disposition.path}`
+					: disposition.kind === "exempt"
+						? `exempt:${disposition.reason}`
+						: "unaccounted";
+			return `${carriedFrom === undefined ? "" : `carried:${carriedFrom}\t`}${normalized}\t${value}`;
+		},
+	);
 	return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 

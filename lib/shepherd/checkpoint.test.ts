@@ -431,6 +431,7 @@ describe("checkpoint records and verdict", () => {
 			expect(a.verdict).toBe("RECONCILE");
 			expect(a.reasons).toEqual([
 				`${path} held the copy of a dropped CURRENT line; check the copy is still there`,
+				"1 CURRENT lines dropped and not accounted for",
 			]);
 		});
 	test("dropped CURRENT lines are assessed against preservation sources", () => {
@@ -464,7 +465,7 @@ describe("checkpoint records and verdict", () => {
 			"CURRENT.md changed",
 			"pending.md changed",
 			"memories/copy.md held the copy of a dropped CURRENT line; check the copy is still there",
-			"1 CURRENT lines dropped and not accounted for",
+			"2 CURRENT lines dropped and not accounted for",
 		]);
 	});
 	test("coverage includes sorted direct live STATUS files only", () => {
@@ -614,7 +615,7 @@ describe("unsafe checkpoint inputs", () => {
 			expect(a.evidenceLost).toEqual([
 				{ path: "memories/copy.md", kind: "missing" },
 			]);
-			expect(a.dropped?.unaccounted).toHaveLength(1);
+			expect(a.dropped?.unaccounted).toHaveLength(2);
 		},
 	);
 	test.skipIf(root)(
@@ -643,3 +644,25 @@ describe("unsafe checkpoint inputs", () => {
 		},
 	);
 });
+
+for (const evidenceLines of [
+	[],
+	null,
+	{ "../bad": ["text"] },
+	{ "memories/missing.md": ["text"] },
+	{ "memories/copy.md": "text" },
+	{ "memories/copy.md": [1] },
+])
+	test(`malformed evidenceLines ${JSON.stringify(evidenceLines)} is invalid`, () => {
+		const f = fixture();
+		const checkpoint = f.certify();
+		f.put(
+			"checkpoint.json",
+			JSON.stringify({
+				...checkpoint,
+				evidence: { "memories/copy.md": contentHash("copy") },
+				evidenceLines,
+			}),
+		);
+		expect(readCheckpoint(f.workspace.state).status).toBe("invalid");
+	});

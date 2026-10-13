@@ -36,6 +36,7 @@ export type Checkpoint = {
 	};
 	files: Record<string, string | null>;
 	evidence: Record<string, string>;
+	evidenceLines?: Record<string, string[]>;
 };
 export type JournalSection = {
 	file: string;
@@ -143,6 +144,18 @@ function validation(value: unknown): string | undefined {
 		if (!evidencePath(path)) return `invalid evidence path: ${path}`;
 		if (typeof hash !== "string" || !hashPattern.test(hash))
 			return `invalid evidence hash: ${path}`;
+	}
+	if (value.evidenceLines !== undefined) {
+		if (!object(value.evidenceLines)) return "evidenceLines must be an object";
+		for (const [path, lines] of Object.entries(value.evidenceLines)) {
+			if (!evidencePath(path) || !Object.hasOwn(value.evidence, path))
+				return `invalid evidenceLines path: ${path}`;
+			if (
+				!Array.isArray(lines) ||
+				!lines.every((line) => typeof line === "string")
+			)
+				return `invalid evidenceLines text: ${path}`;
+		}
 	}
 }
 
@@ -256,6 +269,26 @@ export function hashPaths(
 	return hashes;
 }
 
+/** Carry the text of copies whose held evidence bytes changed. */
+export function carriedEvidence(
+	checkpoint: Checkpoint,
+	hashes: Record<string, string | null>,
+): { text: string; from: string }[] {
+	return Object.keys(checkpoint.evidence)
+		.sort()
+		.flatMap((from) => {
+			if (hashes[from] === checkpoint.evidence[from]) return [];
+			const lines = checkpoint.evidenceLines?.[from];
+			return (
+				lines?.length
+					? lines
+					: [
+							`${from} held the copy of a dropped CURRENT line; its text was not recorded`,
+						]
+			).map((text) => ({ text, from }));
+		});
+}
+
 /** Last two entry-bearing dated sections, oldest first, retaining duplicate headings. */
 export function fallbackSections(
 	_state: string,
@@ -351,6 +384,7 @@ export function assessCheckpoint(
 				: chain.length;
 	const changed: Assessment["changed"] = [];
 	const evidenceLost: Assessment["evidenceLost"] = [];
+	let evidenceHashes: Record<string, string | null> = {};
 	if (read.status === "ok") {
 		const paths = [
 			...new Set([
@@ -379,22 +413,23 @@ export function assessCheckpoint(
 								: "changed",
 				});
 		}
-		const evidence = hashPaths(
-			workspace,
-			Object.keys(read.checkpoint.evidence),
-		);
-		for (const path of Object.keys(read.checkpoint.evidence).sort())
-			if (evidence[path] !== read.checkpoint.evidence[path])
+	}
+	if (checkpoint) {
+		evidenceHashes = hashPaths(workspace, Object.keys(checkpoint.evidence));
+		for (const path of Object.keys(checkpoint.evidence).sort())
+			if (evidenceHashes[path] !== checkpoint.evidence[path])
 				evidenceLost.push({
 					path,
 					kind:
-						evidence[path] === null || evidence[path]?.startsWith("unsafe:")
+						evidenceHashes[path] === null ||
+						evidenceHashes[path]?.startsWith("unsafe:")
 							? "missing"
 							: "changed",
 				});
 	}
 	let dropped: DroppedResult | undefined;
-	if (baseline.status === "ok") {
+	if (baseline.status !== "none") {
+		const baselineText = baseline.status === "ok" ? baseline.text : "";
 		const path = join(workspace.state, "CURRENT.md");
 		try {
 			if (
@@ -404,8 +439,11 @@ export function assessCheckpoint(
 			)
 				dropped = droppedLines({
 					current: readFileSync(path, "utf8"),
-					baseline: baseline.text,
-					...readDroppedSources(workspace, baseline.text),
+					baseline: baselineText,
+					carried: checkpoint
+						? carriedEvidence(checkpoint, evidenceHashes)
+						: [],
+					...readDroppedSources(workspace, baselineText),
 				});
 		} catch {
 			const unsafe = {
