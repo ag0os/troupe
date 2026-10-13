@@ -2,7 +2,9 @@ import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { promptWords } from "./compose";
 import type { Config } from "./config";
-import { journalSections, mdFiles, read, words, wordsIn } from "./text";
+import type { ToolEnv } from "./sessions";
+import { collectStart, type StartWords } from "./start-collect";
+import { mdFiles, read, words, wordsIn } from "./text";
 import type { Workspace } from "./tree";
 
 const WORDS_TO_TOKENS = 1.35;
@@ -11,6 +13,8 @@ export type ContextTiers = {
 	name: string;
 	loaded: number;
 	start: number;
+	startBreakdown: StartWords;
+	journalMode: "boundary" | "fallback";
 	opens: number;
 	onDemand: number;
 	cold: number;
@@ -59,22 +63,38 @@ export function contextTiers(
 	workspace: Workspace,
 	config: Config,
 	onPromptError?: (message: string) => void,
+	toolEnv?: ToolEnv,
 ): ContextTiers {
 	const state = workspace.state;
 	const journal = join(state, "journal.md");
 	const journalText = existsSync(journal) ? read(journal) : "";
-	const lastTwoDays = journalSections(journalText)
-		.days.slice(-2)
-		.reduce((count, day) => count + words(day.body), 0);
+	const now = new Date();
+	const data = collectStart(
+		workspace,
+		toolEnv ?? {
+			cwd: workspace.dir,
+			home: "",
+			env: {},
+			now,
+			clock: () => now,
+			pidAlive: () => false,
+			runCommand: async () => {
+				throw new Error("context does not run commands");
+			},
+		},
+		config,
+	);
 	const startFiles = [
 		"CURRENT.md",
-		"HANDOFF.md",
+		"pending.md",
 		"MEMORY.md",
 		"docs/INDEX.md",
 	].map((file) => join(state, file));
-	const start = wordsIn(startFiles) + lastTwoDays;
-
-	const journalRest = words(journalText) - lastTwoDays;
+	const start = data.words.start;
+	const keptJournalWords = [...data.journal.entries, ...data.journal.orphans]
+		.filter((entry) => entry.file === "journal.md")
+		.reduce((count, entry) => count + words(entry.text), 0);
+	const journalRest = Math.max(0, words(journalText) - keptJournalWords);
 	const linkedTargets = new Set(linkedIntegrationTargets(state));
 	const skip = [
 		join(state, "archive"),
@@ -122,6 +142,8 @@ export function contextTiers(
 		name: workspace.name,
 		loaded,
 		start,
+		startBreakdown: data.words,
+		journalMode: data.journal.mode,
 		opens,
 		onDemand,
 		cold,
@@ -154,7 +176,7 @@ export function renderContextTable(rows: readonly ContextTiers[]): string {
 	lines.push(
 		`${"all".padEnd(14)}${"".padStart(10)}${"".padStart(12)}${"".padStart(26)}${compact(sum("onDemand")).padStart(13)}${compact(sum("cold")).padStart(9)}`,
 		"",
-		"1 loaded: the composed prompt (core, modules, charter). 2 at start: CURRENT, HANDOFF, MEMORY, docs/INDEX and the last two journal days.",
+		"1 loaded: the composed prompt (core, modules, charter). 2 at start: the sources `shepherd tool start` prints, findings excluded",
 		"3 on demand: memories, docs, work items, older journal, other files. 4 cold: archive/.",
 	);
 	return lines.join("\n");

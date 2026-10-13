@@ -1,8 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace, type Finding } from "./check";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
-import { type MakeTreeOptions, makeTree } from "./test-support";
+import { FIXED_PATHS } from "./checkpoint";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
+import { contentHash } from "./current-prev";
+import { LockError, lockStatus, unlockState, withStateLock } from "./lock";
+import { fakeToolEnv, type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
 const TODAY = new Date(2026, 9, 5);
@@ -27,6 +36,7 @@ function config(overrides: Partial<Config> = {}): Config {
 	return {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 		...overrides,
@@ -450,14 +460,383 @@ describe("checkWorkspace", () => {
 		});
 	});
 
-	test("returns no findings for a clean workspace", () => {
+	test("reports only checkpoint-missing for a clean workspace with an action trigger", () => {
 		const { workspace, tree } = fixture({
 			"root/.shepherd/MEMORY.md": "[Note](memories/note.md)",
 			"root/.shepherd/memories/note.md": MEMORY,
-			"root/.shepherd/docs/INDEX.md": "[Guide](guide.md)",
+			"root/.shepherd/docs/INDEX.md":
+				"[Guide](guide.md) before deploying, read this",
 			"root/.shepherd/docs/guide.md": "Guide",
 		});
 
-		expect(checkWorkspace(workspace, tree, config(), TODAY)).toEqual([]);
+		expect(
+			checkWorkspace(workspace, tree, config(), TODAY).map(({ code }) => code),
+		).toEqual(["checkpoint-missing"]);
 	});
+});
+
+function checkpointFiles(
+	baseline: string | null = null,
+): Record<string, string> {
+	return {
+		"root/.shepherd/checkpoint.json": JSON.stringify({
+			schema: 1,
+			revision: 1,
+			written: TODAY.toISOString(),
+			snapshot: "checkpoints/1-CURRENT.md",
+			journal: { from: null, to: null, count: 0 },
+			files: Object.fromEntries(
+				FIXED_PATHS.map((path) => [
+					path,
+					path === "CURRENT.md" && baseline !== null
+						? contentHash(baseline)
+						: null,
+				]),
+			),
+			evidence: {},
+		}),
+		...(baseline === null
+			? {}
+			: { "root/.shepherd/checkpoints/1-CURRENT.md": baseline }),
+	};
+}
+
+describe("staged workspace findings", () => {
+	test("checkpoint-missing supplies reconciliation steps only when absent", () => {
+		for (const present of [false, true]) {
+			const { workspace, tree } = fixture(present ? checkpointFiles() : {});
+			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "checkpoint-missing",
+			);
+			expect(matches).toHaveLength(present ? 0 : 1);
+			if (!present)
+				expect(matches[0]).toEqual({
+					level: "info",
+					code: "checkpoint-missing",
+					file: "checkpoint.json",
+					message:
+						"run `shepherd tool start`, reconcile, then `shepherd tool checkpoint`",
+				});
+		}
+	});
+
+	test("checkpoint-invalid reports bad JSON and missing or mismatched snapshots", () => {
+		for (const mode of ["json", "missing", "mismatch", "valid"]) {
+			const files = checkpointFiles("Keep this warning");
+			if (mode === "json") files["root/.shepherd/checkpoint.json"] = "{";
+			if (mode === "missing")
+				delete files["root/.shepherd/checkpoints/1-CURRENT.md"];
+			if (mode === "mismatch")
+				files["root/.shepherd/checkpoints/1-CURRENT.md"] = "Other";
+			const { workspace, tree } = fixture(files);
+			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "checkpoint-invalid",
+			);
+			expect(matches).toHaveLength(mode === "valid" ? 0 : 1);
+			if (mode !== "valid")
+				expect(matches[0]).toMatchObject({
+					level: "error",
+					file: "checkpoint.json",
+				});
+			if (mode === "missing" || mode === "mismatch")
+				expect(matches[0]?.message).toBe("snapshot missing or does not match");
+		}
+	});
+
+	test("lock-stale distinguishes both locks and ignores live owners", () => {
+		for (const which of ["state", "unlock"]) {
+			for (const mode of ["dead", "live", "malformed", "missing"]) {
+				const { workspace, tree, root } = fixture();
+				const path = join(workspace.state, `.${which}.lock`);
+				mkdirSync(path);
+				if (mode !== "missing")
+					writeFileSync(
+						join(path, "owner"),
+						mode === "malformed"
+							? "bad"
+							: JSON.stringify({ pid: 42, started: TODAY.toISOString() }),
+					);
+				const env = fakeToolEnv({
+					home: root,
+					alivePids: mode === "live" ? [42] : [],
+				});
+				const matches = checkWorkspace(
+					workspace,
+					tree,
+					config(),
+					TODAY,
+					root,
+					env,
+				).filter(({ code }) => code === "lock-stale");
+				expect(matches).toHaveLength(mode === "live" ? 0 : 1);
+				if (mode !== "live") {
+					expect(matches[0]).toMatchObject({
+						level: "error",
+						file: `.${which}.lock`,
+					});
+					expect(matches[0]?.message).toContain(
+						which === "state"
+							? "run `shepherd tool unlock` when no Shepherd of this workspace is live"
+							: `rm -r ${path}`,
+					);
+				}
+			}
+		}
+	});
+
+	test("lock-stale default probe recognizes the current process", () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/.state.lock/owner": JSON.stringify({
+				pid: process.pid,
+				started: TODAY.toISOString(),
+			}),
+		});
+		expect(
+			checkWorkspace(workspace, tree, config(), TODAY).some(
+				({ code }) => code === "lock-stale",
+			),
+		).toBeFalse();
+	});
+
+	test("current-older-than-journal requires over fifteen minutes and no checkpoint", () => {
+		for (const [time, present, expected] of [
+			["10:16", false, true],
+			["10:15", false, false],
+			["10:16", true, false],
+		] as const) {
+			const { workspace, tree } = fixture({
+				"root/.shepherd/CURRENT.md": "# Current\nUpdated: 2026-10-05 10:00",
+				"root/.shepherd/journal.md": `## 2026-10-05\n- ${time} Change\n- Untimed tail`,
+				...(present ? checkpointFiles() : {}),
+			});
+			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "current-older-than-journal",
+			);
+			expect(matches).toHaveLength(expected ? 1 : 0);
+			if (expected) {
+				expect(matches[0]).toMatchObject({
+					level: "warn",
+					file: "CURRENT.md",
+					line: 2,
+				});
+				expect(matches[0]?.message).toContain("2026-10-05 10:00");
+				expect(matches[0]?.message).toContain(`2026-10-05 ${time}`);
+			}
+		}
+	});
+
+	test("current-line-dropped reports baseline lines and nearest preservation text only with a baseline", () => {
+		const baseline =
+			"# Current\nUpdated: 2026-10-05\n- Never deploy without checking the database migration first";
+		for (const present of [true, false]) {
+			const { workspace, tree } = fixture({
+				...(present ? checkpointFiles(baseline) : {}),
+				"root/.shepherd/docs/guide.md":
+					"Never deploy without checking the database migration carefully",
+			});
+			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "current-line-dropped",
+			);
+			expect(matches).toHaveLength(present ? 1 : 0);
+			if (present) {
+				expect(matches[0]).toMatchObject({
+					level: "warn",
+					file: "CURRENT.md",
+					line: 3,
+				});
+				expect(matches[0]?.message).toContain(
+					"Never deploy without checking the database migration first",
+				);
+				expect(matches[0]?.message).toContain("nearest: docs/guide.md:1");
+			}
+		}
+	});
+
+	test("doc-trigger-missing flags topic-only links and ignores trigger words in link labels and fences", () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/docs/INDEX.md":
+				"[Before](guide.md) deployment topic\n[Guide](guide.md) before deploying, read this\n[Guide](guide.md) BEFORE deploying\n[Guide](guide.md) beforehand\n```\n[Guide](guide.md) topic\n```",
+			"root/.shepherd/docs/guide.md": "Guide",
+		});
+		expect(
+			checkWorkspace(workspace, tree, config(), TODAY)
+				.filter(({ code }) => code === "doc-trigger-missing")
+				.map(({ level, file, line }) => ({ level, file, line })),
+		).toEqual([
+			{ level: "warn", file: "docs/INDEX.md", line: 1 },
+			{ level: "warn", file: "docs/INDEX.md", line: 4 },
+		]);
+	});
+
+	test("current-over-mark uses the diet wording only above 600 words", () => {
+		for (const count of [600, 601]) {
+			const { workspace, tree } = fixture({
+				"root/.shepherd/CURRENT.md": Array(count).fill("word").join(" "),
+			});
+			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
+				({ code }) => code === "current-over-mark",
+			);
+			expect(matches).toHaveLength(count === 600 ? 0 : 1);
+			if (count === 601) {
+				expect(matches[0]).toMatchObject({ level: "info", file: "CURRENT.md" });
+				expect(matches[0]?.message).toContain(
+					"standing how-tos go to a doc with an action-named index line; standing rules to the charter; keep what is costly on first misuse",
+				);
+			}
+		}
+	});
+});
+
+describe("T9 fix round 1", () => {
+	test("files at either lock path are malformed stale locks and do not abort checking", () => {
+		for (const which of ["state", "unlock"] as const) {
+			const { workspace, tree, root } = fixture({
+				[`root/.shepherd/.${which}.lock`]: "malformed lock",
+			});
+			const env = fakeToolEnv({ home: root });
+			expect(lockStatus(workspace.state, env, which)).toEqual({
+				status: "stale",
+			});
+			const findings = checkWorkspace(
+				workspace,
+				tree,
+				config(),
+				TODAY,
+				root,
+				env,
+			);
+			expect(finding(findings, "lock-stale")).toMatchObject({
+				level: "error",
+				file: `.${which}.lock`,
+			});
+			expect(finding(findings, "checkpoint-missing")).toMatchObject({
+				level: "info",
+			});
+		}
+	});
+
+	test("a writer rejects a file lock with the stale message and unlock clears the file", async () => {
+		const { workspace, root } = fixture({
+			"root/.shepherd/.state.lock": "malformed lock",
+		});
+		const env = fakeToolEnv({ home: root });
+		const action = withStateLock(workspace.state, env, () => {
+			throw new Error("writer must not run");
+		});
+		await expect(action).rejects.toBeInstanceOf(LockError);
+		await expect(action).rejects.toThrow("stale lock");
+		expect(await unlockState(workspace.state, env)).toMatchObject({
+			code: 0,
+			outcome: "cleared",
+			text: "cleared stale lock left by pid unknown",
+		});
+		expect(existsSync(join(workspace.state, ".state.lock"))).toBeFalse();
+		expect(existsSync(join(workspace.state, ".unlock.lock"))).toBeFalse();
+	});
+
+	test("a file unlock lock returns the stale-unlock recovery message", async () => {
+		const { workspace, root } = fixture({
+			"root/.shepherd/.unlock.lock": "malformed lock",
+		});
+		const result = await unlockState(
+			workspace.state,
+			fakeToolEnv({ home: root }),
+		);
+		expect(result).toMatchObject({ code: 1, outcome: "stale-unlock" });
+		expect(result.text).toContain(
+			`rm -r ${join(workspace.state, ".unlock.lock")}`,
+		);
+	});
+
+	test("lock probe exceptions become findings and checking continues for both locks", () => {
+		const owner = JSON.stringify({ pid: 42, started: TODAY.toISOString() });
+		const { workspace, tree, root } = fixture({
+			"root/.shepherd/.state.lock/owner": owner,
+			"root/.shepherd/.unlock.lock/owner": owner,
+		});
+		const env = fakeToolEnv({ home: root });
+		env.pidAlive = () => {
+			throw new Error("probe failed");
+		};
+		const findings = checkWorkspace(
+			workspace,
+			tree,
+			config(),
+			TODAY,
+			root,
+			env,
+		);
+		const locks = findings.filter(({ code }) => code === "lock-stale");
+		expect(locks.map(({ file }) => file)).toEqual([
+			".state.lock",
+			".unlock.lock",
+		]);
+		for (const lock of locks)
+			expect(lock.message).toContain("could not inspect lock: probe failed");
+		expect(finding(findings, "checkpoint-missing")).toMatchObject({
+			level: "info",
+		});
+	});
+
+	test("doc triggers recognize defined reference links and exclude inline code spans", () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/docs/INDEX.md": [
+				"[Guide][guide] deployment topic",
+				"[Guide][guide] before deploying, read this",
+				"[Guide] deployment topic",
+				"[Guide] when deploying, read this",
+				"[Guide][] deployment topic",
+				"[Unknown] deployment topic",
+				"`[Guide](guide.md)` deployment topic",
+				"``[Guide][guide] `example` `` deployment topic",
+				"[Guide](guide.md) `before` deployment topic",
+				"`[Code](guide.md)` [Guide](guide.md) before deploying",
+				"[guide]: guide.md",
+				"```",
+				"[Unknown]: guide.md",
+				"```",
+				"`[Other]: guide.md`",
+				"[Other] deployment topic",
+			].join("\n"),
+			"root/.shepherd/docs/guide.md": "Guide",
+		});
+		expect(
+			checkWorkspace(workspace, tree, config(), TODAY)
+				.filter(({ code }) => code === "doc-trigger-missing")
+				.map(({ line }) => line),
+		).toEqual([1, 3, 5, 9]);
+	});
+});
+
+test("check reports lost evidence and its carried CURRENT text", () => {
+	const warning = "Warning: never paste the deploy key into a brief.";
+	const current = "# Current\n";
+	const { workspace, tree } = fixture({
+		"root/.shepherd/CURRENT.md": current,
+		"root/.shepherd/checkpoints/CURRENT.r2": current,
+		"root/.shepherd/memories/backup.md": "",
+		"root/.shepherd/checkpoint.json": JSON.stringify({
+			schema: 1,
+			revision: 2,
+			written: "now",
+			snapshot: "checkpoints/CURRENT.r2",
+			journal: { from: null, to: null, count: 0 },
+			files: Object.fromEntries(
+				FIXED_PATHS.map((path) => [
+					path,
+					path === "CURRENT.md" ? contentHash(current) : null,
+				]),
+			),
+			evidence: { "memories/backup.md": contentHash(warning) },
+			evidenceLines: { "memories/backup.md": [warning] },
+		}),
+	});
+	const findings = checkWorkspace(workspace, tree, config(), TODAY);
+	expect(finding(findings, "evidence-lost")).toMatchObject({
+		level: "warn",
+		file: "memories/backup.md",
+		message:
+			"memories/backup.md held the copy of a dropped CURRENT line; check the copy is still there",
+	});
+	expect(finding(findings, "current-line-dropped").message).toContain(warning);
 });

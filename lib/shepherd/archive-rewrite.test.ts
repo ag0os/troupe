@@ -2,7 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyArchive, planArchive, renderArchive } from "./archive";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
@@ -16,6 +21,7 @@ function config(): Config {
 	return {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 	};

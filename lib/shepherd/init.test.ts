@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
-import { DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import { DEFAULT_MARKS, DEFAULT_START, DEFAULT_WINDOWS } from "./config";
 import { renderTemplate, TEMPLATES } from "./guides";
 import {
 	applyInit,
@@ -19,6 +19,7 @@ const BASE = [
 	"CURRENT.md",
 	"MEMORY.md",
 	"journal.md",
+	"pending.md",
 	"docs/INDEX.md",
 	"docs/STATUS-template.md",
 	"archive/INDEX.md",
@@ -185,9 +186,9 @@ describe("init", () => {
 	test("stops at a file blocking work/todo and reports only completed writes", () => {
 		const { root, now } = fixture({ ".shepherd/work/todo": "blocked" });
 		const result = applyInit(root, { master: true, now });
-		expect(result.created).toEqual(BASE.slice(0, 6));
+		expect(result.created).toEqual(BASE.slice(0, 7));
 		expect(result.kept).toEqual([]);
-		expect(result.entries).toHaveLength(6);
+		expect(result.entries).toHaveLength(7);
 		expect(result.failed).toEqual({
 			path: "work/todo/",
 			error: "a file is in the way",
@@ -199,7 +200,7 @@ describe("init", () => {
 			root,
 			state: join(root, ".shepherd"),
 			master: true,
-			created: BASE.slice(0, 6),
+			created: BASE.slice(0, 7),
 			kept: [],
 			failed: { path: "work/todo/", error: "a file is in the way" },
 		});
@@ -219,7 +220,7 @@ describe("init", () => {
 	test("stops on another filesystem error without rolling back", () => {
 		const { root, now } = fixture({ ".shepherd/docs": "not a directory" });
 		const result = applyInit(root, { master: false, now });
-		expect(result.created).toEqual(BASE.slice(0, 3));
+		expect(result.created).toEqual(BASE.slice(0, 4));
 		expect(result.failed?.path).toBe("docs/INDEX.md");
 		expect(result.failed?.error).toBeTruthy();
 		expect(fs.existsSync(join(root, ".shepherd/archive"))).toBe(false);
@@ -236,7 +237,7 @@ describe("init", () => {
 		expect(result.created).toEqual([...BASE, ...SHARED]);
 		expect(result.failed).toBeNull();
 		expect(fs.readFileSync(join(root, "modules/shared.md"), "utf8")).toBe(
-			renderTemplate(TEMPLATES[10].text, now),
+			renderTemplate(TEMPLATES[11].text, now),
 		);
 		expect(fs.existsSync(join(root, "state/CURRENT.md"))).toBe(true);
 		expect(renderInit(result).split("\n")[0]).toBe(
@@ -314,18 +315,20 @@ describe("init", () => {
 		});
 	});
 
-	test("fresh workspace passes the checker with only charter-missing info", () => {
+	test("fresh workspace passes the checker with charter-missing and checkpoint-missing info", () => {
 		const { root, now } = fixture();
 		applyInit(root, { master: false, now });
 		const tree = discoverTree(root);
 		const config = {
 			marks: { ...DEFAULT_MARKS },
 			windows: { ...DEFAULT_WINDOWS },
+			start: { ...DEFAULT_START },
 			codex: {},
 			problems: [],
 		};
 		const findings = checkWorkspace(tree.root, tree, config, now, root);
 		expect(findings.map(({ level, code }) => ({ level, code }))).toEqual([
+			{ level: "info", code: "checkpoint-missing" },
 			{ level: "info", code: "charter-missing" },
 		]);
 	});
@@ -344,6 +347,7 @@ describe("init", () => {
 		const config = {
 			marks: { ...DEFAULT_MARKS },
 			windows: { ...DEFAULT_WINDOWS },
+			start: { ...DEFAULT_START },
 			codex: {},
 			problems: [],
 		};
@@ -372,4 +376,17 @@ applyInit(${JSON.stringify(root)}, { master: false, now: new Date("2026-10-06T01
 		expect(text).toContain("Updated: 2026-10-05 21:23");
 		expect(text).not.toContain("2026-10-06 01:23");
 	});
+});
+
+test("init writes the exact pending prose and preserves hand kept discoveries", () => {
+	const { root, now } = fixture();
+	const expected =
+		"# Pending\n\nDiscoveries not yet in their place: one bullet each, date first, then what, then `->` where it goes. Shown whole at\nevery session start. Remove a line when its destination carries it, and journal the move.\n";
+	applyInit(root, { master: false, now });
+	const path = join(root, ".shepherd/pending.md");
+	expect(fs.readFileSync(path, "utf8")).toBe(expected);
+	const edited = `${expected}\n- 2026-10-08 A discovery -> agreed rules\n`;
+	fs.writeFileSync(path, edited);
+	expect(applyInit(root, { master: false, now }).kept).toContain("pending.md");
+	expect(fs.readFileSync(path, "utf8")).toBe(edited);
 });

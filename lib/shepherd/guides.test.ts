@@ -8,6 +8,7 @@ const templateSources = [
 	["CURRENT.md", false, "CURRENT.md"],
 	["MEMORY.md", false, "MEMORY.md"],
 	["journal.md", false, "journal.md"],
+	["pending.md", false, "pending.md"],
 	["docs/INDEX.md", false, "docs-INDEX.md"],
 	["docs/STATUS-template.md", false, "STATUS-template.md"],
 	["archive/INDEX.md", false, "archive-INDEX.md"],

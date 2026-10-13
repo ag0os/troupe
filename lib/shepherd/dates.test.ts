@@ -6,7 +6,7 @@ const datesModule = pathToFileURL(join(import.meta.dir, "dates.ts")).href;
 
 function inTimezone(zone: string, expression: string): unknown {
 	const script = `
-		import { dayOf, daysBetween, localDate, monthOf } from ${JSON.stringify(datesModule)};
+		import { dayOf, daysBetween, localDate, localTimestamp, monthOf } from ${JSON.stringify(datesModule)};
 		console.log(JSON.stringify(${expression}));
 	`;
 	const child = Bun.spawnSync([process.execPath, "-e", script], {
@@ -21,6 +21,18 @@ function inTimezone(zone: string, expression: string): unknown {
 }
 
 describe("local date helpers", () => {
+	test("formats local timestamps with negative, positive and zero offsets", () => {
+		for (const [zone, expected] of [
+			["America/Argentina/Salta", "2026-10-13T23:30:00-03:00"],
+			["Asia/Kathmandu", "2026-10-14T08:15:00+05:45"],
+			["UTC", "2026-10-14T02:30:00+00:00"],
+		] as const) {
+			expect(
+				inTimezone(zone, `localTimestamp(new Date("2026-10-14T02:30:00Z"))`),
+			).toBe(expected);
+		}
+	});
+
 	test("child processes apply different time zones", () => {
 		const expression = `new Date("2026-01-15T00:00:00Z").getHours()`;
 		expect([

@@ -3,11 +3,16 @@ import { dirname, join, relative, resolve } from "node:path";
 import type { Finding, FindingLevel } from "./check";
 import { decodedLinkTarget } from "./check-links";
 import type { Config } from "./config";
-import { daysBetween, monthOf } from "./dates";
+import { daysBetween, localDate, monthOf } from "./dates";
 import {
 	closedDate,
 	frontmatter,
+	journalChain,
+	journalDuplicateHeadings,
+	journalMisorderedHeadings,
+	journalOrphans,
 	journalSections,
+	journalTimeSlips,
 	proseLines,
 	read,
 } from "./text";
@@ -73,6 +78,25 @@ export function checkWork(
 				);
 			}
 			items.set(slug, state);
+
+			if (state !== "done") {
+				for (const report of readdirSync(itemDir, { withFileTypes: true })) {
+					if (!report.isFile() || !report.name.endsWith("report.md")) continue;
+					const path = join(itemDir, report.name);
+					if (
+						!proseLines(read(path)).some(({ line }) =>
+							/^## Discoveries(?:[ \t]+#+)?[ \t]*\r?$/.test(line),
+						)
+					) {
+						add(
+							"warn",
+							"report-no-discoveries",
+							path,
+							"report needs a ## Discoveries heading",
+						);
+					}
+				}
+			}
 
 			const status = join(itemDir, "STATUS.md");
 			if (!existsSync(status)) {
@@ -173,9 +197,58 @@ export function checkWork(
 		}
 	}
 
+	for (const { file, reason, line } of journalChain(workspace.state)
+		.unreadable) {
+		if (line !== undefined)
+			add(
+				"warn",
+				"journal-fence-unclosed",
+				join(workspace.state, file),
+				reason,
+				line,
+			);
+	}
+
 	const journal = join(workspace.state, "journal.md");
 	if (existsSync(journal)) {
 		const text = read(journal);
+		for (const slip of journalTimeSlips(text)) {
+			add(
+				"warn",
+				"journal-time-backwards",
+				journal,
+				`${slip.count} time steps backwards by more than 5 minutes under ${slip.day}`,
+				slip.firstLine,
+			);
+		}
+		for (const duplicate of journalDuplicateHeadings(text)) {
+			add(
+				"warn",
+				"journal-heading-duplicate",
+				journal,
+				`duplicate heading ${duplicate.day}`,
+				duplicate.lines[0],
+			);
+		}
+		for (const heading of journalMisorderedHeadings(text)) {
+			add(
+				"warn",
+				"journal-heading-order",
+				journal,
+				`${heading.day} is earlier than ${heading.previous}; a rotation would reorder the chain`,
+				heading.line,
+			);
+		}
+		const orphans = journalOrphans(text);
+		if (orphans.length) {
+			add(
+				"warn",
+				"journal-orphans",
+				journal,
+				`${orphans.length} bullets before the first heading; a rotation would reorder the chain`,
+				orphans[0]?.line,
+			);
+		}
 		const thisMonth = monthOf(today);
 		const older = journalSections(text).days.filter(
 			(day) => day.date.slice(0, 7) < thisMonth,
@@ -209,6 +282,34 @@ export function checkWork(
 				`${misfiled} bullets dated later than the heading they sit under (one heading per day)`,
 				firstMisfiled,
 			);
+		}
+	}
+
+	const pending = join(workspace.state, "pending.md");
+	if (existsSync(pending)) {
+		for (const { n, line } of proseLines(read(pending))) {
+			if (!line.startsWith("- ")) continue;
+			const date = line.match(/^- (\d{4}-\d{2}-\d{2})(?=\b)/)?.[1];
+			if (!date) {
+				add(
+					"info",
+					"pending-no-date",
+					pending,
+					"pending bullet needs a leading YYYY-MM-DD",
+					n,
+				);
+			} else {
+				const age = daysBetween(localDate(date), today);
+				if (age > config.windows.pendingDays) {
+					add(
+						"warn",
+						"pending-stale",
+						pending,
+						`${date}, ${age} days ago, past the ${config.windows.pendingDays}-day pending window`,
+						n,
+					);
+				}
+			}
 		}
 	}
 

@@ -5,14 +5,23 @@ import { z } from "zod";
 export const DEFAULT_MARKS = {
 	opening: 12_000,
 	charter: 1_000,
-	current: 1_500,
+	current: 600,
 	shared: 1_500,
 } as const;
 
 export const DEFAULT_WINDOWS = {
+	pendingDays: 14,
 	doneDays: 30,
 	currentStaleDays: 7,
 } as const;
+
+export const DEFAULT_START = {
+	journalWords: 1_500,
+} as const;
+
+export type Start = {
+	journalWords: number;
+};
 
 export type Marks = {
 	opening: number;
@@ -22,6 +31,7 @@ export type Marks = {
 };
 
 export type Windows = {
+	pendingDays: number;
 	doneDays: number;
 	currentStaleDays: number;
 };
@@ -42,6 +52,7 @@ export type ConfigProblem = {
 export type Config = {
 	marks: Marks;
 	windows: Windows;
+	start: Start;
 	sessionPrefix?: string;
 	codex: CodexConfig;
 	problems: ConfigProblem[];
@@ -67,8 +78,12 @@ const marksSchema = z.strictObject({
 	shared: positiveInteger.optional(),
 });
 const windowsSchema = z.strictObject({
+	pendingDays: positiveInteger.optional(),
 	doneDays: positiveInteger.optional(),
 	currentStaleDays: positiveInteger.optional(),
+});
+const startSchema = z.strictObject({
+	journalWords: positiveInteger.optional(),
 });
 const codexSchema = z
 	.strictObject({
@@ -84,11 +99,13 @@ const codexSchema = z
 const userSchema = z.strictObject({
 	marks: marksSchema.optional(),
 	windows: windowsSchema.optional(),
+	start: startSchema.optional(),
 	codex: codexSchema.optional(),
 });
 const workspaceSchema = z.strictObject({
 	marks: marksSchema.optional(),
 	windows: windowsSchema.optional(),
+	start: startSchema.optional(),
 	sessionPrefix: z
 		.string()
 		.regex(
@@ -196,11 +213,12 @@ function readLayer<T>(
 }
 
 function applyLayer(
-	config: Pick<Config, "marks" | "windows">,
-	layer: Pick<UserLayer, "marks" | "windows">,
+	config: Pick<Config, "marks" | "windows" | "start">,
+	layer: Pick<UserLayer, "marks" | "windows" | "start">,
 ): void {
 	if (layer.marks) Object.assign(config.marks, layer.marks);
 	if (layer.windows) Object.assign(config.windows, layer.windows);
+	if (layer.start) Object.assign(config.start, layer.start);
 }
 
 export function loadConfig({
@@ -211,6 +229,7 @@ export function loadConfig({
 	const config: Config = {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 	};

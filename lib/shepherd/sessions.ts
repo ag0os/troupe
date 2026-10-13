@@ -19,6 +19,7 @@ export type ToolEnv = {
 	home: string;
 	env: Readonly<Record<string, string | undefined>>;
 	now: Date;
+	clock: () => Date;
 	execPath?: string;
 	runCommand: (request: CommandRequest) => Promise<CommandResult>;
 	pidAlive: (pid: number) => boolean;
@@ -100,20 +101,36 @@ export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
 export function latestClaudeTranscriptMtime(
 	toolEnv: Pick<ToolEnv, "home">,
 	cwd: string,
+	excludeRunningSession?: { lastRecord: number; now: Date },
 ): number | undefined {
 	const key = cwd.replace(/[^A-Za-z0-9]/g, "-");
 	const dir = join(toolEnv.home, ".claude", "projects", key);
 	try {
-		const mtimes = readdirSync(dir)
+		const transcripts = readdirSync(dir)
 			.filter((file) => file.endsWith(".jsonl"))
 			.flatMap((file) => {
 				try {
-					return [statSync(join(dir, file)).mtimeMs];
+					return [statSync(join(dir, file))];
 				} catch {
 					return [];
 				}
 			});
-		return mtimes.length > 0 ? Math.max(...mtimes) : undefined;
+		transcripts.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		const newest = transcripts[0];
+		if (!newest) return undefined;
+		if (excludeRunningSession) {
+			const { lastRecord, now } = excludeRunningSession;
+			const age = now.getTime() - newest.mtimeMs;
+			if (
+				newest.birthtimeMs > 0 &&
+				newest.birthtimeMs > lastRecord &&
+				age >= 0 &&
+				age <= 5 * 60_000
+			) {
+				return transcripts[1]?.mtimeMs ?? lastRecord;
+			}
+		}
+		return newest.mtimeMs;
 	} catch {
 		return undefined;
 	}

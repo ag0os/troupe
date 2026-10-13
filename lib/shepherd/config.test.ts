@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_MARKS,
+	DEFAULT_START,
 	DEFAULT_WINDOWS,
 	loadConfig,
 	splitConfigProblems,
@@ -37,22 +38,28 @@ describe("loadConfig", () => {
 	test("returns the built-in defaults when config files are absent", () => {
 		const home = fixture();
 
-		expect(loadConfig({ home, env: {}, workspaceChain: [] })).toEqual({
+		const config = loadConfig({ home, env: {}, workspaceChain: [] });
+		expect(config.marks.current).toBe(600);
+		expect(config.windows.pendingDays).toBe(14);
+		expect(config.start.journalWords).toBe(1_500);
+		expect(config).toEqual({
 			marks: DEFAULT_MARKS,
 			windows: DEFAULT_WINDOWS,
+			start: DEFAULT_START,
 			codex: {},
 			problems: [],
 		});
 	});
 
-	test("layers each marks and windows key from outermost to target", () => {
+	test("layers each marks, windows and start key from outermost to target", () => {
 		const home = fixture();
 		const outer = join(home, "work");
 		const inner = join(outer, "project");
 		const target = join(inner, "service");
 		writeJson(join(home, ".config", "shepherd", "config.json"), {
 			marks: { opening: 20_000, charter: 2_000 },
-			windows: { doneDays: 40 },
+			windows: { doneDays: 40, pendingDays: 20 },
+			start: { journalWords: 2_000 },
 			codex: {
 				home: "~/.codex-work",
 				model: "gpt-5.6-sol",
@@ -61,12 +68,14 @@ describe("loadConfig", () => {
 		});
 		writeJson(workspaceFile(outer), {
 			marks: { opening: 18_000, current: 1_800 },
-			windows: { currentStaleDays: 10 },
+			windows: { currentStaleDays: 10, pendingDays: 18 },
+			start: { journalWords: 1_800 },
 			sessionPrefix: "outer",
 		});
 		writeJson(workspaceFile(inner), {
 			marks: { current: 1_600, shared: 1_700 },
-			windows: { doneDays: 35 },
+			windows: { doneDays: 35, pendingDays: 16 },
+			start: { journalWords: 1_600 },
 			sessionPrefix: "inner",
 		});
 		writeJson(workspaceFile(target), {
@@ -83,7 +92,8 @@ describe("loadConfig", () => {
 				current: 1_600,
 				shared: 1_700,
 			},
-			windows: { doneDays: 35, currentStaleDays: 10 },
+			windows: { doneDays: 35, currentStaleDays: 10, pendingDays: 16 },
+			start: { journalWords: 1_600 },
 			sessionPrefix: "flock-2",
 			codex: {
 				home: join(home, ".codex-work"),
@@ -93,6 +103,79 @@ describe("loadConfig", () => {
 			problems: [],
 		});
 	});
+
+	for (const scope of ["user", "workspace"] as const) {
+		test(`accepts new keys from the ${scope} layer`, () => {
+			const home = fixture();
+			const workspace = join(home, "project");
+			const file =
+				scope === "user"
+					? join(home, ".config", "shepherd", "config.json")
+					: workspaceFile(workspace);
+			writeJson(file, {
+				windows: { pendingDays: 21 },
+				start: { journalWords: 2_100 },
+			});
+
+			const config = loadConfig({ home, env: {}, workspaceChain: [workspace] });
+
+			expect(config.windows).toEqual({ ...DEFAULT_WINDOWS, pendingDays: 21 });
+			expect(config.start).toEqual({ journalWords: 2_100 });
+			expect(config.problems).toEqual([]);
+		});
+
+		for (const [group, key] of [
+			["windows", "pendingDays"],
+			["start", "journalWords"],
+		] as const) {
+			for (const value of [0, -1, 1.5, "14"]) {
+				test(`rejects ${JSON.stringify(value)} for ${group}.${key} in the ${scope} layer`, () => {
+					const home = fixture();
+					const workspace = join(home, "project");
+					const file =
+						scope === "user"
+							? join(home, ".config", "shepherd", "config.json")
+							: workspaceFile(workspace);
+					writeJson(file, { [group]: { [key]: value } });
+
+					const config = loadConfig({
+						home,
+						env: {},
+						workspaceChain: [workspace],
+					});
+
+					expect(config.windows).toEqual(DEFAULT_WINDOWS);
+					expect(config.start).toEqual(DEFAULT_START);
+					expect(config.problems).toHaveLength(1);
+					expect(config.problems[0]).toMatchObject({
+						file,
+						key: `${group}.${key}`,
+					});
+				});
+			}
+		}
+
+		test(`rejects unknown start keys in the ${scope} layer and skips the file`, () => {
+			const home = fixture();
+			const workspace = join(home, "project");
+			const file =
+				scope === "user"
+					? join(home, ".config", "shepherd", "config.json")
+					: workspaceFile(workspace);
+			writeJson(file, {
+				windows: { pendingDays: 21 },
+				start: { journalWords: 2_100, unknown: 1 },
+			});
+
+			const config = loadConfig({ home, env: {}, workspaceChain: [workspace] });
+
+			expect(config.windows).toEqual(DEFAULT_WINDOWS);
+			expect(config.start).toEqual(DEFAULT_START);
+			expect(config.problems).toEqual([
+				{ file, key: "start.unknown", problem: "unknown key" },
+			]);
+		});
+	}
 
 	test("does not inherit sessionPrefix from an enclosing workspace", () => {
 		const home = fixture();

@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { checkWorkspace, type Finding } from "./check";
 import { checkWork } from "./check-work";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
@@ -21,6 +26,7 @@ function config(overrides: Partial<Config> = {}): Config {
 	return {
 		marks: { ...DEFAULT_MARKS },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 		...overrides,
@@ -276,4 +282,197 @@ describe("checkWork", () => {
 			finding(checkWorkspace(workspace, tree, config(), TODAY), "outbox-item"),
 		).toMatchObject({ file: "outbox/note.md" });
 	});
+});
+
+describe("staged work findings", () => {
+	test("journal-time-backwards counts slips per heading beyond five minutes", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/journal.md":
+				"## 2026-10-05\n- 10:20 First\n- 10:17 Small step\n- 10:11 Slip\n- 10:05 Slip\n## 2026-10-06\n- 09:00 Reset\n- 08:57 Small step",
+		});
+		expect(
+			checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "journal-time-backwards",
+			),
+		).toEqual([
+			{
+				level: "warn",
+				code: "journal-time-backwards",
+				file: "journal.md",
+				line: 4,
+				message:
+					"2 time steps backwards by more than 5 minutes under 2026-10-05",
+			},
+		]);
+	});
+
+	test("journal-heading-duplicate reports the first heading only for repeated dates", () => {
+		for (const duplicate of [true, false]) {
+			const { workspace } = fixture({
+				"root/.shepherd/journal.md": `## 2026-10-05\n- Entry\n## 2026-10-0${duplicate ? "5" : "6"}\n- Entry`,
+			});
+			const matches = checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "journal-heading-duplicate",
+			);
+			expect(matches).toHaveLength(duplicate ? 1 : 0);
+			if (duplicate)
+				expect(matches[0]).toMatchObject({
+					level: "warn",
+					file: "journal.md",
+					line: 1,
+				});
+		}
+	});
+
+	test("journal-heading-order reports an earlier heading and ignores ordered headings", () => {
+		for (const earlier of [true, false]) {
+			const { workspace } = fixture({
+				"root/.shepherd/journal.md": `## 2026-10-05\n- Entry\n## 2026-10-0${earlier ? "4" : "6"}\n- Entry`,
+			});
+			const matches = checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "journal-heading-order",
+			);
+			expect(matches).toHaveLength(earlier ? 1 : 0);
+			if (earlier)
+				expect(matches[0]).toMatchObject({
+					level: "warn",
+					file: "journal.md",
+					line: 3,
+				});
+		}
+	});
+
+	test("journal-orphans reports pre-heading bullets and ignores fenced and headed bullets", () => {
+		for (const orphan of [true, false]) {
+			const { workspace } = fixture({
+				"root/.shepherd/journal.md": `# Journal\n${orphan ? "- Orphan" : "Prose"}\n\`\`\`\n- Fenced\n\`\`\`\n## 2026-10-05\n- Entry`,
+			});
+			const matches = checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "journal-orphans",
+			);
+			expect(matches).toHaveLength(orphan ? 1 : 0);
+			if (orphan)
+				expect(matches[0]).toMatchObject({
+					level: "warn",
+					file: "journal.md",
+					line: 2,
+				});
+		}
+	});
+
+	test("journal diagnostics apply only to journal.md", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/archive/journal/2026-09.md":
+				"- Orphan\n## 2026-09-02\n- 10:20 First\n- 10:00 Slip\n## 2026-09-01\n## 2026-09-01",
+		});
+		expect(
+			checkWork(workspace, config(), TODAY).filter(({ code }) =>
+				[
+					"journal-time-backwards",
+					"journal-heading-duplicate",
+					"journal-heading-order",
+					"journal-orphans",
+				].includes(code),
+			),
+		).toEqual([]);
+	});
+
+	test("report-no-discoveries checks direct live item reports outside fences even without STATUS", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/work/todo/release/T9-report.md":
+				"```\n## Discoveries\n```",
+			"root/.shepherd/work/in-progress/build/report.md": "## Discoveries\nnone",
+			"root/.shepherd/work/in-progress/build/other-report.md": "# Report",
+			"root/.shepherd/work/in-progress/build/nested/report.md": "# Nested",
+			"root/.shepherd/work/done/old/report.md": "# Done",
+			"root/.shepherd/work/todo/release/notes.md": "# Notes",
+		});
+		expect(
+			checkWork(workspace, config(), TODAY)
+				.filter(({ code }) => code === "report-no-discoveries")
+				.map(({ file }) => file),
+		).toEqual([
+			"work/todo/release/T9-report.md",
+			"work/in-progress/build/other-report.md",
+		]);
+	});
+
+	test("pending-stale respects the configured window edge and ignores fenced bullets", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/pending.md":
+				"- 2026-09-20 Old\n- 2026-09-21 Edge\n```\n- 2026-09-01 Fenced\n```",
+		});
+		const matches = checkWork(workspace, config(), TODAY).filter(
+			({ code }) => code === "pending-stale",
+		);
+		expect(matches).toHaveLength(1);
+		expect(matches[0]).toMatchObject({
+			level: "warn",
+			file: "pending.md",
+			line: 1,
+		});
+		expect(
+			checkWork(
+				workspace,
+				config({ windows: { ...DEFAULT_WINDOWS, pendingDays: 15 } }),
+				TODAY,
+			).filter(({ code }) => code === "pending-stale"),
+		).toEqual([]);
+	});
+
+	test("pending-no-date reports only undated top-level prose bullets", () => {
+		const { workspace } = fixture({
+			"root/.shepherd/pending.md":
+				"- Needs date\n- 2026-10-05 Dated\n  - Nested\n```\n- Fenced\n```",
+		});
+		expect(
+			checkWork(workspace, config(), TODAY).filter(
+				({ code }) => code === "pending-no-date",
+			),
+		).toEqual([
+			{
+				level: "info",
+				code: "pending-no-date",
+				file: "pending.md",
+				line: 1,
+				message: "pending bullet needs a leading YYYY-MM-DD",
+			},
+		]);
+	});
+});
+
+test("report-no-discoveries accepts closing hashes and trailing whitespace", () => {
+	const { workspace } = fixture({
+		"root/.shepherd/work/todo/release/closing-report.md": "## Discoveries ##",
+		"root/.shepherd/work/todo/release/spaces-report.md": "## Discoveries   \t",
+		"root/.shepherd/work/todo/release/both-report.md": "## Discoveries ### \t",
+		"root/.shepherd/work/todo/release/not-heading-report.md":
+			"## Discoveries ## extra",
+	});
+	expect(
+		checkWork(workspace, config(), TODAY)
+			.filter(({ code }) => code === "report-no-discoveries")
+			.map(({ file }) => file),
+	).toEqual(["work/todo/release/not-heading-report.md"]);
+});
+
+test("warns about unclosed fences in current and archived journals with opening lines", () => {
+	const { workspace } = fixture({
+		"root/.shepherd/journal.md": "# Journal\n## 2026-10-05\n```\noutput\n",
+		"root/.shepherd/archive/journal/2026-09.md":
+			"# Journal\n~~~~\n```\noutput\n",
+	});
+	const findings = checkWork(workspace, config(), TODAY).filter(
+		({ code }) => code === "journal-fence-unclosed",
+	);
+	expect(
+		findings.map(({ file, line, level }) => ({ file, line, level })),
+	).toEqual([
+		{ file: "archive/journal/2026-09.md", line: 2, level: "warn" },
+		{ file: "journal.md", line: 3, level: "warn" },
+	]);
+	for (const finding of findings)
+		expect(finding.message).toContain(
+			`fence opened at line ${finding.line} is never closed; close or remove it`,
+		);
 });

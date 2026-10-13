@@ -7,6 +7,7 @@ import {
 	renderArchive,
 } from "./archive";
 import { checkWorkspace, type Finding, type FindingLevel } from "./check";
+import { runCheckpoint } from "./checkpoint-command";
 import {
 	type Config,
 	type ConfigProblem,
@@ -18,7 +19,16 @@ import { dayOf, localDate } from "./dates";
 import { doctorExitCode, doctorJson, renderDoctor, runDoctor } from "./doctor";
 import { GUIDES } from "./guides";
 import { applyInit, initExitCode, initJson, renderInit } from "./init";
+import { runJournal } from "./journal";
+import {
+	LockError,
+	type LockOptions,
+	LockReleaseError,
+	unlockState,
+	withStateLocks,
+} from "./lock";
 import { runningSessions, type ToolEnv } from "./sessions";
+import { runStart } from "./start";
 import { renderStatus, statusJson, statusReport } from "./status-render";
 import {
 	discoverTree,
@@ -30,6 +40,7 @@ import {
 import { STATE_DIR } from "./workspace";
 
 export type ToolResult = {
+	notice?: string;
 	text: string;
 	code: number;
 	stream: "stdout" | "stderr";
@@ -43,26 +54,50 @@ const USAGE = [
 	"shepherd tool guide [<name>]",
 	"shepherd tool init [--master] [--json]",
 	"shepherd tool doctor [--json]",
+	"shepherd tool start      [--budget <words>] [--json]",
+	"shepherd tool journal    (<text> | --stdin) [--json]",
+	"shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]",
+	"shepherd tool unlock     [--json]",
 ].join("\n");
 
 const CHECK_FLAGS = new Set(["all", "status", "context", "json", "today"]);
 const ARCHIVE_FLAGS = new Set(["recursive", "apply", "json", "today"]);
 const DOCTOR_FLAGS = new Set(["json"]);
 const INIT_FLAGS = new Set(["master", "json"]);
-const TOOL_FLAGS = new Set([...CHECK_FLAGS, ...ARCHIVE_FLAGS, ...INIT_FLAGS]);
+const COMMAND_FLAGS = {
+	check: CHECK_FLAGS,
+	archive: ARCHIVE_FLAGS,
+	guide: new Set<string>(),
+	init: INIT_FLAGS,
+	doctor: DOCTOR_FLAGS,
+	start: new Set(["budget", "json"]),
+	journal: new Set(["stdin", "json"]),
+	checkpoint: new Set(["apply", "token", "session", "accept-dropped", "json"]),
+	unlock: new Set(["json"]),
+};
+type ToolCommand = keyof typeof COMMAND_FLAGS;
+const FLAG_OWNERS: Record<string, string> = {
+	all: "tool check",
+	status: "tool check",
+	context: "tool check",
+	master: "tool init",
+	json: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock",
+	today: "tool check and tool archive",
+	apply: "tool archive and tool checkpoint",
+	recursive: "tool archive",
+	budget: "tool start",
+	stdin: "tool journal",
+	token: "tool checkpoint",
+	session: "tool checkpoint",
+	"accept-dropped": "tool checkpoint",
+};
 const LEVELS: FindingLevel[] = ["error", "warn", "info"];
 
 /** Whether a positional names a Shepherd maintenance command. */
 export function isToolCommand(
 	command: string | undefined,
-): command is "check" | "archive" | "guide" | "init" | "doctor" {
-	return (
-		command === "check" ||
-		command === "archive" ||
-		command === "guide" ||
-		command === "init" ||
-		command === "doctor"
-	);
+): command is ToolCommand {
+	return command !== undefined && Object.hasOwn(COMMAND_FLAGS, command);
 }
 
 function result(
@@ -82,35 +117,15 @@ function flagName(name: string): string {
 }
 
 function invalidFlag(
-	command: "check" | "archive" | "guide" | "init" | "doctor",
+	command: ToolCommand,
 	flags: ToolFlags,
 ): string | undefined {
-	const allowed =
-		command === "check"
-			? CHECK_FLAGS
-			: command === "archive"
-				? ARCHIVE_FLAGS
-				: command === "init"
-					? INIT_FLAGS
-					: command === "doctor"
-						? DOCTOR_FLAGS
-						: new Set<string>();
+	const allowed = COMMAND_FLAGS[command];
 	for (const [name, value] of Object.entries(flags)) {
 		if (value === false || value === undefined || allowed.has(name)) continue;
 		if (name === "name") return "shepherd: --name applies only to launches";
-		if (TOOL_FLAGS.has(name)) {
-			const owner =
-				name === "master"
-					? "tool init"
-					: name === "json"
-						? "tool check, tool archive, tool init and tool doctor"
-						: name === "today"
-							? "tool check and tool archive"
-							: name === "apply" || name === "recursive"
-								? "tool archive"
-								: "tool check";
-			return `shepherd: ${flagName(name)} applies only to ${owner}`;
-		}
+		const owner = FLAG_OWNERS[name];
+		if (owner) return `shepherd: ${flagName(name)} applies only to ${owner}`;
 	}
 	return undefined;
 }
@@ -189,11 +204,19 @@ function findingReports(
 	configs: ReadonlyMap<string, Config>,
 	today: Date,
 	home: string,
+	toolEnv: ToolEnv,
 ) {
 	return workspaces.map((workspace) => {
 		const config = configs.get(workspace.dir);
 		if (!config) throw new Error(`missing config for ${workspace.dir}`);
-		const findings = checkWorkspace(workspace, tree, config, today, home);
+		const findings = checkWorkspace(
+			workspace,
+			tree,
+			config,
+			today,
+			home,
+			toolEnv,
+		);
 		return {
 			name: workspace.name,
 			dir: workspace.dir,
@@ -282,7 +305,7 @@ async function runCheck(
 			const workspaceConfig = configs.get(workspace.dir);
 			if (!workspaceConfig)
 				throw new Error(`missing config for ${workspace.dir}`);
-			return contextTiers(workspace, workspaceConfig);
+			return contextTiers(workspace, workspaceConfig, undefined, toolEnv);
 		});
 		return flags.json === true
 			? result(
@@ -322,6 +345,7 @@ async function runCheck(
 		configs,
 		today,
 		toolEnv.home,
+		toolEnv,
 	);
 	const total = totals(reports);
 	return flags.json === true
@@ -340,7 +364,7 @@ async function runCheck(
 		: result(renderFindings(reports, flags.all === true), total.error ? 1 : 0);
 }
 
-function archiveJson(plan: ReturnType<typeof planArchive>) {
+export function archiveJson(plan: ReturnType<typeof planArchive>) {
 	return {
 		applied: plan.applied,
 		workspaces: plan.workspaces.map((workspace) => ({
@@ -354,41 +378,77 @@ function archiveJson(plan: ReturnType<typeof planArchive>) {
 			})),
 		})),
 		rewrites: plan.rewrittenFiles,
+		skippedRewrites: plan.skippedRewrites ?? [],
 	};
 }
 
-function runArchive(
+async function runArchive(
 	selectors: string[],
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
 	tree: WorkspaceTree,
 	configs: ReadonlyMap<string, Config>,
 	today: Date,
-): ToolResult {
+	lockOptions: LockOptions = {},
+): Promise<ToolResult> {
 	const scope = flags.recursive === true ? "archive-recursive" : "archive";
 	const workspaces = selectWorkspaces(tree, selectors, scope);
-	const planned = planArchive(
-		workspaces,
-		(workspace) => {
-			const config = configs.get(workspace.dir);
-			if (!config) throw new Error(`missing config for ${workspace.dir}`);
-			return config;
-		},
-		today,
-	);
-	const plan =
-		flags.apply === true ? applyArchive(planned, tree, toolEnv.home) : planned;
-	const code = archiveExitCode(plan);
-	return flags.json === true
-		? result(
-				JSON.stringify(
-					{ ...envelope(tree, today, "archive"), ...archiveJson(plan) },
+	const plan = () =>
+		planArchive(
+			workspaces,
+			(workspace) => {
+				const config = configs.get(workspace.dir);
+				if (!config) throw new Error(`missing config for ${workspace.dir}`);
+				return config;
+			},
+			today,
+		);
+	let planned: ReturnType<typeof planArchive>;
+	let releaseError: LockReleaseError | undefined;
+	try {
+		planned =
+			flags.apply === true
+				? await withStateLocks(
+						[tree.root.state, ...tree.workspaces.map(({ state }) => state)],
+						toolEnv,
+						() => applyArchive(plan(), tree, toolEnv.home),
+						lockOptions,
+					)
+				: plan();
+	} catch (error) {
+		if (error instanceof LockError) {
+			const workspace = tree.workspaces.find(
+				({ state }) => state === error.state,
+			);
+			return result(
+				`${workspace?.name ?? error.state}: ${error.message}`,
+				1,
+				"stderr",
+			);
+		}
+		if (!(error instanceof LockReleaseError)) throw error;
+		planned = error.result as ReturnType<typeof planArchive>;
+		releaseError = error;
+	}
+	const code = releaseError ? 1 : archiveExitCode(planned);
+	const text =
+		flags.json === true
+			? JSON.stringify(
+					{
+						...envelope(tree, today, "archive"),
+						...archiveJson(planned),
+						...(releaseError ? { releaseError: releaseError.message } : {}),
+					},
 					null,
 					2,
-				),
-				code,
-			)
-		: result(renderArchive(plan).replaceAll(`${toolEnv.home}/`, "~/"), code);
+				)
+			: renderArchive(planned).replaceAll(`${toolEnv.home}/`, "~/");
+	return result(
+		releaseError && flags.json !== true
+			? `${text}\n${releaseError.message}`
+			: text,
+		code,
+	);
 }
 
 /** Run a Shepherd maintenance command without launching an agent backend. */
@@ -396,6 +456,8 @@ export async function runTool(
 	args: readonly string[],
 	flags: ToolFlags,
 	toolEnv: ToolEnv,
+	archiveLockOptions: LockOptions = {},
+	readStdin: () => Promise<string> = () => Bun.stdin.text(),
 ): Promise<ToolResult> {
 	const command = args[0];
 	if (!isToolCommand(command)) return usage();
@@ -442,6 +504,28 @@ export async function runTool(
 			doctorExitCode(diagnosed),
 		);
 	}
+	if (command === "journal") {
+		if (flags.stdin === true ? args.length !== 1 : args.length !== 2)
+			return usage();
+	} else if (
+		["start", "checkpoint", "unlock"].includes(command) &&
+		args.length > 1
+	) {
+		return usage();
+	}
+	if (
+		command === "start" &&
+		flags.budget !== undefined &&
+		(typeof flags.budget !== "string" ||
+			!/^\d+$/.test(flags.budget) ||
+			!Number.isSafeInteger(Number(flags.budget)))
+	) {
+		return result(
+			"shepherd: --budget must be a non-negative integer",
+			2,
+			"stderr",
+		);
+	}
 	const today = todayFrom(flags, toolEnv.now);
 	if ("text" in today) return today;
 
@@ -451,6 +535,56 @@ export async function runTool(
 			(workspace) => workspace.dir === tree.home,
 		);
 		if (!homeWorkspace) throw new Error(`missing home workspace ${tree.home}`);
+		if (command === "journal") {
+			const journal = await runJournal(
+				homeWorkspace.state,
+				flags.stdin === true ? await readStdin() : (args[1] ?? ""),
+				toolEnv,
+				flags.json === true,
+				{ lock: archiveLockOptions },
+			);
+			return {
+				...journal,
+				...result(journal.text, journal.code, journal.stream),
+			};
+		}
+		if (command === "checkpoint") {
+			const checkpoint = await runCheckpoint(
+				homeWorkspace,
+				toolEnv,
+				{
+					apply: flags.apply === true,
+					token: typeof flags.token === "string" ? flags.token : undefined,
+					session:
+						typeof flags.session === "string" ? flags.session : undefined,
+					acceptDropped:
+						typeof flags["accept-dropped"] === "string"
+							? flags["accept-dropped"]
+							: undefined,
+					json: flags.json === true,
+				},
+				{ lock: archiveLockOptions },
+			);
+			return result(checkpoint.text, checkpoint.code, checkpoint.stream);
+		}
+		if (command === "unlock") {
+			const unlocked = await unlockState(
+				homeWorkspace.state,
+				toolEnv,
+				archiveLockOptions,
+			);
+			const { outcome, pid, code } = unlocked;
+			return result(
+				flags.json === true
+					? JSON.stringify({
+							outcome,
+							...(pid === undefined ? {} : { pid }),
+							code,
+						})
+					: unlocked.text,
+				code,
+			);
+		}
 		const config = configForWorkspace(homeWorkspace, tree, toolEnv);
 		const userProblems = splitConfigProblems(config.problems, toolEnv).user;
 		if (userProblems.length > 0) {
@@ -459,6 +593,15 @@ export async function runTool(
 				2,
 				"stderr",
 			);
+		}
+		if (command === "start") {
+			const started = runStart(homeWorkspace, tree, toolEnv, config, {
+				budget:
+					typeof flags.budget === "string" ? Number(flags.budget) : undefined,
+				json: flags.json === true,
+				today,
+			});
+			return result(started.text, started.code);
 		}
 		const configs = new Map(
 			tree.workspaces.map((workspace) => [
@@ -478,7 +621,15 @@ export async function runTool(
 					configs,
 					today,
 				)
-			: runArchive(args.slice(1), flags, toolEnv, tree, configs, today);
+			: await runArchive(
+					args.slice(1),
+					flags,
+					toolEnv,
+					tree,
+					configs,
+					today,
+					archiveLockOptions,
+				);
 	} catch (error) {
 		if (error instanceof WorkspaceTreeError) {
 			return treeError(toolEnv.cwd, error);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
-import { DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import { DEFAULT_MARKS, DEFAULT_START, DEFAULT_WINDOWS } from "./config";
 import { listedSessions, noNext, statusItems } from "./status-parse";
 import { makeTree } from "./test-support";
 import { discoverTree } from "./tree";
@@ -97,6 +97,7 @@ No NEXT is set`;
 				{
 					marks: { ...DEFAULT_MARKS },
 					windows: { ...DEFAULT_WINDOWS },
+					start: { ...DEFAULT_START },
 					codex: {},
 					problems: [],
 				},

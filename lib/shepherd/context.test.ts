@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
+import {
+	captureState,
+	commitCheckpoint,
+	nextCheckpoint,
+} from "./checkpoint-write";
 import { promptWords } from "./compose";
-import { type Config, DEFAULT_MARKS, DEFAULT_WINDOWS } from "./config";
+import {
+	type Config,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import { contextTiers, renderContextTable } from "./context";
-import { type MakeTreeOptions, makeTree } from "./test-support";
+import { runStart, startJson } from "./start";
+import { collectStart } from "./start-collect";
+import { fakeToolEnv, type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
 const cleanups: Array<() => void> = [];
@@ -17,6 +30,7 @@ function config(opening: number = DEFAULT_MARKS.opening): Config {
 	return {
 		marks: { ...DEFAULT_MARKS, opening },
 		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
 		codex: {},
 		problems: [],
 	};
@@ -57,9 +71,14 @@ describe("contextTiers", () => {
 		const tiers = contextTiers(workspace, config());
 
 		expect(tiers.loaded).toBe(promptWords(workspace.dir));
-		expect(tiers.start).toBe(14);
-		expect(tiers.opens).toBe(tiers.loaded + 14);
-		expect(tiers.onDemand).toBe(8);
+		expect(tiers.start).toBe(
+			startJson(
+				collectStart(workspace, fakeToolEnv({ home: workspace.dir }), config()),
+				[],
+			).words.start,
+		);
+		expect(tiers.opens).toBe(tiers.loaded + tiers.start);
+		expect(tiers.onDemand).toBe(16);
 		expect(tiers.cold).toBe(2);
 		expect(tiers.over).toEqual([]);
 	});
@@ -102,6 +121,15 @@ test("renderContextTable renders rows, totals, tokens and the legend", () => {
 			name: "root",
 			loaded: 1000,
 			start: 100,
+			startBreakdown: {
+				current: 100,
+				pending: 0,
+				journal: 0,
+				memoryIndex: 0,
+				docsIndex: 0,
+				start: 100,
+			},
+			journalMode: "boundary",
 			opens: 1100,
 			onDemand: 20,
 			cold: 3,
@@ -111,6 +139,15 @@ test("renderContextTable renders rows, totals, tokens and the legend", () => {
 			name: "child",
 			loaded: 10,
 			start: 5,
+			startBreakdown: {
+				current: 5,
+				pending: 0,
+				journal: 0,
+				memoryIndex: 0,
+				docsIndex: 0,
+				start: 5,
+			},
+			journalMode: "fallback",
 			opens: 15,
 			onDemand: 4,
 			cold: 2,
@@ -125,4 +162,58 @@ test("renderContextTable renders rows, totals, tokens and the legend", () => {
 	expect(text).toContain(
 		"1 loaded: the composed prompt (core, modules, charter).",
 	);
+});
+
+test("full startup and context collection terminate and agree after budget cuts", () => {
+	const { workspace, tree } = fixture({
+		"root/.shepherd/CURRENT.md": "current words",
+		"root/.shepherd/charter.md": "charter words",
+		"root/.shepherd/pending.md": "Warning beyond bullets",
+		"root/.shepherd/MEMORY.md": "memory index",
+		"root/.shepherd/docs/INDEX.md": "docs index",
+		"root/.shepherd/journal.md":
+			"## 2026-10-05\n- first entry\n- newest entry\n",
+	});
+	const env = fakeToolEnv({ home: workspace.dir });
+	const cfg = config();
+	cfg.start.journalWords = 3;
+	const held = captureState(workspace, env);
+	commitCheckpoint(
+		workspace.state,
+		held,
+		nextCheckpoint(held, { written: env.now.toISOString() }),
+	);
+	writeFileSync(
+		join(workspace.state, "journal.md"),
+		"## 2026-10-05\n- first entry\n- newest entry\n- new unreviewed entry\n- final entry\n",
+	);
+	const data = collectStart(workspace, env, cfg);
+	expect(data.assessment.status).toBe("ok");
+	expect(data.assessment.boundary.state).toBe("found");
+	expect(data.assessment.dropped).toBeDefined();
+	expect(data.journal.cut?.entries).toBe(1);
+	const result = runStart(workspace, tree, env, cfg, {
+		json: true,
+		today: env.now,
+	});
+	const json = JSON.parse(result.text);
+	const tiers = contextTiers(workspace, cfg, undefined, env);
+	expect(result.code).toBe(0);
+	expect(tiers.start).toBe(json.words.start);
+	const { findings: _findings, ...breakdown } = json.words;
+	expect(tiers.startBreakdown).toEqual(breakdown);
+	expect(tiers.journalMode).toBe("boundary");
+	expect(tiers.journalMode).toBe(json.journal.mode);
+	expect(renderContextTable([tiers])).toContain(
+		"2 at start: the sources `shepherd tool start` prints, findings excluded",
+	);
+});
+
+test("source collection and context imports exclude check and renderer", () => {
+	for (const file of ["context.ts", "start-collect.ts"]) {
+		const text = readFileSync(join(import.meta.dir, file), "utf8");
+		const imports = text.match(/import[\s\S]*?from\s+["'][^"']+["']/g) ?? [];
+		for (const statement of imports)
+			expect(statement).not.toMatch(/from\s+["']\.\/(?:check|start)["']/);
+	}
 });

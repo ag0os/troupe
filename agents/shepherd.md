@@ -13,19 +13,34 @@ flags:
     description: "tool check: show words per context tier"
   json:
     type: boolean
-    description: "tool check, tool archive, tool init and tool doctor: emit machine-readable JSON"
+    description: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock: emit machine-readable JSON"
   today:
     type: string
     description: "tool check and tool archive: evaluate dates as of YYYY-MM-DD"
   apply:
     type: boolean
-    description: "tool archive: apply planned moves and reference rewrites"
+    description: "tool archive and tool checkpoint: apply planned moves or certify the held state"
   recursive:
     type: boolean
     description: "tool archive: include nested workspaces"
   master:
     type: boolean
     description: "tool init: also write the shared layer for a root workspace"
+  budget:
+    type: string
+    description: "tool start: set the journal word budget"
+  stdin:
+    type: boolean
+    description: "tool journal: read text from stdin"
+  token:
+    type: string
+    description: "tool checkpoint: certify the dry run token"
+  session:
+    type: string
+    description: "tool checkpoint: name the certifying session"
+  accept-dropped:
+    type: string
+    description: "tool checkpoint: journal dropped lines with this reason"
   name:
     type: string
     short: n
