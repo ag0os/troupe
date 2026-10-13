@@ -1,3 +1,13 @@
+---
+name: nested
+type: role
+description: Work under an enclosing workspace shared layer
+applies-when:
+  enclosing-modules: true
+budget: 450
+charter-keys:
+  core.way-of-working: optional
+---
 # Integration: Nested workspace
 
 This workspace sits under another one: the header's "Enclosing workspace" line names it, and `<enclosing>` below is that path. Its Shepherd keeps a shared layer for the workspaces beneath it: the inherited modules in this prompt, and reference files under `<enclosing>/.shepherd/` that you read when needed.

@@ -397,3 +397,30 @@ test("init writes the exact pending prose and preserves hand kept discoveries", 
 	expect(applyInit(root, { master: false, now }).kept).toContain("pending.md");
 	expect(fs.readFileSync(path, "utf8")).toBe(edited);
 });
+
+test("master init metadata is valid and stripped template body stays pinned", async () => {
+	const { parseModule } = await import("./module-format");
+	const { root, now } = fixture();
+	applyInit(root, { master: true, now });
+	const raw = fs.readFileSync(
+		join(root, ".shepherd/integrations/shared.md"),
+		"utf8",
+	);
+	const result = parseModule(raw, "shared.md");
+	expect(result.problems).toEqual([]);
+	expect(result.metadata).toMatchObject({
+		name: "shared",
+		type: "domain",
+		budget: 250,
+		"charter-keys": {},
+	});
+	expect(result.body).toBe(
+		fs.readFileSync(
+			join(
+				import.meta.dir,
+				"../../agents/__fixtures__/shepherd-module-matrix/builtin-bodies/integrations-shared.md.txt",
+			),
+			"utf8",
+		),
+	);
+});

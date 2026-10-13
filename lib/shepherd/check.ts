@@ -1,6 +1,7 @@
-import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { checkLinks, decodedLinkTarget } from "./check-links";
+import { checkModules } from "./check-modules";
 import { checkWork } from "./check-work";
 import { carriedEvidence, hashPaths, readCheckpoint } from "./checkpoint";
 import type { Config } from "./config";
@@ -17,7 +18,6 @@ import {
 	proseLines,
 	read,
 	words,
-	wordsIn,
 } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
@@ -97,24 +97,6 @@ function referenceLabel(label: string): string {
 function isBeneath(parent: string, child: string): boolean {
 	const path = relative(parent, child);
 	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
-}
-
-function enclosingWorkspace(
-	workspace: Workspace,
-	tree: WorkspaceTree,
-): Workspace | undefined {
-	return tree.workspaces
-		.filter((candidate) => isBeneath(candidate.dir, workspace.dir))
-		.sort((left, right) => right.dir.length - left.dir.length)[0];
-}
-
-function integrationFiles(workspace: Workspace): string[] {
-	const dir = join(workspace.state, "integrations");
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter((file) => file.endsWith(".md"))
-		.sort()
-		.map((file) => join(dir, file));
 }
 
 /** Check one workspace's state files, modules, memories and docs. */
@@ -361,41 +343,7 @@ export function checkWorkspace(
 		);
 	}
 
-	const integrations = integrationFiles(workspace);
-	const hasDescendant = tree.workspaces.some((candidate) =>
-		isBeneath(workspace.dir, candidate.dir),
-	);
-	const sharedWords = wordsIn(integrations);
-	if (hasDescendant && sharedWords > config.marks.shared) {
-		add(
-			"warn",
-			"shared-over-mark",
-			join(workspace.state, "integrations"),
-			`${sharedWords} words, past the ${config.marks.shared}-word mark; these modules load into every workspace beneath this one, so every word costs every session`,
-		);
-	}
-
-	const enclosing = enclosingWorkspace(workspace, tree);
-	if (enclosing) {
-		const inherited = new Map(
-			integrationFiles(enclosing).map((path) => [basename(path), path]),
-		);
-		for (const local of integrations) {
-			const inheritedPath = inherited.get(basename(local));
-			if (!inheritedPath || !existsSync(local) || !existsSync(inheritedPath)) {
-				continue;
-			}
-			const sameFile = realpathSync(local) === realpathSync(inheritedPath);
-			add(
-				"info",
-				"module-duplicate",
-				local,
-				sameFile
-					? `local ${basename(local)} is the same file as the inherited module; it is skipped at launch`
-					: `local ${basename(local)} has the same name as the inherited module; both load at launch`,
-			);
-		}
-	}
+	findings.push(...checkModules(workspace, tree, config));
 
 	for (const link of symlinksUnder(workspace.state)) {
 		if (!existsSync(link)) {

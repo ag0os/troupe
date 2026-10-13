@@ -2,21 +2,6 @@ import { join } from "node:path";
 import coreDoc from "../../system-prompts/shepherd/core.md" with {
 	type: "text",
 };
-import herdrDoc from "../../system-prompts/shepherd/integrations/herdr.md" with {
-	type: "text",
-};
-import interAgentDoc from "../../system-prompts/shepherd/integrations/inter-agent.md" with {
-	type: "text",
-};
-import nestedDoc from "../../system-prompts/shepherd/integrations/nested.md" with {
-	type: "text",
-};
-import rootDoc from "../../system-prompts/shepherd/integrations/root.md" with {
-	type: "text",
-};
-import softwareDoc from "../../system-prompts/shepherd/integrations/software.md" with {
-	type: "text",
-};
 import { PROMPT_SEPARATOR } from "../agent-format/schema";
 import {
 	type Config,
@@ -24,37 +9,14 @@ import {
 	handoffCeiling,
 } from "./config";
 import { dayOf } from "./dates";
+import {
+	moduleCatalog,
+	moduleProblemDetails,
+	resolveModules,
+} from "./module-resolution";
 import { defaultSessionName } from "./session-name";
 import { words } from "./text";
-import {
-	CHILD_DEPTH,
-	declaredModules,
-	findChildWorkspaces,
-	findEnclosingWorkspace,
-	loadCharter,
-	loadIntegrations,
-	STATE_DIR,
-} from "./workspace";
-
-/**
- * Herdr and inter-agent messaging check their own availability at run time.
- * The others depend on facts the launcher already has, so it leaves out the
- * ones that cannot apply instead of spending prompt on a module that would
- * only say to skip it.
- */
-function builtInIntegrations(applies: {
-	nested: boolean;
-	root: boolean;
-	software: boolean;
-}): string[] {
-	return [
-		herdrDoc,
-		interAgentDoc,
-		...(applies.nested ? [nestedDoc] : []),
-		...(applies.root ? [rootDoc] : []),
-		...(applies.software ? [softwareDoc] : []),
-	];
-}
+import { CHILD_DEPTH, findEnclosingWorkspace, STATE_DIR } from "./workspace";
 
 export function modelHeaderLine(
 	config: Pick<Config, "handoffCeilings">,
@@ -81,25 +43,19 @@ export function composeFragments(
 	enclosing: string | undefined,
 	headerLines: readonly string[] = [],
 	now: Date = new Date(),
+	onProblems?: (details: string) => void,
 ): string[] {
-	const charter = loadCharter(cwd);
-	const inherited = enclosing ? loadIntegrations(enclosing) : [];
-	// A local module that is the same file as an inherited one (a leftover
-	// symlink, say) would load twice.
-	const inheritedPaths = new Set(inherited.map((m) => m.path));
-	const locals = loadIntegrations(cwd).filter(
-		(m) => !inheritedPaths.has(m.path),
-	);
-	const children = findChildWorkspaces(cwd);
-	const gates = {
-		// An ancestor that publishes no module shares no layer to live under.
-		nested: inherited.length > 0,
-		root: children.length > 0,
-		software: declaredModules(charter).has("software"),
-	};
-	const gated = Object.entries(gates)
-		.filter(([, on]) => on)
-		.map(([name]) => name);
+	const catalog = moduleCatalog(cwd, enclosing);
+	const { selected, problems } = resolveModules(catalog);
+	const { charter, children } = catalog;
+	const inherited = selected.filter((m) => m.layer === "inherited");
+	const locals = selected.filter((m) => m.layer === "local");
+	const builtins = selected.filter((m) => m.layer === "builtin");
+	const gated = builtins
+		.filter((m) => ["nested.md", "root.md", "software.md"].includes(m.name))
+		.map((m) => m.metadata?.name);
+	const details = moduleProblemDetails(problems);
+	if (details) onProblems?.(details);
 	const header = [
 		"# Shepherd session context",
 		"",
@@ -119,13 +75,14 @@ export function composeFragments(
 		locals.length
 			? `- Workspace-local integrations loaded: ${locals.map((l) => l.name).join(", ")}`
 			: "- Workspace-local integrations loaded: none",
+		...(details ? [`- Module problems: ${details}`] : []),
 	].join("\n");
 
 	return [
 		coreDoc,
-		...builtInIntegrations(gates),
-		...inherited.map((m) => m.body),
-		...locals.map((l) => l.body),
+		...builtins.map((m) => m.body ?? ""),
+		...inherited.map((m) => m.body ?? ""),
+		...locals.map((l) => l.body ?? ""),
 		...(charter ? [charter] : []),
 		header,
 	];

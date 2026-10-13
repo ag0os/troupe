@@ -32,6 +32,7 @@ import type {
 	Backend,
 	PrepareContext,
 } from "../lib/agent-format/types";
+import { parseModule } from "../lib/shepherd/module-format";
 import type { ToolEnv } from "../lib/shepherd/sessions";
 import { fakeToolEnv, makeTree } from "../lib/shepherd/test-support";
 import {
@@ -521,7 +522,12 @@ describe("characterization fixtures from the legacy launcher (AC #4, B-008)", ()
 				const parts = normalize(envelope.systemPrompt, base).split(
 					PROMPT_SEPARATOR,
 				);
-				expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+				expect(parts.slice(0, baseLayers.length)).toEqual(
+					baseLayers.map(
+						(path) =>
+							parseModule(text(path), path.split("/").at(-1) ?? "").body ?? "",
+					),
+				);
 				expect(parts.slice(baseLayers.length)).toEqual(before.layers);
 				if (backend === "codex") {
 					expect(settingsOf(envelope.argv)).toBeUndefined();
@@ -1033,7 +1039,12 @@ describe("composition order (B-008, AC #1)", () => {
 		const { systemPrompt } = await preview([], cwd);
 		const parts = systemPrompt.split(PROMPT_SEPARATOR);
 		const baseLayers = [...ALWAYS_LAYERS, MODULE("nested")];
-		expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+		expect(parts.slice(0, baseLayers.length)).toEqual(
+			baseLayers.map(
+				(path) =>
+					parseModule(text(path), path.split("/").at(-1) ?? "").body ?? "",
+			),
+		);
 		expect(parts.slice(baseLayers.length, -1)).toEqual([
 			"# Flock\n\nThe shared flock module.\n",
 			"# A local\n\nNot inherited, sorts before the flock module by name.\n",
@@ -1049,7 +1060,12 @@ describe("composition order (B-008, AC #1)", () => {
 		const { systemPrompt } = await preview([], join(base, "flock"));
 		const parts = systemPrompt.split(PROMPT_SEPARATOR);
 		const baseLayers = [...ALWAYS_LAYERS, MODULE("root")];
-		expect(parts.slice(0, baseLayers.length)).toEqual(baseLayers.map(text));
+		expect(parts.slice(0, baseLayers.length)).toEqual(
+			baseLayers.map(
+				(path) =>
+					parseModule(text(path), path.split("/").at(-1) ?? "").body ?? "",
+			),
+		);
 		expect(parts.slice(baseLayers.length, -1)).toEqual([
 			"# Shared A\n\nShared conventions A.\n",
 			"# Flock B\n\nShared conventions B.\n",
@@ -1242,26 +1258,43 @@ describe("launcher-gated modules", () => {
 		for (const backend of BACKENDS) {
 			test(`${name} loads ${modules.join(", ") || "none of them"} on ${backend}`, async () => {
 				const { cwd } = buildFrom(fixture);
-				const { systemPrompt } = await preview(["--backend", backend], cwd);
-				const titles = systemPrompt
-					.split(PROMPT_SEPARATOR)
-					.map((part) => part.split("\n", 1)[0] ?? "");
-				expect(titles.slice(0, ALWAYS_LAYERS.length)).toEqual([
-					"# Shepherd",
-					"# Integration: Herdr",
-					"# Integration: Inter agent messaging",
-				]);
-				const gated = Object.values(GATED_TITLES);
-				expect(titles.filter((title) => gated.includes(title))).toEqual(
-					modules.map((module) => GATED_TITLES[module] ?? ""),
+				const stderr = spyOn(process.stderr, "write").mockImplementation(
+					() => true,
 				);
+				try {
+					const { systemPrompt } = await preview(["--backend", backend], cwd);
+					const titles = systemPrompt
+						.split(PROMPT_SEPARATOR)
+						.map((part) => part.split("\n", 1)[0] ?? "");
+					expect(titles.slice(0, ALWAYS_LAYERS.length)).toEqual([
+						"# Shepherd",
+						"# Integration: Herdr",
+						"# Integration: Inter agent messaging",
+					]);
+					const gated = Object.values(GATED_TITLES);
+					expect(titles.filter((title) => gated.includes(title))).toEqual(
+						modules.map((module) => GATED_TITLES[module] ?? ""),
+					);
+					if (
+						fixture.files["ws/.shepherd/charter.md"]?.includes("docs, Software")
+					) {
+						const details =
+							'charter.md: module-token-unknown: Modules token "docs" has no known module or slot';
+						expect(systemPrompt).toEndWith(`- Module problems: ${details}`);
+						expect(stderr.mock.calls).toEqual([[`shepherd: ${details}\n`]]);
+					}
+				} finally {
+					stderr.mockRestore();
+				}
 			});
 		}
 	}
 
 	test("each gated module's source opens with the title the cases look for", () => {
 		for (const [name, title] of Object.entries(GATED_TITLES)) {
-			expect(text(MODULE(name))).toStartWith(`${title}\n`);
+			expect(parseModule(text(MODULE(name)), `${name}.md`).body).toStartWith(
+				`${title}\n`,
+			);
 		}
 	});
 
@@ -2128,4 +2161,234 @@ test("Codex config overrides select the header model and stop at the backend sep
 			"- Model: backend default (unknown)",
 		);
 	}
+});
+
+describe("module failures degrade with notices on both backends", () => {
+	const doc = (name: string, extra: string, body: string) =>
+		`---\nname: ${name}\ntype: domain\ndescription: rules\nbudget: 10\n${extra}---\n${body}`;
+	const cases = [
+		[
+			"invalid local",
+			{
+				"workspace/.shepherd/integrations/bad.md": doc(
+					"bad",
+					"extra: true\n",
+					"degraded local\n",
+				),
+			},
+			"",
+			"module-schema",
+			"degraded local\n",
+		],
+		[
+			"invalid inherited",
+			{
+				".shepherd/integrations/bad.md": doc(
+					"bad",
+					"budget: bad\n",
+					"degraded inherited\n",
+				),
+			},
+			"",
+			"module-schema",
+			"degraded inherited\n",
+		],
+		[
+			"unclosed",
+			{ "workspace/.shepherd/integrations/bad.md": "---\nname: bad\nskipped" },
+			"",
+			"module-schema",
+			"",
+		],
+		[
+			"explicit conflict",
+			{
+				"workspace/.shepherd/integrations/alpha.md": doc(
+					"alpha",
+					"provides: craft\n",
+					"alpha body\n",
+				),
+				"workspace/.shepherd/integrations/beta.md": doc(
+					"beta",
+					"provides: craft\n",
+					"beta body\n",
+				),
+			},
+			"alpha, beta",
+			"module-slot-conflict",
+			"",
+		],
+		[
+			"default conflict",
+			{
+				"workspace/.shepherd/integrations/alpha.md": doc(
+					"alpha",
+					"provides: craft\ndefault: true\n",
+					"alpha body\n",
+				),
+				"workspace/.shepherd/integrations/beta.md": doc(
+					"beta",
+					"provides: craft\ndefault: true\n",
+					"beta body\n",
+				),
+			},
+			"craft",
+			"module-slot-conflict",
+			"",
+		],
+		[
+			"unresolved",
+			{
+				"workspace/.shepherd/integrations/alpha.md": doc(
+					"alpha",
+					"provides: craft\n",
+					"alpha body\n",
+				),
+			},
+			"craft",
+			"module-slot-unresolved",
+			"",
+		],
+	] as const;
+	for (const backend of BACKENDS)
+		for (const [name, files, tokens, code, body] of cases) {
+			test(`${backend}: ${name} launch, print, preview and check agree`, async () => {
+				const { cwd } = buildFrom({
+					cwd: "workspace",
+					files: {
+						".shepherd/charter.md": "",
+						"workspace/.shepherd/charter.md": `Modules: ${tokens}\n`,
+						...files,
+					},
+				});
+				const expectedPrompts = new Map<boolean, string>();
+				if (name === "invalid local") {
+					const file = join(cwd, ".shepherd/integrations/bad.md");
+					const raw = readFileSync(file, "utf8");
+					writeFileSync(file, body);
+					try {
+						for (const print of [false, true]) {
+							const clean = await preview(
+								["--backend", backend, ...(print ? ["--print"] : []), "hello"],
+								cwd,
+							);
+							expect(clean.code).toBe(0);
+							expectedPrompts.set(
+								print,
+								`${clean.systemPrompt}\n- Module problems: ${file}: module-schema: extra: unknown key; stripped body loaded ungated`,
+							);
+						}
+					} finally {
+						writeFileSync(file, raw);
+					}
+				}
+				const before = Object.entries(files).map(([path]) => [
+					path,
+					readFileSync(join(dirname(cwd), path), "utf8"),
+				]);
+				const stderr = spyOn(process.stderr, "write").mockImplementation(
+					() => true,
+				);
+				try {
+					const shown = await preview(["--backend", backend], cwd);
+					expect(shown.code).toBe(0);
+					expect(shown.systemPrompt).toContain(`- Module problems: `);
+					expect(shown.systemPrompt).toContain(code);
+					if (body) expect(shown.systemPrompt).toContain(body);
+					expect(shown.systemPrompt).not.toContain("description: rules");
+					for (const flags of [[], ["--print"]]) {
+						const result = await execute(
+							[
+								"--backend",
+								backend,
+								...flags,
+								"hello",
+								...(backend === "codex" ? ["--", "--skip-git-repo-check"] : []),
+							],
+							cwd,
+						);
+						expect(result.code).toBe(0);
+						expect(result.records).toHaveLength(1);
+						const argv = result.records[0]?.argv ?? [];
+						expect(argv.join("\n")).toContain(code);
+						expect(argv.join("\n")).not.toContain("description: rules");
+						const received =
+							backend === "claude"
+								? argv[argv.indexOf("--append-system-prompt") + 1]
+								: JSON.parse(
+										(
+											argv.find((arg) =>
+												arg.startsWith("developer_instructions="),
+											) ?? ""
+										).slice("developer_instructions=".length),
+									);
+						if (name === "invalid local")
+							expect(received).toBe(expectedPrompts.get(flags.length > 0));
+						const withoutLaunchNames = (prompt: string) =>
+							prompt.replace(/^- (?:Session name|Codex home):.*\n/gm, "");
+						expect(withoutLaunchNames(received ?? "")).toBe(
+							withoutLaunchNames(shown.systemPrompt),
+						);
+						if (!body) {
+							expect(received).not.toContain("alpha body");
+							expect(received).not.toContain("beta body");
+							expect(received).not.toContain("\nname: bad\nskipped");
+						}
+					}
+					expect(stderr.mock.calls).toHaveLength(3);
+					for (const call of stderr.mock.calls)
+						expect(String(call[0])).toBe(
+							`shepherd: ${shown.systemPrompt
+								.split("\n")
+								.find((line) => line.startsWith("- Module problems: "))
+								?.slice("- Module problems: ".length)}\n`,
+						);
+					const checked = await shepherd.prepare(
+						context(backend, cwd, {
+							args: ["tool", "check"],
+							flags: { json: true },
+							preview: false,
+						}),
+						testToolEnv(context(backend, cwd)),
+					);
+					if (!("exit" in checked)) throw new Error("expected tool exit");
+					expect(checked.exit?.code).toBe(1);
+					expect(checked.exit?.message).toContain(code);
+					for (const [path, original] of before)
+						expect(readFileSync(join(dirname(cwd), path ?? ""), "utf8")).toBe(
+							original ?? "",
+						);
+				} finally {
+					stderr.mockRestore();
+				}
+			});
+		}
+	for (const backend of BACKENDS)
+		test(`${backend}: legacy thematic breaks load whole without problem header or stderr`, async () => {
+			const raw = "---\n# Title\n---\nlegacy body\n";
+			const { cwd } = buildFrom({
+				cwd: "workspace",
+				files: {
+					"workspace/.shepherd/charter.md": "",
+					"workspace/.shepherd/integrations/legacy.md": raw,
+				},
+			});
+			const stderr = spyOn(process.stderr, "write").mockImplementation(
+				() => true,
+			);
+			try {
+				const output = await preview(["--backend", backend], cwd);
+				expect(output.systemPrompt).toContain(raw);
+				expect(output.systemPrompt).not.toContain("Module problems:");
+				const launched = await execute(["--backend", backend, "hello"], cwd);
+				expect(launched.code).toBe(0);
+				expect(launched.records).toHaveLength(1);
+				expect(launched.records[0]?.argv.join("\n")).not.toContain(
+					"Module problems:",
+				);
+				expect(stderr).not.toHaveBeenCalled();
+			} finally {
+				stderr.mockRestore();
+			}
+		});
 });

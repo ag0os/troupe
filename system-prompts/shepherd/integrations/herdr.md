@@ -1,3 +1,10 @@
+---
+name: herdr
+type: capability
+description: Run commands and agents through Herdr
+budget: 700
+charter-keys: {}
+---
 # Integration: Herdr
 
 Herdr is a terminal multiplexer for coding agents. It organizes terminals into workspaces, tabs, and panes, recognizes agents running inside panes, and exposes the session through the `herdr` CLI. When available, it is your primary way to run commands in the background and to start and coordinate other agents.

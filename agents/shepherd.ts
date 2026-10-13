@@ -305,6 +305,9 @@ export function prepare(
 			...(defaults?.headerLine ? [defaults.headerLine] : []),
 		],
 		toolEnv.now,
+		(details) => {
+			process.stderr.write(`shepherd: ${details}\n`);
+		},
 	);
 	const beforeRunMessages =
 		ctx.mode === "interactive"

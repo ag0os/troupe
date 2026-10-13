@@ -82,8 +82,66 @@ Shepherd improves its own operating instructions over time, gated by agreement r
 
 ## Extending Shepherd
 
-- **Framework wide**: add a module to `system-prompts/shepherd/integrations/`, import it in `agents/shepherd.ts`, add it to `builtInIntegrations()`, then recompile.
+- **Framework wide**: add a module to `system-prompts/shepherd/integrations/`, import it as text in `lib/shepherd/module-resolution.ts`, add it to `builtInModules()`, then recompile.
 - **Per workspace**: drop a `*.md` module into `.shepherd/integrations/` in that directory, or let Shepherd write one during init. Loaded on next launch, no recompile. Local modules are appended after built in and inherited ones and may extend or override them; the charter comes last.
+
+### Module format
+
+Workspace integrations can remain plain Markdown indefinitely. Legacy modules load unchanged and receive an informational `module-frontmatter-missing` finding. Annotated modules start with strict YAML metadata:
+
+```yaml
+---
+name: shared
+type: domain
+description: Shared reference files and conventions
+budget: 250
+charter-keys: {}
+---
+# Shared conventions
+
+The prompt body starts here.
+```
+
+Recognition has a reserved signature: line one must be exactly `---`, and the first nonblank, noncomment line after it must start at column zero with one of the eight field names below followed by `:`. A comment begins with optional horizontal whitespace and `#`. Both LF and CRLF work. A matching opener with a later complete `---` line is annotated; the first such line closes the metadata. Everything through that delimiter's line ending is stripped, preserving every subsequent body byte, including blank lines and trailing whitespace. With no closing delimiter, a matching opener is malformed and the file is skipped. Any other opener is a legacy thematic break, even when a later `---` exists. For example, `---` followed by `# Title` or ordinary prose loads whole. Reserve the field signature for metadata rather than opening legacy prose with it.
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Required string matching the discovered filename without `.md`, including a symlink's discovered name rather than its target name. |
+| `type` | Required descriptive value: `capability`, `method`, `role`, `domain`, or `persona`. |
+| `description` | Required nonblank string with no newline. Used by checks, not inserted into prompts. |
+| `applies-when` | Optional strict predicate mapping; absent or empty means eligible everywhere. |
+| `provides` | Optional single slot identifier; providers load only when selected. |
+| `default` | Optional boolean, false by default. May appear only with `provides`. |
+| `budget` | Required positive safe integer in prompt words. Overruns warn without truncating or preventing loading. |
+| `charter-keys` | Optional mapping, empty by default, of owned namespaced keys to `required` or `optional`. Metadata is validated here; charter values are not parsed or enforced yet. |
+
+Identifiers use lowercase alphanumeric segments separated by single hyphens: `[a-z0-9]+(?:-[a-z0-9]+)*`. Module names may start with digits, such as `00-flock`. Slots, selectable provider names, and `charter-declares` values use letters and hyphens only to fit the existing `Modules:` tokenizer. Charter keys have the form `namespace.key`, with both components starting with a letter. A module may declare its own namespace, its provided slot's namespace, and the eight existing core keys corresponding to the charter headings. Numeric-prefixed module names cannot own a same-name key namespace.
+
+Parsing uses YAML 1.2 with no coercion. Unknown fields or predicate keys, null values, duplicate keys, nonmapping roots, nonstring mapping keys, directives, explicit tags, anchors, aliases, and merge keys are rejected. A quoted boolean or budget is a string and therefore invalid. The whole body is the prompt part; `<!-- guide -->` has no special meaning.
+
+### Predicates and provider selection
+
+The closed predicate vocabulary is:
+
+| Predicate | Value and fact |
+|-----------|----------------|
+| `enclosing-modules` | Boolean matching whether the nearest enclosing workspace publishes at least one integration file. |
+| `has-children` | Boolean matching whether the existing child walk finds a workspace. |
+| `charter-declares` | Selectable identifier requested by the charter, directly or through a named provider of that slot. |
+
+Multiple predicates combine with AND. A false boolean requires the fact to be false. Publication is measured before filtering: an ineligible inherited module still makes `nested` eligible. The header can therefore list `nested` under `Gated modules loaded:` while saying `inherited integrations: none`.
+
+All valid candidates are collected before predicates and selection, including inactive alternatives. Eligible modules without `provides` load automatically. A provider loads only when its slot or specific name is requested by the unchanged, case-normalizing `Modules:` tokenizer. A slot token chooses its sole eligible default. One explicit provider name chooses that provider instead of the default; listing a slot plus that provider is valid. A token equal to a slot name always means the slot request, even when a provider has that name.
+
+Two explicit providers for a slot, ambiguous explicit names, or multiple eligible defaults for a slot request are conflicts. A requested slot with no eligible default, or an explicitly requested ineligible provider, is unresolved. No provider loads for an affected slot, and independently resolved slots continue loading. Unknown tokens warn and remain unselected. There is no implicit local winner over inherited alternatives. Distinct eligible nonproviders with the same name both load. Realpath deduplication removes local copies of inherited files before selection. Survivors keep their original layer and filename order, and the header lists the filenames that actually loaded.
+
+### Failure policy and accounting
+
+Invalid closed workspace metadata is reported and discarded in full. Its stripped body loads ungated, without provider identity, defaults, predicates, or charter declarations. Clearly intended but unclosed metadata is reported and skipped because its body cannot be safely separated. Invalid built-in metadata is a repository defect and composition throws.
+
+Schema and selection problems, including unknown tokens, append `- Module problems: <file>: <code>: <reason>; ...` to the session header. With no problems this line is absent. The Shepherd extension writes the same details to stderr once during launch, print, and preview. Routine costs produce no launch notice. `shepherd tool check` reports schema and name errors, selection errors, unknown-token warnings, budgets, and legacy metadata information. Built-in finding paths are always literal `builtin/<name>.md`. Module checking uses launch's nearest enclosing lookup, including an enclosing workspace outside the checked tree.
+
+Costs use whitespace-separated body words, excluding recognized metadata. Inactive annotated candidates still get budget checks; built-ins get over-budget warnings without routine cost information. Shared totals count all published local bodies when a workspace has descendants, including degraded bodies, because publication is separate from effective selection. Unclosed bodies have unavailable costs and an explicitly incomplete subtotal. The opening prompt count includes selected and degraded fragments and the final header. If another composition failure forces a fallback estimate, readable local modules contribute stripped body words and unclosed metadata contributes none.
 
 ## Workspace state
 

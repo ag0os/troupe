@@ -1,0 +1,239 @@
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import herdrDoc from "../../system-prompts/shepherd/integrations/herdr.md" with {
+	type: "text",
+};
+import interAgentDoc from "../../system-prompts/shepherd/integrations/inter-agent.md" with {
+	type: "text",
+};
+import nestedDoc from "../../system-prompts/shepherd/integrations/nested.md" with {
+	type: "text",
+};
+import rootDoc from "../../system-prompts/shepherd/integrations/root.md" with {
+	type: "text",
+};
+import softwareDoc from "../../system-prompts/shepherd/integrations/software.md" with {
+	type: "text",
+};
+import {
+	type ModuleProblem,
+	type ParsedModule,
+	parseModule,
+} from "./module-format";
+import {
+	declaredModules,
+	findChildWorkspaces,
+	findEnclosingWorkspace,
+	loadCharter,
+	STATE_DIR,
+} from "./workspace";
+
+export type ModuleCandidate = ParsedModule & {
+	name: string;
+	source: string;
+	path: string;
+	layer: "builtin" | "inherited" | "local";
+	raw: string;
+};
+export type ResolutionProblem = ModuleProblem & { file: string };
+export type ModuleCatalog = {
+	candidates: ModuleCandidate[];
+	children: string[];
+	charter?: string;
+	enclosing?: string;
+	published: boolean;
+};
+export function builtInModules(): ModuleCandidate[] {
+	return [
+		["herdr", herdrDoc],
+		["inter-agent", interAgentDoc],
+		["nested", nestedDoc],
+		["root", rootDoc],
+		["software", softwareDoc],
+	].map(([name, raw]) => {
+		const file = `${name}.md`;
+		const source = `builtin/${file}`;
+		return {
+			...parseModule(raw ?? "", file),
+			name: file,
+			source,
+			path: source,
+			layer: "builtin",
+			raw: raw ?? "",
+		};
+	});
+}
+export function workspaceModules(
+	root: string,
+	layer: "inherited" | "local",
+	tolerateUnreadable = false,
+): ModuleCandidate[] {
+	const dir = join(root, STATE_DIR, "integrations");
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
+		.filter((file) => file.endsWith(".md"))
+		.sort()
+		.flatMap((name) => {
+			const source = join(dir, name);
+			let raw: string;
+			try {
+				raw = readFileSync(source, "utf8");
+			} catch (error) {
+				if (tolerateUnreadable) return [];
+				throw error;
+			}
+			return {
+				...parseModule(raw, name),
+				name,
+				source,
+				path: realpathSync(source),
+				layer,
+				raw,
+			};
+		});
+}
+export function moduleCatalog(
+	cwd: string,
+	enclosing: string | undefined = findEnclosingWorkspace(cwd),
+	tolerateUnreadable = false,
+): ModuleCatalog {
+	const inherited = enclosing
+		? workspaceModules(enclosing, "inherited", tolerateUnreadable)
+		: [];
+	return {
+		candidates: [
+			...builtInModules(),
+			...inherited,
+			...workspaceModules(cwd, "local", tolerateUnreadable),
+		],
+		children: findChildWorkspaces(cwd),
+		charter: loadCharter(cwd),
+		enclosing,
+		published: inherited.length > 0,
+	};
+}
+export function moduleProblemDetails(
+	problems: readonly ResolutionProblem[],
+): string {
+	return problems.map((p) => `${p.file}: ${p.code}: ${p.message}`).join("; ");
+}
+export function resolveModules(catalog: ModuleCatalog): {
+	selected: ModuleCandidate[];
+	problems: ResolutionProblem[];
+} {
+	const inheritedPaths = new Set(
+		catalog.candidates
+			.filter((m) => m.layer === "inherited")
+			.map((m) => m.path),
+	);
+	const surviving = catalog.candidates.filter(
+		(m) => !(m.layer === "local" && inheritedPaths.has(m.path)),
+	);
+	const problems: ResolutionProblem[] = [];
+	for (const module of surviving) {
+		if (
+			module.layer === "builtin" &&
+			(!module.metadata || module.problems.length)
+		)
+			throw new Error(
+				`${module.source}: invalid built-in metadata: ${module.problems.map((p) => p.message).join("; ")}`,
+			);
+		for (const problem of module.problems)
+			problems.push({
+				...problem,
+				file: module.source,
+				message: `${problem.message}${module.body === undefined ? "" : "; stripped body loaded ungated"}`,
+			});
+	}
+	const candidates = surviving.filter((m) => m.body !== undefined);
+	const tokens = declaredModules(catalog.charter);
+	const annotated = candidates.filter((m) => m.metadata);
+	const slots = new Set(
+		annotated.flatMap((m) =>
+			m.metadata?.provides ? [m.metadata.provides] : [],
+		),
+	);
+	const names = new Set(annotated.map((m) => m.metadata?.name));
+	const declares = (value: string) =>
+		tokens.has(value) ||
+		annotated.some(
+			(m) => m.metadata?.provides === value && tokens.has(m.metadata.name),
+		);
+	const eligible = (module: ModuleCandidate) => {
+		const predicates = module.metadata?.["applies-when"];
+		return (
+			!predicates ||
+			((predicates["enclosing-modules"] === undefined ||
+				predicates["enclosing-modules"] === catalog.published) &&
+				(predicates["has-children"] === undefined ||
+					predicates["has-children"] === catalog.children.length > 0) &&
+				(predicates["charter-declares"] === undefined ||
+					declares(predicates["charter-declares"])))
+		);
+	};
+	const chosen = new Set(
+		candidates.filter((m) => !m.metadata?.provides && eligible(m)),
+	);
+	const providers = annotated.filter((m) => m.metadata?.provides);
+	for (const slot of slots) {
+		const members = providers.filter((m) => m.metadata?.provides === slot);
+		const explicitTokens = [...tokens].filter(
+			(token) =>
+				!slots.has(token) && members.some((m) => m.metadata?.name === token),
+		);
+		if (!tokens.has(slot) && !explicitTokens.length) continue;
+		const sources = members.map((m) => m.source).join(", ");
+		const conflict = (reason: string) =>
+			problems.push({
+				file: "charter.md",
+				code: "module-slot-conflict",
+				message: `slot "${slot}": ${reason}; candidates: ${sources}; no provider loaded`,
+			});
+		const unresolved = (token: string, reason: string) =>
+			problems.push({
+				file: "charter.md",
+				code: "module-slot-unresolved",
+				message: `"${token}": ${reason}; no provider loaded for slot "${slot}"`,
+			});
+		if (
+			explicitTokens.some(
+				(token) =>
+					annotated.filter((m) => m.metadata?.name === token).length > 1,
+			)
+		) {
+			conflict("explicit provider name is ambiguous");
+			continue;
+		}
+		if (explicitTokens.length > 1) {
+			conflict("multiple explicit providers");
+			continue;
+		}
+		const token = explicitTokens[0];
+		if (token) {
+			const provider = members.find((m) => m.metadata?.name === token);
+			if (provider && eligible(provider)) chosen.add(provider);
+			else unresolved(token, "requested provider is ineligible");
+		} else {
+			const defaults = members.filter(
+				(m) => m.metadata?.default && eligible(m),
+			);
+			if (defaults.length > 1) conflict("multiple eligible defaults");
+			else if (!defaults.length) unresolved(slot, "no eligible default");
+			else if (defaults[0]) chosen.add(defaults[0]);
+		}
+	}
+	for (const token of tokens)
+		if (!slots.has(token) && !names.has(token))
+			problems.push({
+				file: "charter.md",
+				code: "module-token-unknown",
+				message: `Modules token "${token}" has no known module or slot`,
+			});
+	const line = catalog.charter
+		?.split(/\r?\n/)
+		.findIndex((text) => /^[ \t]*(?:[-*][ \t]+)?\**Modules:\**/i.test(text));
+	for (const problem of problems)
+		if (problem.file === "charter.md" && line !== undefined && line >= 0)
+			problem.line = line + 1;
+	return { selected: candidates.filter((m) => chosen.has(m)), problems };
+}

@@ -1249,3 +1249,73 @@ test("journal human output ends with a newline", async () => {
 	expect(output.code).toBe(0);
 	expect(output.text.endsWith("\n")).toBe(true);
 });
+
+test("module findings preserve JSON, lines, all visibility and error-only exit", async () => {
+	const { cwd, env } = fixture();
+	mkdirSync(join(cwd, ".shepherd/integrations"), { recursive: true });
+	writeFileSync(
+		join(cwd, ".shepherd/integrations/bad.md"),
+		"---\nname: bad\ntype: domain\ndescription: rules\nbudget: 3\nextra: true\n---\nbody\n",
+	);
+	const output = await runTool(["check"], { json: true }, env);
+	expect(output.code).toBe(1);
+	const report = JSON.parse(output.text);
+	expect(report.workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "module-schema",
+			level: "error",
+			file: "integrations/bad.md",
+			line: 6,
+		}),
+	);
+	writeFileSync(join(cwd, ".shepherd/integrations/bad.md"), "legacy");
+	const warn = await runTool(["check"], {}, env);
+	expect(warn.code).toBe(0);
+	expect(warn.text).not.toContain("module-frontmatter-missing");
+	expect((await runTool(["check"], { all: true }, env)).text).toContain(
+		"legacy module: loaded unchanged",
+	);
+});
+
+test("JSON check sees enclosing schema and duplicates outside checked workspaces", async () => {
+	const { moduleCatalog, resolveModules } = await import("./module-resolution");
+	const tree = makeTree({
+		"parent/.shepherd/integrations/bad.md":
+			"---\nname: bad\ntype: domain\ndescription: rules\nbudget: x\n---\ninherited body\n",
+		"parent/child/.shepherd/charter.md": "",
+		"parent/child/.shepherd/CURRENT.md": "Updated: 2026-10-05\n",
+		"parent/child/.shepherd/integrations/bad.md": "local body\n",
+	});
+	cleanups.push(tree.cleanup);
+	const cwd = join(tree.root, "parent/child");
+	const catalog = moduleCatalog(cwd);
+	const inherited = catalog.candidates.find((m) => m.layer === "inherited");
+	if (!inherited) throw new Error("missing inherited module");
+	const launch = resolveModules(catalog);
+	const output = await runTool(
+		["check"],
+		{ json: true },
+		fakeToolEnv({ home: tree.root, cwd }),
+	);
+	expect(output.code).toBe(1);
+	const report = JSON.parse(output.text);
+	expect(report.workspaces.map((w: { dir: string }) => w.dir)).toEqual([cwd]);
+	expect(report.workspaces[0].findings).toContainEqual({
+		...inherited.problems[0],
+		code: "module-schema",
+		level: "error",
+		file: "../../.shepherd/integrations/bad.md",
+	});
+	expect(launch.problems[0]?.file).toBe(inherited.source);
+	expect(
+		launch.selected.filter((m) => m.name === "bad.md").map((m) => m.layer),
+	).toEqual(["inherited", "local"]);
+	expect(report.workspaces[0].findings).toContainEqual(
+		expect.objectContaining({
+			code: "module-duplicate",
+			file: "integrations/bad.md",
+			message:
+				"local bad.md has the same name as the inherited module; both load at launch",
+		}),
+	);
+});

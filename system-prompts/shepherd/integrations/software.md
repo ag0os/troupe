@@ -1,3 +1,19 @@
+---
+name: software
+type: method
+description: Coordinate code changes through the software cycle
+applies-when:
+  charter-declares: software
+provides: software
+default: true
+budget: 2600
+charter-keys:
+  software.grants: optional
+  software.merge-grant: optional
+  software.plans: optional
+  core.done: optional
+  software.attribution: optional
+---
 # Integration: Software coordination
 
 Your charter declares `Modules: software`: this workspace's work changes code. Core's rules apply as written; this adds what is specific to code, around Impatient Programming's cycle.
