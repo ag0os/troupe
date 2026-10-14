@@ -313,3 +313,7 @@ The built-in Claude figure is the midpoint of the previous 40 to 50% advice. Cod
 Shepherd declares Claude first, so Claude is the default. Select Codex with `--backend codex`; backend selection is never taken from the environment. Both backends receive the same prompt layers, but the generated context header names the selected backend. Codex receives the composed prompt as `developer_instructions`. Backend executables are found on `PATH`.
 
 The Claude child receives neither a framework-root variable nor an inherited project-directory variable. Claude settings contain only the declared rules and any enclosing-workspace additions. Codex inherits its own configuration and adds `--skip-git-repo-check` for print mode outside a Git worktree.
+
+## Evals
+
+Changes to Shepherd's source, or to its evaluation harness and policy, need a passing behavioural eval result before they merge. `bun run evals:shepherd` builds the current tree into scratch, runs six synthetic trials and writes the result for the exact source hash, which you commit with its evidence; CI verifies it. See [SHEPHERD-EVALS.md](SHEPHERD-EVALS.md).

@@ -29,6 +29,7 @@ import {
 	lateStart,
 	liveGroupCount,
 	loadPolicy,
+	parseOptions,
 	prepareRun,
 	REPO_ROOT,
 	readVersion,
@@ -499,5 +500,51 @@ describe("scheduling and cleanup (5.1)", () => {
 			["ok", 0],
 			["void", 3],
 		]);
+	});
+});
+
+describe("regression validation options (8.5)", () => {
+	test("--validation with --trials names the gate trials to run", () => {
+		expect(parseOptions(["--validation", "--trials", "D"])).toMatchObject({
+			validation: ["D"],
+		});
+		expect(
+			parseOptions(["--validation", "--trials", "G,E-neg"]).validation,
+		).toEqual(["G", "E-neg"]);
+		expect(parseOptions([]).validation).toBeUndefined();
+	});
+
+	test("the gate always runs all six: --trials needs --validation", () => {
+		expect(() => parseOptions(["--trials", "D"])).toThrow(/--validation/);
+		expect(() => parseOptions(["--validation"])).toThrow(/--trials/);
+	});
+
+	test("unknown or duplicate trials and --check are refused", () => {
+		for (const trials of ["B", "D,D", "D,", "a"]) {
+			expect(() => parseOptions(["--validation", "--trials", trials])).toThrow(
+				/trial/,
+			);
+		}
+		expect(() =>
+			parseOptions(["--validation", "--trials", "D", "--check"]),
+		).toThrow(/--check/);
+	});
+
+	test("validation never names all six trials (8.5: only the relevant trial)", () => {
+		expect(() =>
+			parseOptions(["--validation", "--trials", "A,D,E,G,E-neg,G-neg"]),
+		).toThrow(/all six/);
+		expect(
+			parseOptions(["--validation", "--trials", "A,D,E,G,E-neg"]).validation,
+		).toHaveLength(5);
+	});
+
+	test("a repeated --trials or --validation is refused, not last-wins", () => {
+		expect(() =>
+			parseOptions(["--validation", "--trials", "D", "--trials", "G"]),
+		).toThrow(/once/);
+		expect(() =>
+			parseOptions(["--validation", "--validation", "--trials", "D"]),
+		).toThrow(/once/);
 	});
 });

@@ -17,9 +17,10 @@ describe("Python harness self-checks on handmade data (8.4)", () => {
 		if (child.exitCode !== 0) console.error(output);
 		expect(child.exitCode).toBe(0);
 		expect(output).toMatch(/\nOK/);
-		// The handmade checks ran; only subject-dependent ones were skipped.
+		// The handmade checks ran; only subject-dependent ones were skipped,
+		// and the session-shell check where no zsh is installed (Linux CI).
 		expect(output).toMatch(/Ran \d{2,} tests/);
-		expect(output).toMatch(/skipped=4\)/);
+		expect(output).toContain(`skipped=${Bun.which("zsh") ? 4 : 5})`);
 	}, 120_000);
 
 	test("check-musts.py passes on handmade snapshots and log fragments (8.3)", () => {

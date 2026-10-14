@@ -12,11 +12,14 @@ import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readFileSync,
 	renameSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import {
 	exportAttempt,
 	REDACTED,
@@ -33,6 +36,7 @@ import {
 	deriveAggregate,
 	deriveTrial,
 	type Evaluation,
+	GATE_TRIALS,
 	loadRubric,
 	type Must,
 	type Pointer,
@@ -46,6 +50,11 @@ import {
 import { buildPacket, type Decision, type Packet, scoreAll } from "./scorer";
 
 const CODE_DIR = import.meta.dir;
+/**
+ * The void reason prefix for a local checker failure, so CI can tell it from
+ * a relabelled valid session when its own recomputation succeeds.
+ */
+export const CHECKER_FAILED = "mechanical checks failed: ";
 const MISSING_PROVENANCE = /no tool-result binary evidence/;
 
 export interface ScoreJob {
@@ -66,6 +75,12 @@ export interface Scored {
 export interface GateOptions {
 	/** Holds `results/` and `artifacts/`: `evals/shepherd/` in the repository. */
 	evalsDir: string;
+	/**
+	 * Regression validation (8.5): run only these gate trials and keep the
+	 * result, summary and evidence under `validation/<source-hash>/<run-id>/`,
+	 * never in `results/` or `artifacts/`. Every other policy is the gate's.
+	 */
+	validation?: { trials: string[] };
 	sourceHash: string;
 	manifest: Result["source"]["manifest"];
 	identity: Omit<
@@ -119,18 +134,29 @@ export type ChecksOutput =
 	| { error: string };
 
 /** `must-check.py` on an exported attempt; exit 3 means corrupted evidence. */
-export function pythonChecks(trial: string, dir: string): ChecksOutput {
-	const child = spawnSync(
-		"python3",
-		["-I", join(CODE_DIR, "must-check.py"), trial, dir],
-		{ encoding: "utf8", timeout: 60_000 },
-	);
-	if (child.status !== 0) {
-		return {
-			error: child.stderr.trim() || `must-check exited ${child.status}`,
-		};
+export function pythonChecks(
+	trial: string,
+	dir: string,
+	checker = join(CODE_DIR, "must-check.py"),
+): ChecksOutput {
+	// A fresh bytecode cache, so no committed or stale `__pycache__` beside
+	// the checker can stand in for its source.
+	const cache = mkdtempSync(join(tmpdir(), "shepherd-evals-pycache-"));
+	try {
+		const child = spawnSync(
+			"python3",
+			["-I", "-X", `pycache_prefix=${cache}`, checker, trial, dir],
+			{ encoding: "utf8", timeout: 60_000 },
+		);
+		if (child.status !== 0) {
+			return {
+				error: child.stderr.trim() || `must-check exited ${child.status}`,
+			};
+		}
+		return JSON.parse(child.stdout);
+	} finally {
+		rmSync(cache, { recursive: true, force: true });
 	}
-	return JSON.parse(child.stdout);
 }
 
 /** `cost.py` on an exported native log. */
@@ -152,13 +178,36 @@ export function pythonCost(log: string): Cost {
 
 const iso = (date: Date) => date.toISOString();
 
-function resultPaths(evalsDir: string, sourceHash: string) {
+function resultPaths(
+	evalsDir: string,
+	sourceHash: string,
+	validationRun?: string,
+) {
 	const hex = sourceHash.replace(/^sha256:/, "");
+	if (validationRun) {
+		const dir = `validation/${hex}/${validationRun}`;
+		return {
+			hex,
+			json: join(evalsDir, dir, "result.json"),
+			md: join(evalsDir, dir, "result.md"),
+		};
+	}
 	return {
 		hex,
 		json: join(evalsDir, "results", `${hex}.json`),
 		md: join(evalsDir, "results", `${hex}.md`),
 	};
+}
+
+/** The result files and this run's evidence directory, both relative to `evalsDir`. */
+function gatePaths(options: GateOptions) {
+	const paths = resultPaths(
+		options.evalsDir,
+		options.sourceHash,
+		options.validation ? options.runId : undefined,
+	);
+	const root = options.validation ? "validation" : "artifacts";
+	return { ...paths, evidence: `${root}/${paths.hex}/${options.runId}` };
 }
 
 function readExisting(path: string, rubric: Rubric): Result | undefined {
@@ -237,6 +286,10 @@ export function publishResult(
 	evalsDir: string,
 	result: Result,
 	rubric: Rubric,
+	paths: { json: string; md: string } = resultPaths(
+		evalsDir,
+		result.source.hash,
+	),
 ): void {
 	const problems = validateResult(result, rubric);
 	if (problems.length > 0) {
@@ -244,8 +297,7 @@ export function publishResult(
 			`Refusing to publish an invalid result:\n${problems.join("\n")}`,
 		);
 	}
-	const paths = resultPaths(evalsDir, result.source.hash);
-	mkdirSync(join(evalsDir, "results"), { recursive: true });
+	mkdirSync(dirname(paths.json), { recursive: true });
 	// Both are written to temporary files first. The summary is renamed into
 	// place first and the JSON last, so a reader never sees a new JSON beside
 	// an older summary; the JSON is the record, the summary is derived.
@@ -359,7 +411,20 @@ export async function runGate(
 		home: options.home,
 		repoRoot: resolve(options.evalsDir, "../.."),
 	};
-	const paths = resultPaths(options.evalsDir, options.sourceHash);
+	const trials: readonly string[] = GATE_TRIALS;
+	const only = options.validation?.trials;
+	if (
+		only &&
+		(only.length === 0 ||
+			new Set(only).size !== only.length ||
+			only.some((t) => !trials.includes(t)) ||
+			only.length === trials.length)
+	) {
+		throw new Error(
+			`validation needs distinct gate trials (${trials.join(", ")}), fewer than all six, not "${only.join(",")}"`,
+		);
+	}
+	const paths = gatePaths(options);
 	let existing: Result | undefined;
 	try {
 		existing = readExisting(paths.json, options.rubric);
@@ -395,7 +460,7 @@ export async function runGate(
 	const persist = () => {
 		invocation.endedAt = now();
 		finalize(result, invocation.endedAt);
-		publishResult(options.evalsDir, result, options.rubric);
+		publishResult(options.evalsDir, result, options.rubric, paths);
 	};
 	// Unscored attempts leave the behavioural sequence; number the rest in order.
 	const renumber = () => {
@@ -565,7 +630,10 @@ export async function runGate(
 				at,
 			);
 		}
-		const policy = options.identity.policy as { model?: string };
+		const policy = options.identity.policy as {
+			model?: string;
+			effort?: string;
+		};
 		const log = readFileSync(join(dir, "claude.jsonl"), "utf8");
 		const problems = sessionValidity(log, argv[0] ?? "", policy.model ?? "");
 		const cost = {
@@ -589,6 +657,16 @@ export async function runGate(
 				kind: "behavioral",
 				valid: true,
 				voidReasons: [],
+				// The log proved the requested model, so it is the one observed.
+				subject: {
+					backend: "claude",
+					requestedModel: policy.model ?? "",
+					observedModels: [policy.model ?? ""],
+					effort: policy.effort ?? "",
+					cliVersion: run.cli_version ?? "unknown",
+					settingsFingerprint: sha256Json(run.backend_settings),
+					argv,
+				},
 				musts: options.rubric.musts
 					.filter((must) => must.trial === pending.trial)
 					.map((must) => ({
@@ -647,6 +725,7 @@ export async function runGate(
 					(t) => !refused.has(t.trial) && deriveTrial(t.attempts) === "pending",
 				)
 				.filter((t) => !t.attempts.some(awaitingScore))
+				.filter((t) => !only || only.includes(t.trial))
 				.map((t) => ({ trial: t.trial, ordinal: t.attempts.length + 1 }));
 			if (jobs.length === 0 || Date.now() >= options.deadline) break;
 			// Each launch is on record before it starts, so a kill mid-wave
@@ -691,7 +770,7 @@ export async function runGate(
 					ordinal,
 					exitCode,
 					from,
-					`artifacts/${paths.hex}/${options.runId}/${trial}/attempt-${ordinal}`,
+					`${paths.evidence}/${trial}/attempt-${ordinal}`,
 					context,
 				);
 				const list = record(trial).attempts;
@@ -723,6 +802,7 @@ export async function runGate(
 	if (reasons.length > 0) {
 		for (const attempt of created) {
 			attempt.kind = "void";
+			attempt.valid = false;
 			attempt.behavioralOrdinal = null;
 			attempt.musts = [];
 			attempt.voidReasons.push(
@@ -757,7 +837,7 @@ function pendingAttempt(
 		subject: null,
 		startedAt: now,
 		endedAt: now,
-		artifactDir: `artifacts/${resultPaths(options.evalsDir, options.sourceHash).hex}/${options.runId}/${trial}/attempt-${ordinal}`,
+		artifactDir: `${gatePaths(options).evidence}/${trial}/attempt-${ordinal}`,
 		artifacts: [],
 		musts: [],
 		scoring: null,
@@ -910,10 +990,17 @@ function buildAttempt(input: {
 		"claude-baseline.json",
 		"claude-final.json",
 	].every(has);
+	if (!evidence && attempt.valid) {
+		attempt.valid = false;
+		attempt.voidReasons.push(
+			"corrupted required evidence: the session log or a snapshot is missing",
+		);
+	}
 	if (!evidence || !(attempt.valid || onlyMissingProvenance)) return attempt;
 	const checked = input.checks(trial, dir);
 	if ("error" in checked) {
-		if (attempt.valid) attempt.voidReasons.push(checked.error);
+		if (attempt.valid)
+			attempt.voidReasons.push(`${CHECKER_FAILED}${checked.error}`);
 		attempt.valid = false;
 		return attempt;
 	}

@@ -477,8 +477,9 @@ describe("decisions and retries (4.4, 4.5)", () => {
 });
 
 describe("bounds and cleanup (review finding 9)", () => {
-	const orphanAlive = () => {
-		const pid = Number(readFileSync(join(fakeDir, "orphan.pid"), "utf8"));
+	const orphanPid = () =>
+		Number(readFileSync(join(fakeDir, "orphan.pid"), "utf8"));
+	const orphanAlive = (pid = orphanPid()) => {
 		try {
 			process.kill(pid, 0);
 			return true;
@@ -486,8 +487,14 @@ describe("bounds and cleanup (review finding 9)", () => {
 			return false;
 		}
 	};
+	// The fake creates the pid file before writing it, so wait for its content.
 	const waitForOrphan = async () => {
-		for (let i = 0; i < 200 && !existsSync(join(fakeDir, "orphan.pid")); i++)
+		const path = join(fakeDir, "orphan.pid");
+		for (
+			let i = 0;
+			i < 200 && !(existsSync(path) && readFileSync(path, "utf8") !== "");
+			i++
+		)
 			await Bun.sleep(20);
 	};
 
@@ -520,7 +527,9 @@ describe("bounds and cleanup (review finding 9)", () => {
 	}, 20_000);
 
 	test("stopScorers kills every live scorer group (the exit handler)", async () => {
-		plan({ result: good(), sleep: 30, orphan: true });
+		// The killed invocation is retried; the retry must neither replace the
+		// orphan being watched nor outlast the test.
+		plan({ result: good(), sleep: 30, orphan: true }, { result: good() });
 		const packet = buildPacket({
 			trial: "A",
 			dir: exported(),
@@ -535,10 +544,11 @@ describe("bounds and cleanup (review finding 9)", () => {
 			cliVersion: "9",
 		});
 		await waitForOrphan();
+		const orphan = orphanPid();
 		expect(liveScorerGroups.size).toBe(1);
 		stopScorers();
-		for (let i = 0; i < 100 && orphanAlive(); i++) await Bun.sleep(20);
-		expect(orphanAlive()).toBe(false);
+		for (let i = 0; i < 100 && orphanAlive(orphan); i++) await Bun.sleep(20);
+		expect(orphanAlive(orphan)).toBe(false);
 		await running;
 	}, 20_000);
 

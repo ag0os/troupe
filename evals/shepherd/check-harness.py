@@ -258,7 +258,8 @@ class HarnessChecks(unittest.TestCase):
                 self.assertTrue(env.get(key) == value, key)
             self.assertEqual(env['XDG_CONFIG_HOME'], '/scratch/root/xdg')
             self.assertEqual(env['ZDOTDIR'], '/scratch/root/zdotdir')
-            self.assertEqual(os.path.basename(env['SHELL']), 'zsh')
+            if h.zsh_path():
+                self.assertEqual(os.path.basename(env['SHELL']), 'zsh')
             self.assertTrue(env['PATH'].startswith(str(SUBJECT.parent) + os.pathsep))
 
     def test_timeout_kills_the_process_group(self):
@@ -893,14 +894,32 @@ events = [{'type': 'assistant', 'timestamp': '2026-10-13T15:00:01Z', 'message': 
            {'type': 'tool_result', 'tool_use_id': 'start', 'content': 'binary: ' + argv[0] + '\\n'}]}}]
 log.write_text(''.join(json.dumps(event) + '\\n' for event in events))
 pathlib.Path('ledger/settings.txt').write_text('page_size=99\\n')
+(pathlib.Path(os.environ['HOME']) / 'subject-ready').write_text('')
 time.sleep(30)
 ''')
+
+    def when_ready(self):
+        """Wait, bounded, until the sleeping subject has written its evidence."""
+        ready = self.home / 'subject-ready'
+        deadline = time.monotonic() + 60
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    def ready_popen(self):
+        """Popen whose timed wait starts once the subject is ready, so load cannot void it."""
+        when_ready, subject = self.when_ready, self.subject.resolve()
+        class ReadyPopen(subprocess.Popen):
+            def wait(self, timeout=None):
+                if timeout is not None and isinstance(self.args, list) and Path(self.args[0]).resolve() == subject:
+                    when_ready()
+                return super().wait(timeout=timeout)
+        return ReadyPopen
 
     def test_a_real_timeout_of_a_valid_session_keeps_its_evidence(self):
         self.sleeping_subject()
         config = self.case('real-timeout')
         config.policy = {**config.policy, 'subjectTimeoutSeconds': 1}
-        with patch.dict(os.environ, {'HOME': str(self.home)}):
+        with patch.dict(os.environ, {'HOME': str(self.home)}), patch.object(subprocess, 'Popen', self.ready_popen()):
             rc, record, text, _ = self.fake_run(config, launch=h.launch)
         self.assertEqual(rc, 124)
         self.assertTrue(record['timed_out'])
@@ -913,13 +932,19 @@ time.sleep(30)
             self.fail('harness has no Interrupted')
         self.sleeping_subject()
         config = self.case('interrupted')
-        timer = threading.Timer(1.5, os.kill, (os.getpid(), signal.SIGTERM))
-        timer.start()
-        try:
-            with patch.dict(os.environ, {'HOME': str(self.home)}), self.assertRaises(SystemExit) as caught:
-                self.fake_run(config, launch=h.launch)
-        finally:
-            timer.cancel()
+        default = signal.getsignal(signal.SIGTERM)
+        def interrupt():
+            # Signal only once the subject wrote its evidence and launch handles SIGTERM.
+            self.when_ready()
+            deadline = time.monotonic() + 60
+            while signal.getsignal(signal.SIGTERM) is default and time.monotonic() < deadline:
+                time.sleep(0.02)
+            os.kill(os.getpid(), signal.SIGTERM)
+        timer = threading.Thread(target=interrupt, daemon=True)
+        with patch.dict(os.environ, {'HOME': str(self.home)}), self.assertRaises(SystemExit) as caught:
+            timer.start()
+            self.fake_run(config, launch=h.launch)
+        timer.join()
         self.assertEqual(caught.exception.code, 128 + signal.SIGTERM)
         record = json.loads((config.artifact_root / 'A/claude-run.json').read_text())
         self.assertEqual(record['interrupted'], signal.SIGTERM)

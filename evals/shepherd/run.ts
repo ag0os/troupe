@@ -11,11 +11,17 @@
  * Usage:
  *   bun run evals:shepherd [--scratch <dir>] [--artifacts <dir>]
  *   bun run evals:shepherd --check [--scratch <dir>]
+ *   bun run evals:shepherd --validation --trials D [--scratch <dir>]
  *
  * `--check` runs the shell syntax checks, `check-harness.py` against a
  * scratch-compiled subject, including real fixture shapes, and
  * `check-musts.py`. Its session launches are fake, and a stub `claude` sits
  * first on PATH.
+ *
+ * `--validation --trials` is the lead's regression validation (8.5): only
+ * the named trials run, under the gate's policy, and the result, summary
+ * and evidence go to `validation/<source-hash>/<run-id>/`, which the CI
+ * verifier never reads.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -46,7 +52,7 @@ import {
 } from "../../scripts/shepherd-source";
 import { runGate } from "./gate";
 import { type EvaluationIdentity, evaluationIdentity } from "./identity";
-import { canonicalJson, loadRubric, policyHash } from "./schema";
+import { canonicalJson, GATE_TRIALS, loadRubric, policyHash } from "./schema";
 
 export { canonicalJson };
 
@@ -490,7 +496,7 @@ export function lateStart(now: Date): string | undefined {
 }
 
 const USAGE =
-	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>]";
+	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>]\n       bun run evals:shepherd --validation --trials <trial>[,<trial>...] [--scratch <dir>]";
 
 async function main(): Promise<number> {
 	const startedAt = Date.now();
@@ -602,6 +608,7 @@ async function main(): Promise<number> {
 	const waves: Awaited<ReturnType<typeof runTrials>>[] = [];
 	const { result } = await runGate({
 		evalsDir: EVALS_DIR,
+		validation: parsed.validation ? { trials: parsed.validation } : undefined,
 		sourceHash: frozen.manifest.source,
 		manifest: frozen.manifest.entries,
 		identity: {
@@ -689,32 +696,79 @@ async function main(): Promise<number> {
 		);
 	}
 	for (const reason of reasons) console.error(`INVALID: ${reason}`);
+	const hex = frozen.manifest.source.replace(/^sha256:/, "");
 	console.log(
-		`Result: ${result.outcome}, ${join(EVALS_DIR, "results", `${frozen.manifest.source.replace(/^sha256:/, "")}.json`)}`,
+		`Result: ${result.outcome}, ${
+			parsed.validation
+				? join(EVALS_DIR, "validation", hex, run.runId, "result.json")
+				: join(EVALS_DIR, "results", `${hex}.json`)
+		}`,
 	);
 	if (interrupted) return interrupted;
 	if (reasons.length > 0) return 4;
 	return result.outcome === "blocked" ? 1 : 0;
 }
 
-function parseOptions(argv: string[]) {
-	const { values } = parseArgs({
+export function parseOptions(argv: string[]) {
+	const { values: raw } = parseArgs({
 		args: argv,
 		options: {
 			check: { type: "boolean", default: false },
 			scratch: { type: "string", default: tmpdir() },
 			artifacts: { type: "string" },
+			validation: { type: "boolean", multiple: true },
+			trials: { type: "string", multiple: true },
 		},
 		strict: true,
 		allowPositionals: false,
 	});
+	// A costed validation run must not silently take the last of two values.
+	for (const flag of ["validation", "trials"] as const) {
+		if ((raw[flag]?.length ?? 0) > 1)
+			throw new Error(`--${flag} may be given only once`);
+	}
+	const values = {
+		...raw,
+		validation: raw.validation?.[0] ?? false,
+		trials: raw.trials?.[0],
+	};
 	if (values.check && values.artifacts) {
 		throw new Error("--check writes no artifacts; drop --artifacts");
+	}
+	if (values.trials !== undefined && !values.validation) {
+		throw new Error(
+			"--trials needs --validation; the gate always runs all six",
+		);
+	}
+	if (values.validation && values.check) {
+		throw new Error("--validation runs trials; drop --check");
+	}
+	if (values.validation && values.trials === undefined) {
+		throw new Error("--validation needs --trials, for example --trials D");
+	}
+	let validation: string[] | undefined;
+	if (values.validation) {
+		const trials: readonly string[] = GATE_TRIALS;
+		validation = (values.trials ?? "").split(",");
+		if (
+			validation.some((t) => !trials.includes(t)) ||
+			new Set(validation).size !== validation.length
+		) {
+			throw new Error(
+				`--trials takes distinct gate trials (${trials.join(", ")}), not "${values.trials}"`,
+			);
+		}
+		if (validation.length === trials.length) {
+			throw new Error(
+				"--trials may not name all six: validation runs only the relevant trials, and the gate runs all six",
+			);
+		}
 	}
 	return {
 		check: values.check ?? false,
 		scratch: values.scratch ?? tmpdir(),
 		artifacts: values.artifacts,
+		validation,
 	};
 }
 

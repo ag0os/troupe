@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -10,6 +12,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readWorktreeSource } from "../../scripts/shepherd-source";
+import {
+	git as fixtureGit,
+	initShepherdRepo,
+	testGit,
+} from "../../scripts/shepherd-source-fixture";
 import {
 	type GateOptions,
 	publishResult,
@@ -17,8 +25,10 @@ import {
 	runGate,
 	summary,
 } from "./gate";
+import { evaluationIdentity } from "./identity";
 import { loadRubric, policyHash, type Result, validateResult } from "./schema";
 import { invocation } from "./testing";
+import { verifyResults } from "./verify";
 
 const rubric = loadRubric();
 const TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"];
@@ -579,6 +589,10 @@ describe("allowances (5.5, 5.6, R1)", () => {
 		expect(d?.kind).toBe("void");
 		expect(d?.valid).toBe(false);
 		expect(d?.voidReasons.join()).toMatch(/corrupted required evidence/);
+		// The verifier recognises a local checker failure by this prefix (R1-1).
+		expect(d?.voidReasons).toContain(
+			"mechanical checks failed: corrupted required evidence: claude-final.json: bad JSON",
+		);
 		expect(d?.musts).toEqual([]);
 	});
 
@@ -601,7 +615,37 @@ describe("allowances (5.5, 5.6, R1)", () => {
 		});
 		expect(trial(result, "A")?.attempts[0]?.voidReasons.join()).toMatch(
 			/binary bytes changed/,
-		);
+		); // A void attempt is never recorded valid (verifier, review-c4 F4).
+		expect(
+			result.evaluation.trials.every((t) => t.attempts.every((a) => !a.valid)),
+		).toBe(true);
+	});
+
+	test("a valid session whose snapshot is missing is void and recorded invalid", async () => {
+		const opts = options({});
+		const wave = opts.runWave;
+		opts.runWave = async (jobs) => {
+			const finished = await wave(jobs);
+			rmSync(join(opts.artifactRoot, "D", "attempt-1", "claude-final.json"), {
+				force: true,
+			});
+			return finished;
+		};
+		const { result } = await runGate(opts);
+		const d = trial(result, "D")?.attempts[0];
+		expect(d?.kind).toBe("void");
+		expect(d?.valid).toBe(false);
+		expect(d?.voidReasons.join()).toMatch(/corrupted required evidence/);
+	});
+
+	test("every attempt with a run manifest lists claude-run.json", async () => {
+		const { result } = await runGate(options({ D: ["void"] }));
+		for (const t of result.evaluation.trials)
+			for (const a of t.attempts)
+				expect([
+					t.trial,
+					a.artifacts.some((x) => x.path === "claude-run.json"),
+				]).toEqual([t.trial, true]);
 	});
 });
 
@@ -964,5 +1008,278 @@ describe("history and publication (6.4, 6.5)", () => {
 		expect(text).toMatch(/Limitations/);
 		expect(text).toContain("claude-opus-5-5");
 		expect(text).not.toMatch(/[\u2013\u2014]/);
+	});
+});
+
+describe("regression validation (8.5)", () => {
+	const validation = (trials: string[]) => ({ validation: { trials } });
+
+	test("runs only the named trials and writes everything under validation/<source-hash>/<run-id>/", async () => {
+		const opts = options({}, { D: ["fail", "fail"] }, validation(["D"]));
+		const { result } = await runGate(opts);
+		expect(launches.map((l) => l.trial)).toEqual(["D", "D"]);
+		const dir = `validation/${HEX}/${opts.runId}`;
+		expect(
+			JSON.parse(readFileSync(join(evalsDir, dir, "result.json"), "utf8")),
+		).toEqual(result);
+		expect(readFileSync(join(evalsDir, dir, "result.md"), "utf8")).toBe(
+			summary(result),
+		);
+		expect(existsSync(join(evalsDir, "results"))).toBe(false);
+		expect(existsSync(join(evalsDir, "artifacts"))).toBe(false);
+		expect(validateResult(result)).toEqual([]);
+		const d = trial(result, "D");
+		expect(d?.outcome).toBe("fail");
+		for (const attempt of d?.attempts ?? []) {
+			expect(attempt.artifactDir).toStartWith(`${dir}/D/attempt-`);
+			expect(
+				existsSync(join(evalsDir, attempt.artifactDir, "claude.jsonl")),
+			).toBe(true);
+		}
+		// Every other trial is recorded, never run; the policy is the gate's.
+		for (const t of result.evaluation.trials.filter((t) => t.trial !== "D")) {
+			expect(t.attempts).toEqual([]);
+		}
+		expect(result.evaluation.policy).toEqual(policy);
+		expect(result.outcome).toBe("blocked");
+	});
+
+	test("a validation run leaves the gate's result and evidence untouched", async () => {
+		await runGate(options({}));
+		const json = readFileSync(join(evalsDir, `results/${HEX}.json`));
+		const md = readFileSync(join(evalsDir, `results/${HEX}.md`));
+		launches = [];
+		await runGate(options({}, { G: ["fail", "fail"] }, validation(["G"])));
+		expect(launches.map((l) => l.trial)).toEqual(["G", "G"]);
+		expect(readFileSync(join(evalsDir, `results/${HEX}.json`))).toEqual(json);
+		expect(readFileSync(join(evalsDir, `results/${HEX}.md`))).toEqual(md);
+		const evidence = new Bun.Glob("artifacts/**").scanSync({ cwd: evalsDir });
+		expect([...evidence].some((path) => path.includes("/G/attempt-2/"))).toBe(
+			false,
+		);
+	});
+
+	test("unknown, duplicate, missing or all six trials are refused before anything runs", async () => {
+		for (const trials of [[], ["B"], ["D", "D"], [...TRIALS]]) {
+			await expect(
+				runGate(options({}, {}, validation(trials))),
+			).rejects.toThrow(/validation/);
+		}
+		expect(launches).toEqual([]);
+		expect(existsSync(join(evalsDir, "validation"))).toBe(false);
+	});
+
+	test("pending attempts of a validation run are recorded under validation/", async () => {
+		const opts = options({}, {}, validation(["D"]));
+		const wave = opts.runWave;
+		let midWave: Result | undefined;
+		opts.runWave = async (jobs) => {
+			midWave = JSON.parse(
+				readFileSync(
+					join(evalsDir, `validation/${HEX}/${opts.runId}/result.json`),
+					"utf8",
+				),
+			);
+			return wave(jobs);
+		};
+		await runGate(opts);
+		const pending = trial(midWave as Result, "D")?.attempts[0];
+		expect(pending?.kind).toBe("pending");
+		expect(pending?.artifactDir).toBe(
+			`validation/${HEX}/${opts.runId}/D/attempt-1`,
+		);
+		expect(existsSync(join(evalsDir, "artifacts"))).toBe(false);
+	});
+});
+
+describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
+	const CODE = import.meta.dir;
+	let repo: string;
+
+	beforeEach(() => {
+		repo = join(scratch, "repo");
+		// The real evaluation files, so the verifier's identity, policy and
+		// checker are the ones the gate result names.
+		cpSync(CODE, evalsDir, {
+			recursive: true,
+			filter: (path) =>
+				!/\/(results|artifacts|validation|__pycache__)(\/|$)/.test(
+					path.slice(CODE.length),
+				),
+		});
+		initShepherdRepo(repo);
+	});
+
+	/** Gate options for this repository's real source, identity and policy. */
+	function real(
+		plan: Record<string, Behaviour[]>,
+		changes: Partial<GateOptions> = {},
+	): GateOptions {
+		const source = readWorktreeSource(repo, { git: testGit });
+		const identity = evaluationIdentity(repo, { git: testGit });
+		const realPolicy = JSON.parse(
+			readFileSync(join(evalsDir, "policy.json"), "utf8"),
+		);
+		const revision = fixtureGit(repo, "rev-parse", "HEAD").trim();
+		const base = options(plan, {}, changes);
+		return {
+			...base,
+			sourceHash: source.source,
+			manifest: source.entries,
+			identity: {
+				hash: identity.hash,
+				rubricSha256: `sha256:${createHash("sha256")
+					.update(readFileSync(join(evalsDir, "rubric.json")))
+					.digest("hex")}`,
+				policySha256: policyHash(realPolicy),
+				policy: realPolicy,
+				scorer: {
+					family: realPolicy.scorer.family,
+					model: realPolicy.scorer.model,
+					effort: realPolicy.scorer.effort,
+				},
+			},
+			build: {
+				...base.build,
+				revision,
+				dirty: false,
+				version: `shepherd revision=${revision} dirty=false source=${source.source}\n`,
+			},
+		};
+	}
+
+	const verified = () => verifyResults(repo, { git: testGit }).problems;
+
+	test("a passing suite, a flaky pass and an exempt void verify", async () => {
+		const { result } = await runGate(
+			real({ "G-neg": ["bad", "good"], D: ["void", "good"] }),
+		);
+		expect(result.outcome).toBe("flaky-pass");
+		expect(verified()).toEqual([]);
+	});
+
+	test("a local checker failure, then a pass, verifies (R1-1)", async () => {
+		let failed = false;
+		const { result } = await runGate(
+			real(
+				{},
+				{
+					checks: (t, dir) => {
+						if (t === "D" && !failed) {
+							failed = true;
+							return { error: "must-check exited null (timeout)" };
+						}
+						return pythonChecks(t, dir);
+					},
+				},
+			),
+		);
+		expect(trial(result, "D")?.attempts.map((a) => a.kind)).toEqual([
+			"void",
+			"behavioral",
+		]);
+		expect(result.outcome).toBe("pass");
+		expect(verified()).toEqual([]);
+	});
+
+	test("a pending attempt resolved from its log, then a pass, verifies as flaky-pass (R2-1)", async () => {
+		const home = join(scratch, "home");
+		const killed = real({}, { home });
+		const run = killed.scratchRoot;
+		killed.runWave = async (jobs) => {
+			for (const { trial: t, ordinal } of jobs) {
+				if (t !== "G-neg") continue;
+				// The session started, then the invocation died before recording it.
+				const dir = join(killed.artifactRoot, t, `attempt-${ordinal}`);
+				mkdirSync(dir, { recursive: true });
+				const workspace = `${run}/shepherd-eval-${t}-x/workspace`;
+				const session = "00000000-0000-4000-8000-0000000000aa";
+				writeFileSync(
+					join(dir, "claude-run.json"),
+					JSON.stringify({
+						trial: t,
+						workspace,
+						argv: [`${run}/bin/shepherd`, "--session-id", session],
+						validity: { valid: false, void_reasons: [] },
+						provenance: [],
+						started_at: "2026-10-13T15:11:10.000Z",
+						ended_at: null,
+					}),
+				);
+				const log = join(
+					home,
+					".claude/projects",
+					workspace.replace(/[^A-Za-z0-9]/g, "-"),
+					`${session}.jsonl`,
+				);
+				mkdirSync(join(log, ".."), { recursive: true });
+				const events = [
+					{
+						type: "assistant",
+						cwd: workspace,
+						message: {
+							model: "claude-opus-5-5",
+							role: "assistant",
+							content: [
+								{
+									type: "tool_use",
+									id: "toolu_s",
+									name: "Bash",
+									input: { command: "shepherd tool start" },
+								},
+							],
+						},
+					},
+					{
+						type: "user",
+						cwd: workspace,
+						message: {
+							role: "user",
+							content: [
+								{
+									type: "tool_result",
+									tool_use_id: "toolu_s",
+									content: `binary: ${run}/bin/shepherd\n`,
+								},
+							],
+						},
+					},
+				];
+				writeFileSync(
+					log,
+					`${events.map((e) => JSON.stringify(e)).join("\n")}\n`,
+				);
+			}
+			throw new Error("killed mid-wave");
+		};
+		await expect(runGate(killed)).rejects.toThrow(/killed mid-wave/);
+		const { result } = await runGate(real({}, { home }));
+		expect(
+			trial(result, "G-neg")?.attempts.map((a) => [a.kind, a.interrupted]),
+		).toEqual([
+			["behavioral", 0],
+			["behavioral", null],
+		]);
+		expect(result.outcome).toBe("flaky-pass");
+		const verification = verifyResults(repo, { git: testGit });
+		expect(verification.problems).toEqual([]);
+		expect(verification.notes.join("\n")).toMatch(/G-neg flaky-pass/);
+	});
+
+	test("a run that failed its recheck, then a passing run, verifies (N11)", async () => {
+		await runGate(
+			real(
+				{},
+				{ recheck: () => ["subject binary bytes changed after execution"] },
+			),
+		);
+		const { result } = await runGate(real({}));
+		expect(result.outcome).toBe("pass");
+		const first = trial(result, "A")?.attempts[0];
+		expect(first?.kind).toBe("void");
+		expect(first?.artifacts.some((a) => a.path === "must-check.json")).toBe(
+			true,
+		);
+		expect(verified()).toEqual([]);
 	});
 });

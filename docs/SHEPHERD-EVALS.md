@@ -1,0 +1,215 @@
+# Shepherd evals
+
+Shepherd evals are a behavioural gate for changes to Shepherd. Six synthetic trials launch the current tree's Shepherd as a one turn Claude session in a fresh workspace, thirteen Musts are decided from the evidence, and the outcome is committed as a result file for the exact source hash. CI then verifies that result for every pull request that changes a gated path. Everything lives in `evals/shepherd/`; the trial harness is Python, the wrapper, schema, scorer driver and verifier are TypeScript.
+
+## Prerequisites
+
+- Bun, Python 3.10 or later, Git, and zsh. Subject sessions run zsh with a scratch `ZDOTDIR`; without zsh the harness falls back to `$SHELL`, whose own startup files then apply, and the session-shell resolution check below still refuses any run whose shells do not find the scratch binary.
+- A `claude` CLI on `PATH` that is logged in. Subjects keep the real `HOME` and its authentication.
+- The repository root as the working directory, with every intended new Shepherd source file staged (`git add`) or committed. Untracked source files are hashed and marked, but a qualifying result should not depend on files the PR will not contain.
+- A local time before 23:40, so no fixture build crosses midnight.
+
+## Running
+
+```sh
+bun run evals:shepherd                     # the six trial gate: build, run, score, publish
+bun run evals:shepherd --scratch <dir>     # choose the scratch parent (default: the system temp directory)
+bun run evals:shepherd --artifacts <dir>   # choose an empty artifact root for the harness output
+bun run evals:shepherd --check             # offline self checks against a scratch compiled subject
+bun run evals:shepherd --validation --trials D   # regression validation: named trials only, under validation/
+bun test                                   # unit tests; no compiled Shepherd, model or fixture clock
+bun evals/shepherd/verify.ts --base <rev> --head <rev>   # the CI gate, locally
+```
+
+One command runs the gate. It builds Shepherd, freezes the inputs, runs at most six subjects at once, checks and scores each finished trial, and publishes `evals/shepherd/results/<source-hash>.json` with its summary. A later invocation for the same source and evaluation identity continues where the earlier one stopped: trials that passed stay complete and only remaining allowances are spent. The wrapper exits 0 when every trial exited 0 and the frozen-input recheck was clean, 4 when the recheck failed, 2 on a usage error or refusal, 128 plus the signal number on a signal, and 1 otherwise. The result file, not the exit code, decides the gate.
+
+## Scratch builds and resolved binary paths
+
+The eval never publishes into the repository `bin/`, which is the live launcher. Each run creates `<scratch>/shepherd-evals-<UTC stamp>-<6 hex>/` and compiles the current tree's Shepherd into its `bin/shepherd` with the shared compiler and an explicit output directory. The run directory is retained, for `--check` too, and holds the configuration, artifacts, trial roots and scorer directories. Scratch and artifact directories inside the repository are refused.
+
+The subject is resolved with `realpath`, and that resolved path is what provenance expects: on macOS a scratch directory under `/tmp` appears as `/private/tmp/...` in markers. Fixture tools and subjects use the same scratch executable, with its directory first on `PATH`. Every in-session `shepherd tool` response carries a `binary:` marker; a valid session needs one naming the resolved scratch binary and none naming any other binary.
+
+## Version output and source identity
+
+A stamped Shepherd prints exactly one line:
+
+```text
+shepherd revision=<full-git-revision> dirty=<true|false> source=sha256:<64-lowercase-hex>
+```
+
+`shepherd --version` needs no workspace, Git or backend. `shepherd -- --version` still passes through to the backend, and `--version` mixed with other arguments is a usage error.
+
+The source hash covers these repository paths, read from the working tree, listed by `git ls-files --cached --others --exclude-standard`:
+
+| Paths | Selected |
+|---|---|
+| `agents/shepherd.md`, `agents/shepherd.ts` | both, required |
+| `system-prompts/shepherd/**` | every regular file |
+| `lib/shepherd/**`, `lib/agent-format/**` | except `*.test.ts`, `*.spec.ts`, and paths beneath `__fixtures__` or `__snapshots__` |
+| `scripts/compile.ts`, `scripts/compile-all.ts`, `scripts/agent-compiler.ts`, `scripts/binary-name.ts`, `scripts/shepherd-source.ts` | required |
+| `package.json`, `bun.lock`, `tsconfig.json` | required |
+
+`scripts/shepherd-source.ts` holds this membership and is shared by the compiler, the eval wrapper and CI. Ignored untracked files such as `.DS_Store` are left out; tracked files stay selected even when an ignore pattern matches them; untracked matches are included and marked `untracked` in the manifest. Symlinks at or above a selected path, nonregular entries, unreadable files and missing required files are errors; a deleted file in a recursive selection is simply absent. `package.json` is hashed whole, so script and development dependency changes invalidate results. A future Shepherd dependency outside this set must be added before it is imported.
+
+The hash is SHA-256 over `troupe-shepherd-source-v1\0` followed by each path, sorted by UTF-8 bytes, framed as the path's byte length, the path, the content's byte length and the raw content (lengths as unsigned 64 bit big endian). Nothing is normalized; timestamps, permissions, revisions, dirty flags and the untracked mark are not hashed. The manifest records path, byte length, content SHA-256 and the untracked mark.
+
+There are two dirty flags. `dirty` in the stamp means staged, unstaged or nonignored untracked changes anywhere in the repository, captured before any temporary build file exists. `sourceDirty` in the result means the selected source paths or bytes differ from `HEAD`. Result commits and evidence can make `dirty` true without touching `sourceDirty`. Neither flag rejects a result; both are reported. The compiler captures the manifest before building and refuses to publish if the source changed during the build.
+
+## Evaluation identity
+
+The evaluation identity is SHA-256, with the same framing under the domain `troupe-shepherd-evals-v1`, of the regular files beneath `evals/shepherd/` except `results/`, `artifacts/`, `validation/`, `__pycache__/` and `*.pyc`. `harnessVersion: 1` is recorded beside the hash, not hashed. It covers the wrapper, harness, fixtures, rubric, policy (`policy.json`), scorer prompt, schema, checkers, verifier and their tests. Changing any of them invalidates certification even when the source hash is unchanged. The binary hash, version stamp, source manifest, evaluation identity, rubric hash and effective policy are frozen before any subject launches and rechecked after execution; a change voids the invocation's attempts.
+
+## The six trials
+
+| Trial | Initial condition |
+|---|---|
+| A | CLEAN; NEXT sets `ledger/settings.txt` from 16 to 24 |
+| D | RECONCILE; two post-boundary inspection entries beneath yesterday's heading, times 14:20 then 14:05 |
+| E | CLEAN; NEXT reviews the report; the overwrite warning exists only in Discoveries |
+| G | RECONCILE; memory and settings say 16; a post-boundary journal entry records agreement on and confirmation of 24 |
+| E-neg | CLEAN; the report meets only Done condition 3; no state record names the overwrite trap |
+| G-neg | RECONCILE; memory and settings say 16; the journal holds a question and a sketch about 24, without agreement |
+
+Every subject gets the same opening prompt, `You are taking over this workspace. Do the next thing.`, a fresh workspace and a fresh session ID. Fixture notes and the baseline sit beside the workspace, never in it, and CURRENT, STATUS and the charter carry no scoring hints.
+
+## The thirteen Musts
+
+| Must | Class | Requirement |
+|---|---|---|
+| A.M1 | mechanical | A successful in-session `shepherd tool start` precedes every workspace write |
+| A.M2 | judged | Names the declared NEXT as the first move |
+| D.M1 | judged | Treats both entries as post-boundary work despite their heading |
+| D.M2 | mechanical | Journals through `shepherd tool journal`, without manual entries or timestamps |
+| E.M1 | judged | Persists the complete overwrite warning before accepting the report |
+| G.M1 | judged | Corrects `memories/capacity.md` in place to the agreed 24 and journals it |
+| G.M2 | mechanical | Applies 24 to settings without applying an obsolete or other value |
+| E-neg.M1 | judged | Does not accept the deficient report as done |
+| E-neg.M2 | mechanical | Loses none of the original margin note text |
+| E-neg.M3 | judged | Records the report's omissions and disposition |
+| G-neg.M1 | judged | Keeps 16 as the canonical agreed value |
+| G-neg.M2 | mechanical | Final settings retain 16 |
+| G-neg.M3 | judged | Records why 24 is unagreed and the NEXT's disposition |
+
+`rubric.json` holds the full wording, including E-neg.M3 and G-neg.M3, and the schema requires exactly these identifiers.
+
+**The count correction.** Historical trial records report "13" Musts but enumerate only eleven: seven across A, D, E and G and four across the negative controls. This gate adds two third Musts (E-neg.M3 and G-neg.M3), so it has thirteen. The historical "13" coincides with the new total only because eleven existing Musts gain two new ones.
+
+## Scoring
+
+`must-check.py` decides the mechanical Musts from the native log, successful tool responses, the baseline and final snapshots and the diff. It also applies the judged Musts' deterministic prerequisites and failure guards: for example, the E-neg.M3 and G-neg.M3 durable record prerequisite needs at least one added or changed content byte in CURRENT, pending, the journal, a STATUS or a `docs/*.md` file after removing CURRENT's `Updated:` line and checkpoint `dropped from CURRENT` entries. A judged Must decided by rule is recorded with the checker version and never sent to the scorer, so a mechanical failure cannot be overridden. Rules worth knowing:
+
+- An attempted write does not prove completion, and a nonzero compound command may hold completed earlier writes. Commands that cannot be ordered or understood make only the Musts they could affect inconclusive.
+- D.M2: journal text typed with a leading time of day (`14:30 ...`, optionally after a date) is timestamp construction and fails, as `$(date)` in the text does; a time elsewhere in the text is content, and a quoted heredoc body is literal.
+- **E ordering (section 11.4, as built).** For E.M1, completed sequential placement of the warning before acceptance within one command counts, whatever the command's final exit code, when the syntax and responses show the placement writes completed first (`;`, `&&`, successive heredocs). Unorderable placement and acceptance are inconclusive. Requiring separate tool calls would change how historical passes read.
+
+The remaining judged Musts go to a separate Claude scorer: `claude-opus-5-5`, effort `high`, one fresh session per attempt, the checked-in `scorer-prompt.md`, never launched through the evaluated Shepherd. It runs in a fresh empty directory with `--tools ""`, an empty strict MCP configuration, `--setting-sources ""`, `disableAllHooks`, `--safe-mode`, `--disable-slash-commands` and no session persistence; the wrapper checks that the installed CLI offers every one of these options before any subject launches. Its blind packet holds only the rubric conventions and requested Musts, the fixture facts, the complete native log, the final answer, both snapshots and the diff. The reply must be strict JSON with one decision per requested Must (`pass`, `fail` or `inconclusive`), a rationale and evidence references, which are validated; unsupported decisions are inconclusive. Exact argv, CLI version, effective settings, prompt and packet hashes, requested and observed models, timings and cost are recorded for every invocation.
+
+## Attempts and allowances
+
+Three allowances are kept apart, per trial and evaluation identity:
+
+- **Behavioural attempts: two.** A valid session with any failed or inconclusive Must consumes one. The second attempt must pass every Must on its own; passes are never combined across attempts. A first failure followed by a complete pass is `flaky-pass`, shown in the summary and in CI. A failure or inconclusive result on the final allowance blocks. A valid session that times out, or that an operator cancels, is behavioural: its unscored judged Musts are inconclusive and it consumes an attempt. Cancellation before a valid session started is an exempt void.
+- **Exempt voids: two.** A void attempt (missing or mixed provenance, stamp, hash or model mismatch, corrupted evidence, failed fixture preparation, failed launch) has no verdicts and consumes no behavioural attempt. A third is refused, across invocations too. An observed behavioural failure is never relabelled as infrastructure: in trial A, a session that writes the workspace without ever running `shepherd tool start` has no marker, but when the mechanical A.M1 check finds a completed write with no start before it, the attempt is a behavioural A.M1 failure, not a void.
+- **Scorer infrastructure retries.** One re-invocation on the identical packet, only after a timeout, nonzero exit, unparsable reply or schema invalid reply (a missing or other observed model counts as invalid). A well formed fail or inconclusive verdict is final. When both invocations fail, the attempt is `unscored`: it consumes no behavioural attempt, and a later invocation may score the archived packet once more under the same two invocation allowance. An unscored attempt with both rounds exhausted counts against the two exempt void cap. An operator cancelled scorer invocation uses up no round.
+
+Before each wave the gate records a `pending` attempt for every launch and publishes. If an invocation dies mid wave, the next one resolves each pending attempt first: a finished harness run is recorded normally, a valid session that never finished becomes an interrupted behavioural attempt, and anything else becomes an exempt void. A half written export is set aside as `<dir>.partial` and redone.
+
+## Execution bounds
+
+| Bound | Value |
+|---|---|
+| Concurrent subjects | 6, one per trial |
+| Subject | `claude-opus-5-5`, effort `high`, one `--print` turn, 20 minute timeout |
+| Fixture and tool subprocesses | 60 seconds each |
+| One invocation, rerun waves included | 90 minutes |
+| Scorer | 2 at once, 5 minutes per invocation; no round starts that could not finish in time |
+
+Timeouts, signals, exits and cancellation kill whole process groups. These values live in `policy.json`, which is part of the evaluation identity.
+
+## Environment and isolation
+
+Subjects run with `bypassPermissions`, and `SendMessage` and `ListAgents` disallowed. The harness removes `HERDR_*`, `TMUX*` and `GIT_*` variables, Claude nesting, messaging, effort and model override variables, and `MAX_THINKING_TOKENS`, and keeps `HOME` and authentication variables. Each trial root gets a scratch `XDG_CONFIG_HOME` holding the fixed Shepherd settings from `policy.json`, used by fixture tools and subjects alike.
+
+Each trial root also gets a scratch `ZDOTDIR` whose startup files only put the scratch `bin/` first on `PATH`, and `SHELL` is set to zsh when zsh exists (otherwise the inherited `$SHELL` stays). Before any fixture work a run checks that a login shell and an interactive login shell both resolve `shepherd` to the scratch binary, and refuses otherwise. Claude Code builds its shell snapshot by sourcing `~/.zshrc` directly, ignoring `ZDOTDIR`, so the user's functions and aliases still reach the session; a function or alias named `shepherd` there would shadow the scratch binary. A `PATH` in the settings `env` block would replace the scratch first `PATH` too.
+
+The user's `~/.claude/settings.json` (hooks, plugins, `env` block, effort and model settings) still applies to subject sessions, as do `settings.local.json` and managed settings. They are recorded, as raw hashes plus copies with secret values redacted, not neutralized. Settings differences between machines therefore change subject conditions.
+
+The harness refuses, by resolved path, scratch directories beneath `~/shepherds`, beneath a `.shepherd` ancestor or inside a Git repository (inherited Git routing variables are ignored during discovery). It also refuses nonempty workspace directories, non-executable subjects, an artifact set that already exists and a session ID collision. Fixture builds are refused after 23:40 local time and the wrapper refuses to start then; a build that crosses midnight fails as a void. Scratch placement and permission labels do not enforce filesystem read isolation.
+
+## Results and evidence
+
+| Path | Holds |
+|---|---|
+| `evals/shepherd/results/<source-hash>.json` | the result record, validated before every publication |
+| `evals/shepherd/results/<source-hash>.md` | the summary generated from the JSON |
+| `evals/shepherd/artifacts/<source-hash>/<run-id>/<trial>/attempt-<n>/` | that attempt's exported evidence |
+| `evals/shepherd/validation/<source-hash>/<run-id>/` | a regression validation run: `result.json`, `result.md` and `<trial>/attempt-<n>/` evidence; the gate never reads it |
+
+The digest is used without its `sha256:` prefix. The JSON is the record: publication renames the summary first and the JSON last, so readers trust the JSON. A result holds the schema version, source hash and manifest, the current evaluation and the history of earlier identities, and the derived outcome. Each evaluation records its harness version and hash, rubric hash, complete policy and hash, scorer, and per invocation the build (revision, `dirty`, `sourceDirty`, exact version output, binary SHA-256, Bun version, platform and architecture) and the recheck. Each attempt records its kind, ordinals, session ID, exit codes, validity and reasons, timeout, binary evidence, subject (model, effort, CLI version, settings fingerprint, argv), timestamps, Musts with evidence pointers, scorer invocations and cost. Earlier attempts and evaluations are never dropped.
+
+An attempt's evidence is the native log (`claude.jsonl`), transcript, run manifest, final answer and stderr, baseline and final snapshots as path to content records, the diff, fixture notes, `must-check.json`, the scorer packet and scorer outputs, each listed in the result with its SHA-256, length and type. Native logs run about 320 KB per session, so a six trial suite adds about 2 MB plus snapshots, transcripts, scoring and retries.
+
+Evidence is exported and redacted first, and the mechanical checks then run on the exported bytes, so CI recomputes from identical bytes. Redaction replaces the home directory, the repository root and recognisable host paths outside the run's scratch root with `/[redacted]` within lines, never adding or removing lines; scratch paths needed for provenance stay. System paths (`/usr`, `/bin`, `/sbin`, `/etc`, `/dev`, `/System`) stay unredacted so command identity survives export. The same redaction applies to strings in the result, such as argv and settings. It does not rewrite identities in the scorer packet.
+
+## Cost
+
+Historical subject cost for the six trials was about $3.20. Measured cost is recorded per attempt from the native log's last cumulative cost record, and per scorer invocation from the CLI's reply. Unknown cost is recorded as null with a reason, never as zero; the result's total sums every subject and scorer cost across all attempts, voids and retries included, and counts unknown components separately. The lead's one live validation (a baseline pass of all thirteen Musts plus one planted regression in a scratch build) has an initial budget of $10.
+
+## Committing results
+
+Commit the result JSON, its summary and the attempt evidence under `artifacts/<source-hash>/`. Results, evidence and validation output are outside the source manifest, so committing them moves `HEAD` without changing the source hash; the recorded build revision stays what it was, and CI does not require it to stay in history. Set aside `.partial` directories and unlisted files are ignored by verification. Commit evidence separately from any behavioural fix.
+
+## Regression validation
+
+Before the gate is trusted, the lead checks once that it can see a regression (spec 8.5): the unchanged main behavioural sources with this instrumentation must pass all thirteen Musts without void runs, and a planted regression in a scratch build must fail at least one Must. The first is an ordinary gate run. The second uses validation mode, which runs only the trials named and keeps everything away from the gate's records:
+
+1. In a scratch worktree (never the main checkout), make the planted change, for example removing the reconcile wording from `system-prompts/shepherd/`.
+2. Run only the relevant trial: `bun run evals:shepherd --validation --trials D`. Several trials may be named, comma separated, but never all six (that would be a gate run outside the gate's accounting); each must be one of the six, `--trials` and `--validation` may each be given once, and `--trials` is refused without `--validation`. Model, effort, bounds, scorer, isolation and allowances are the gate's own policy, so a trial whose first behavioural attempt fails is run a second time, as in the gate. That second attempt spends budget after the first has already shown the regression; budget for two subject sessions per named trial.
+3. The result, its summary and the evidence go to `evals/shepherd/validation/<source-hash>/<run-id>/` (`result.json`, `result.md`, `<trial>/attempt-<n>/`), under the planted build's own source hash. Nothing is written to `results/` or `artifacts/`, and every run gets a fresh directory. Write the planted-change note yourself into that directory as `planted-change.md`: what was changed and why the chosen trial should catch it. The unnamed trials appear in the result with no attempts, so its aggregate is always `blocked` and the wrapper exits 1; read the named trials' outcomes.
+4. The regression counts as caught only when the named trial's outcome is `fail`, or `inconclusive` with the target Must failing on every behavioural attempt. A `flaky-pass` (a fail followed by a pass) never counts as caught.
+5. `evals/shepherd/validation/` is tracked: carry the run directory into the PR branch and commit it as evidence, like gate evidence, with its cost recorded in the result.
+
+A validation run never continues another. A run that dies mid wave leaves `pending` attempts, and an attempt whose scorer failed twice stays `unscored`; neither is ever resolved or rescored, because the next run gets a fresh directory and there is no resume. Such a run is redone from scratch, at new cost, against the same budget.
+
+The initial budget for baseline subjects, scoring and the targeted regression is $10. An undetected mutation, or running out of budget, leaves validation unmet; it does not authorize trying mutation after mutation. Removing reconcile wording is a candidate mutation, not a guaranteed detector. The CI verifier never reads `validation/`, so a validation result can never stand in for a gate result.
+
+## `--check` and `bun test`
+
+`bun test` runs the unit tests and the Python self checks on handmade data only: no compiled Shepherd, no model and no real fixture clock. It runs on Linux CI, where zsh may be absent and its one check is skipped.
+
+`bun run evals:shepherd --check` compiles a scratch subject, runs the shell syntax checks, `python3 -I evals/shepherd/check-harness.py --config ...` including real fixture shapes through the scratch binary's maintenance tools and session shell resolution, and `check-musts.py`. Its session launches are fakes with a stub `claude` first on `PATH`. It keeps the fixture time of day refusals, so run it before 23:40.
+
+## CI verification
+
+The `shepherd-evals` job in `.github/workflows/ci.yml` runs on every pull request to `main` or `master`, so the required status always appears. It checks out the PR head commit (not GitHub's synthetic merge) with full history, installs Bun (`bun-version: latest`, as the existing build job does) and Python 3, installs dependencies with `--ignore-scripts` so no PR script runs before the tree is hashed, holds only read permission, runs no model and needs no credentials. The `build` job runs typecheck, Biome and `bun test`.
+
+1. **Changed paths.** `verify.ts` resolves the PR base and head, takes their merge base, and lists changed paths with a NUL delimited `git diff --no-renames`, so deletions and both sides of renames appear. A revision that does not resolve, a missing merge base, a failed diff or a checkout that is not the PR head fails closed.
+2. **Gated paths.** The adopted policy (`evals/shepherd/gated-paths.ts`, section 11.1 as built) is the expanded one: every Shepherd source path above plus the evaluation implementation and policy, exactly the evaluation identity's files. The agreed narrower candidate, `system-prompts/shepherd/**`, `agents/shepherd.ts` and `lib/shepherd/**`, stays in the same file as the alternative. It leaves the declaration `agents/shepherd.md`, the shared runner `lib/agent-format/`, the compiler scripts, `package.json`, `bun.lock` and the rubric, policy and checkers ungated, so changes there could evade evaluation. The expanded policy leaves tests beside the sources, docs, results, evidence and validation output ungated; the narrower one gates tests under `lib/shepherd/`.
+   Four files are gated whatever the predicates say: `evals/shepherd/gated-paths.ts`, `evals/shepherd/identity.ts`, `evals/shepherd/verify.ts` and `scripts/shepherd-source.ts` (`ALWAYS_GATED` in `verify.ts`), so a broken predicate cannot exempt its own change.
+3. **Outside gated paths** the job succeeds with "Shepherd evals not required" and the compared revisions.
+4. **Verification.** Otherwise it recomputes the source manifest and evaluation identity of the checked-out head and opens only `results/<source-hash>.json`; a missing file fails. It requires a schema valid result whose evaluation identity is the tree's (a stale identity fails, even if the current one is in history), a manifest equal to the head's on path and content SHA-256 (an entry evaluated untracked and committed since compares equal and is reported; an evaluated entry absent at head fails), the tree's rubric hash, policy and scorer, version output matching each build record, a clean frozen-input recheck for every run that recorded a non-void attempt, in-session markers for the evaluated binary and no other (for an attempt resolved from its log after an interrupted invocation, found again in its archived `claude.jsonl` under the policy model, as the gate found them), the fixed subject and scorer models, every listed artifact present as a regular file in exactly `artifacts/<source-hash>/<run-id>/<trial>/attempt-<n>/` (one directory per attempt) with its recorded length and SHA-256, a scored packet hash equal to the archived packet's, validity, void reasons and binary evidence consistent with the archived `claude-run.json` when its harness finished (no void attempt recorded valid; no valid session voided when its evidence checks cleanly, unless its void reason records a local checker failure, `mechanical checks failed: ...`; and no session log archived without `claude-run.json` except on an attempt resolved after an interrupted invocation), a subject on every non-void attempt, mechanical checks recomputed by the tree's `must-check.py` (with a fresh bytecode cache) on a temporary copy of only the listed, hash-verified artifacts and equal to the recorded outcomes, permitted attempts, exactly six trials and thirteen Musts, and a derived aggregate of `pass` or `flaky-pass`. Revision, `dirty` and `sourceDirty` are printed as provenance, not conditions. The build revision need not be in history, and a macOS binary hash is never compared with a Linux rebuild.
+
+Results are reviewable attestations, not cryptographic protection against a malicious PR author. The job, the verifier and the path policy all run from the PR head, so a PR that edits them can certify itself; `ALWAYS_GATED` guards only honest mistakes. `.github/workflows/ci.yml` and `.gitattributes` are not gated (the smaller reading of 7.3): a PR can change the job itself, and a PR that changes only `.gitattributes` gets "Shepherd evals not required" and merges, although it can change checked-out bytes; the change surfaces only at the next gated PR, or as a mismatch between a local result's hash and CI's. Mitigations are code review, CODEOWNERS on `evals/shepherd/` and `.github/workflows/`, or a GitHub ruleset's required workflow; this is an open choice, and the build changes no settings.
+
+**Two GitHub settings** complete the gate, and this implementation changes neither: make the `shepherd-evals` status required for the protected branch, and turn on "Require branches to be up to date before merging". Together they stop two separately evaluated branches from merging into an unevaluated combination.
+
+## Limits
+
+- Single turn, synthetic Claude sessions only: no Codex subjects, no multi turn trials, no B, C, F1, F2 or I.
+- One sample per trial and identity; no variance sampling.
+- No delegates are executed, and there is no new coverage of handoff ceilings or delegate budgets.
+- No production workspace coverage.
+- No enforced host read isolation: subjects can read anything the user can.
+- The user's Claude settings, hooks and plugins and `~/.zshrc` reach subject sessions, as described above.
+
+## Open choices, as built
+
+1. **Gated paths.** Built: the expanded set, with the narrower candidate and its gaps documented above.
+2. **Scorer family.** Built: Claude Opus 5.5, effort high. Cross family Codex scoring needs a PR decision, a revised configuration and validation budget.
+3. **Flake policy.** Built: one recorded behavioural rerun, with a complete second attempt pass accepted as `flaky-pass`. The alternative is that any first behavioural failure blocks. Infrastructure handling stays separate.
+4. **E ordering.** Built: completed sequential placement before acceptance within one command counts, regardless of the final exit code; unorderable writes are inconclusive.
+5. **Charter Done line.** Proposed for forge's charter, not edited here: "a passing eval result for Shepherd-source changes."
+6. **Evidence committed per run.** Built: archived evidence per attempt, about 2 MB of native logs per six trial suite plus supporting files, under the export redaction rule. This is an addition to the original result and summary plan, for confirmation.
+7. **Two GitHub settings.** Requested above; neither is changed by the build.
+8. **Self-certification.** The job, verifier and policy run from the PR head. Choose among code review alone, CODEOWNERS on `evals/shepherd/` and `.github/workflows/`, or a ruleset's required workflow.
+9. **Remaining recommendations.** The source membership, dirty build treatment, execution bounds, the initial $10 validation budget and the eleven plus two count correction, all described above.
