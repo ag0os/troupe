@@ -726,8 +726,9 @@ const plainRelative = (path: unknown): path is string =>
  * The integrity of a stale result this tree's schema cannot read, from its
  * raw JSON: its source hash is the tree's, and every attempt's evidence
  * sits in its own directory under this source hash's artifacts with its
- * recorded length and SHA-256. Anything else in it is unchecked; evidence
- * whose shape cannot be read is a problem.
+ * recorded length and SHA-256, and at least one attempt lists evidence.
+ * Anything else in it is unchecked; evidence whose shape cannot be read is
+ * a problem.
  */
 function checkUnreadable(
 	value: unknown,
@@ -750,6 +751,7 @@ function checkUnreadable(
 		return;
 	}
 	const dirs = new Set<string>();
+	let withEvidence = 0;
 	for (const trial of trials as Raw[]) {
 		const attempts = trial?.attempts;
 		if (typeof trial?.trial !== "string" || !Array.isArray(attempts)) {
@@ -778,6 +780,7 @@ function checkUnreadable(
 			const dir = attempt?.artifactDir as string;
 			if (dirs.has(dir)) report(`${where}: shares artifact directory ${dir}`);
 			dirs.add(dir);
+			if (artifacts.length > 0) withEvidence++;
 			checkEvidence(
 				evalsDir,
 				hex,
@@ -787,6 +790,8 @@ function checkUnreadable(
 			);
 		}
 	}
+	if (withEvidence === 0)
+		report(`${resultPath} lists no attempt with evidence to check`);
 }
 
 /** Verify the checked-out tree at `root` against its committed result (7.4). */
@@ -992,7 +997,7 @@ function mustLines(outcome: VerifiedOutcome): string[] {
 	);
 }
 
-const RESULT_FILE = new RegExp(
+export const RESULT_FILE = new RegExp(
 	`^${EVALUATION_DIR}/results/[0-9a-f]{64}\\.json$`,
 );
 
@@ -1200,10 +1205,11 @@ export function ciGate(
 			[...verification.notes, ...mustLines(verification.outcome)],
 		);
 	} catch (error) {
+		// The message may hold record strings: it goes in the fenced detail.
 		return finish(
 			1,
-			`Shepherd evals check failed closed: ${(error as Error).message}`,
-			[],
+			"Shepherd evals check failed closed: an error stopped the check.",
+			[(error as Error).message],
 		);
 	}
 }

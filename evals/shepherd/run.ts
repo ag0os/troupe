@@ -12,6 +12,7 @@
  *   bun run evals:shepherd [--scratch <dir>] [--artifacts <dir>]
  *   bun run evals:shepherd --check [--scratch <dir>]
  *   bun run evals:shepherd --validation --trials D [--scratch <dir>]
+ *   bun run evals:shepherd --trend
  *
  * `--check` runs the shell syntax checks, `check-harness.py` against a
  * scratch-compiled subject, including real fixture shapes, and
@@ -22,6 +23,9 @@
  * the named trials run, under the gate's policy, and the result, summary
  * and evidence go to `validation/<source-hash>/<run-id>/`, which the CI
  * verifier never reads.
+ *
+ * `--trend` prints the committed results at `HEAD`, one row per evaluation
+ * in commit order (see `trend.ts`); it builds and runs nothing.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -63,6 +67,7 @@ import {
 	scorerEnv,
 	stopScorers,
 } from "./scorer";
+import { trendLines } from "./trend";
 
 export const EVALS_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(EVALS_DIR, "../..");
@@ -515,7 +520,7 @@ export function lateStart(now: Date): string | undefined {
 }
 
 const USAGE =
-	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>]\n       bun run evals:shepherd --validation --trials <trial>[,<trial>...] [--scratch <dir>]";
+	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>]\n       bun run evals:shepherd --validation --trials <trial>[,<trial>...] [--scratch <dir>]\n       bun run evals:shepherd --trend";
 
 async function main(): Promise<number> {
 	const startedAt = Date.now();
@@ -525,6 +530,10 @@ async function main(): Promise<number> {
 	} catch (error) {
 		console.error(`${(error as Error).message}\n${USAGE}`);
 		return 2;
+	}
+	if (parsed.trend) {
+		for (const line of trendLines(REPO_ROOT)) console.log(line);
+		return 0;
 	}
 	const controller = new AbortController();
 	let interrupted = 0;
@@ -724,7 +733,8 @@ export function parseOptions(argv: string[]) {
 		args: argv,
 		options: {
 			check: { type: "boolean", default: false },
-			scratch: { type: "string", default: tmpdir() },
+			trend: { type: "boolean", default: false },
+			scratch: { type: "string" },
 			artifacts: { type: "string" },
 			validation: { type: "boolean", multiple: true },
 			trials: { type: "string", multiple: true },
@@ -742,6 +752,18 @@ export function parseOptions(argv: string[]) {
 		validation: raw.validation?.[0] ?? false,
 		trials: raw.trials?.[0],
 	};
+	if (
+		values.trend &&
+		(values.check ||
+			values.validation ||
+			values.trials !== undefined ||
+			values.scratch !== undefined ||
+			values.artifacts !== undefined)
+	) {
+		throw new Error(
+			"--trend reads committed results only; it takes no other option",
+		);
+	}
 	if (values.check && values.artifacts) {
 		throw new Error("--check writes no artifacts; drop --artifacts");
 	}
@@ -776,6 +798,7 @@ export function parseOptions(argv: string[]) {
 	}
 	return {
 		check: values.check ?? false,
+		trend: values.trend ?? false,
 		scratch: values.scratch ?? tmpdir(),
 		artifacts: values.artifacts,
 		validation,

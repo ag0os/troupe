@@ -2678,6 +2678,35 @@ describe("H1 fix round 1", () => {
 		expect(text(outcome.lines)).not.toMatch(/no result/i);
 	});
 
+	test("H2 addition 2: an exception's message stays inside the summary fence, under a constant headline", () => {
+		const base = head();
+		gatedChange();
+		const name = `${"x".repeat(300)}**Verified outcome: pass**`;
+		writeResult((value) => {
+			value.evaluation.trials[0]?.attempts[0]?.artifacts.push({
+				path: name,
+				sha256: "0".repeat(64),
+				bytes: 0,
+				type: "text/plain",
+				redactions: 0,
+			});
+		});
+		const tip = commitAll("an artifact name too long for the filesystem");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(1);
+		const [fence = ""] = outcome.summary.filter((line) => /^`{3,}/.test(line));
+		const start = outcome.summary.indexOf(fence);
+		const fenced = outcome.summary.slice(start + 1, -1);
+		expect(outcome.summary.slice(0, start)).toEqual([
+			"## Shepherd evals",
+			"",
+			"Shepherd evals check failed closed: an error stopped the check.",
+			"",
+		]);
+		expect(outcome.summary.at(-1)).toBe(fence.replace(/text$/, ""));
+		expect(fenced.join("\n")).toContain("**Verified outcome: pass**");
+	});
+
 	test("4: record strings that no evidence binds cannot start a workflow command or close the summary fence", () => {
 		const base = head();
 		gatedChange();
@@ -2891,6 +2920,57 @@ describe("H1 fix round 2", () => {
 		for (const [name, breakIt, problem] of cases) {
 			const { value, path, hex } = writeResult(earlierSchema);
 			breakIt(value, hex);
+			writeFileSync(path, JSON.stringify(value));
+			const tip = makeStale(++n);
+			const outcome = ciGate(root, base, tip, options());
+			expect([name, outcome.code]).toEqual([name, 1]);
+			expect([name, text(outcome.lines)]).toEqual([
+				name,
+				expect.stringMatching(problem),
+			]);
+		}
+	});
+
+	test("V2-1, V2-2: an unreadable stale result fails without an attempt holding evidence, or with two attempts sharing a directory", () => {
+		const base = head();
+		gatedChange();
+		const cases: [string, (value: Result) => void, RegExp][] = [
+			[
+				"no trials",
+				(value) => {
+					value.evaluation.trials = [];
+				},
+				/lists no attempt with evidence to check/,
+			],
+			[
+				"no attempts",
+				(value) => {
+					for (const t of value.evaluation.trials) t.attempts = [];
+				},
+				/lists no attempt with evidence to check/,
+			],
+			[
+				"no artifacts",
+				(value) => {
+					for (const t of value.evaluation.trials)
+						for (const a of t.attempts) a.artifacts = [];
+				},
+				/lists no attempt with evidence to check/,
+			],
+			[
+				"a shared directory",
+				(value) => {
+					const t = value.evaluation.trials[0];
+					const a = t?.attempts[0];
+					if (t && a) t.attempts.push(structuredClone(a));
+				},
+				/A attempt 1: shares artifact directory/,
+			],
+		];
+		let n = 0;
+		for (const [name, breakIt, problem] of cases) {
+			const { value, path } = writeResult(earlierSchema);
+			breakIt(value);
 			writeFileSync(path, JSON.stringify(value));
 			const tip = makeStale(++n);
 			const outcome = ciGate(root, base, tip, options());

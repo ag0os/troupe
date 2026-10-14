@@ -942,6 +942,15 @@ describe("escaped slashes (fix round 4, H1)", () => {
 		expect(performance.now() - started).toBeLessThan(1_000);
 	});
 
+	test("fix round 1, nit 3: a token repeating the home or scratch path redacts in linear time", () => {
+		const started = performance.now();
+		const home = `"${HOME.repeat(40_000)}"`;
+		expect(redactText(home, context).text).toBe(`"${REDACTED}"`);
+		const kept = `"${ROOT.repeat(10_000)}"`;
+		expect(redactText(kept, context).text).toBe(kept);
+		expect(performance.now() - started).toBeLessThan(2_000);
+	});
+
 	test("the scratch root is kept in its escaped-slash spellings, plain and /private, at any depth", () => {
 		for (const depth of [1, 2, 3, 4]) {
 			for (const binary of [BINARY, `/private${BINARY}`]) {
@@ -964,6 +973,24 @@ describe("escaped slashes (fix round 4, H1)", () => {
 					redactText(`"${slashes(path, depth)}"`, context).text,
 				]).toEqual([path, `"${REDACTED}"`]);
 			}
+		}
+	});
+
+	test("H2 addition 2: with 16 to 1,000 backslashes at every separator, a host path is redacted whole and the scratch root kept", () => {
+		for (const depth of [16, 32, 200, 1_000]) {
+			for (const path of [
+				`${HOME}/.claude/settings.json`,
+				"/srv/repo/evals/x",
+				"/Users/another/notes",
+			]) {
+				expect([
+					depth,
+					path,
+					redactText(`"${slashes(path, depth)}"`, context).text,
+				]).toEqual([depth, path, `"${REDACTED}"`]);
+			}
+			const line = `{"binary": "${slashes(BINARY, depth)}"}`;
+			expect(redactText(line, context)).toEqual({ text: line, count: 0 });
 		}
 	});
 

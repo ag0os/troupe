@@ -67,7 +67,8 @@ const SLASH = String.raw`\\*\/`;
 // A leading separator starts its whole backslash run, never inside it, so
 // matching stays linear in the run's length.
 const RUN_START = String.raw`(?<!\\)`;
-const TOKEN = new RegExp(`^(?:${CHAR}|${SLASH})`, "u");
+// The rest of a path token, matched in place from where a prefix ended.
+const TOKEN_REST = new RegExp(`(?:${CHAR}|${SLASH})*`, "uy");
 // After a prefix, a path continues on any of these.
 const CONTINUES = /^(?:[\p{L}\p{M}\p{N}._-]|\\u[0-9a-fA-F]{4})/u;
 // A JSON escape directly before a token: `\n`, `\t`, `\b`, `\f` and the like,
@@ -129,18 +130,16 @@ function occurrences(text: string, prefix: string): Span[] {
 				.join(SLASH),
 		"g",
 	);
+	let last = 0;
 	for (const found of text.matchAll(pattern)) {
 		const at = found.index;
-		let end = at + found[0].length;
+		// Inside the token an earlier occurrence already covers.
+		if (at < last) continue;
+		const end = at + found[0].length;
 		if (CONTINUES.test(text.slice(end, end + 6))) continue;
-		// The longest token piece is the slug marker.
-		for (
-			let match = TOKEN.exec(text.slice(end, end + SLUG_MARKER.length));
-			match;
-			match = TOKEN.exec(text.slice(end, end + SLUG_MARKER.length))
-		)
-			end += match[0].length;
-		spans.push([at, end]);
+		TOKEN_REST.lastIndex = end;
+		last = end + (TOKEN_REST.exec(text)?.[0].length ?? 0);
+		spans.push([at, last]);
 	}
 	return spans;
 }
