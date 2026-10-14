@@ -6,6 +6,7 @@ import {
 	renameSync,
 	rmdirSync,
 	rmSync,
+	type Stats,
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -59,19 +60,31 @@ type UnlockResult = {
 
 const activeTemporaries = new Set<string>();
 
+/** Test seam: tests replace `lstat` to simulate the inode reuse macOS never shows. */
+export const lockFs: { lstat: (path: string) => Stats } = {
+	lstat: (path) => lstatSync(path),
+};
+
 function errorCode(error: unknown): string | undefined {
 	return (error as NodeJS.ErrnoException)?.code;
 }
 
-function ownerPid(path: string): number | undefined {
-	let text: string;
+function ownerText(path: string): string | undefined {
 	try {
-		text = readFileSync(join(path, "owner"), "utf8");
+		return readFileSync(join(path, "owner"), "utf8");
 	} catch (error) {
 		if (errorCode(error) === "ENOENT" || errorCode(error) === "EISDIR")
 			return undefined;
 		throw error;
 	}
+}
+
+function ownerPid(path: string): number | undefined {
+	return pidOf(ownerText(path));
+}
+
+function pidOf(text: string | undefined): number | undefined {
+	if (text === undefined) return undefined;
 	try {
 		const owner = JSON.parse(text);
 		if (
@@ -93,24 +106,28 @@ function statusAt(
 	path: string,
 	toolEnv: ToolEnv,
 ): LockStatus | { status: "changed" } {
-	let before: ReturnType<typeof lstatSync>;
+	let before: Stats;
 	try {
-		before = lstatSync(path);
+		before = lockFs.lstat(path);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return { status: "free" };
 		throw error;
 	}
 	if (!before.isDirectory()) return { status: "stale" };
-	const pid = ownerPid(path);
+	const text = ownerText(path);
+	const pid = pidOf(text);
 	const alive = pid !== undefined && toolEnv.pidAlive(pid);
 	try {
-		const after = lstatSync(path);
+		const after = lockFs.lstat(path);
 		if (before.dev !== after.dev || before.ino !== after.ino)
 			return { status: "changed" };
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return { status: "free" };
 		throw error;
 	}
+	// A released lock's inode number can go straight to the next writer's
+	// directory, so an equal inode alone does not prove the owner is unchanged.
+	if (ownerText(path) !== text) return { status: "changed" };
 	return pid !== undefined && alive
 		? { status: "alive", pid }
 		: { status: "stale", pid };

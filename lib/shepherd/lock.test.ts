@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -15,6 +16,7 @@ import { Worker } from "node:worker_threads";
 import {
 	LockError,
 	LockReleaseError,
+	lockFs,
 	lockStatus,
 	unlockState,
 	withStateLock,
@@ -1098,3 +1100,60 @@ parentPort.close();
 		}
 	}, 5000);
 }
+
+describe("inode reuse", () => {
+	afterEach(() => {
+		lockFs.lstat = (path) => lstatSync(path);
+	});
+
+	// ext4 and overlay hand a released lock's inode number to the next writer's directory at once.
+	function reuseAfterFirstProbe(state: string, release: () => void = () => {}) {
+		let calls = 0;
+		let first = lstatSync(state);
+		lockFs.lstat = (path) => {
+			calls += 1;
+			if (calls === 1) {
+				first = lstatSync(path);
+				release();
+				return first;
+			}
+			if (calls === 2) {
+				owner(state, 103);
+				return first;
+			}
+			return lstatSync(path);
+		};
+	}
+
+	function releaseHolder(state: string) {
+		renameSync(join(state, ".state.lock"), join(state, "released"));
+	}
+
+	test("status retries a live lock that reused the inode of a lock released before the owner probe", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuseAfterFirstProbe(state, () => releaseHolder(state));
+		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+	});
+
+	test("status retries a live lock that reused the inode of a holder that released and exited", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		env.pidAlive = (pid) => {
+			if (pid === 102) releaseHolder(state);
+			return pid === 103;
+		};
+		reuseAfterFirstProbe(state);
+		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+	});
+
+	test("a contending writer waits on a live lock that reused a released inode instead of failing stale", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuseAfterFirstProbe(state, () => releaseHolder(state));
+		const error = await rejection(withStateLock(state, env, () => {}, options));
+		expect(error.kind).toBe("alive");
+		expect(error.pid).toBe(103);
+		noTemporary(state);
+	});
+});
