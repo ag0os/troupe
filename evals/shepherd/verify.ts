@@ -48,6 +48,7 @@ import {
 	type Attempt,
 	deriveAggregate,
 	deriveTrial,
+	frozenVoid,
 	loadRubric,
 	policyHash,
 	type Result,
@@ -844,6 +845,10 @@ export function verifyResults(
 			const rechecked = !unrechecked.has(attempt.runId);
 			if (!rechecked && attempt.kind !== "void")
 				report(`${where}: its run failed the frozen-input recheck`);
+			if (rechecked && frozenVoid(attempt))
+				report(
+					`${where}: voided for changed frozen inputs, but run ${attempt.runId} passed its recheck`,
+				);
 			if (dirs.has(attempt.artifactDir))
 				report(`${where}: shares artifact directory ${attempt.artifactDir}`);
 			dirs.add(attempt.artifactDir);

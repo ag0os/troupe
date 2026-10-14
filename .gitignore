@@ -8,6 +8,13 @@ bin
 # publication temp dirs left by a killed compile (scripts/agent-compiler.ts)
 .troupe-build-*/
 *.tgz
+# a running Shepherd eval invocation's lock, and evidence a killed one set aside (docs/SHEPHERD-EVALS.md)
+evals/shepherd/results/*.lock*
+evals/shepherd/validation/**/*.lock*
+evals/shepherd/artifacts/**/*.orphan*
+evals/shepherd/validation/**/*.orphan*
+evals/shepherd/artifacts/**/*.partial*
+evals/shepherd/validation/**/*.partial*
 
 # code coverage
 coverage

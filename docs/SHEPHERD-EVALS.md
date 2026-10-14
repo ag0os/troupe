@@ -126,6 +126,10 @@ Three allowances are kept apart, per trial and evaluation identity:
 
 Before each wave the gate records a `pending` attempt for every launch and publishes. If an invocation dies mid wave, the next one resolves each pending attempt first: a finished harness run is recorded normally, a valid session that never finished becomes an interrupted behavioural attempt, and anything else becomes an exempt void. A half written export is set aside as `<dir>.partial` and redone.
 
+Each scorer invocation is published as it ends, before any retry starts, with its archived output, so a kill or crash loses no published verdict; only invocations running or unpublished at the kill are spent again, and a round interrupted between its two invocations is not resumed: the next invocation starts the attempt's next round. An output written but never recorded is set aside as `scorer-<n>-r<round>.json.orphan`, so it never stops a later invocation. The frozen-input recheck runs at the end of every invocation, including one that fails with an error; when that invocation's own result cannot be published, the recheck (and the voiding below) is recorded on the last result it published. When it fails, the failed recheck is published first, then the invocation's attempts are relabelled void (`frozen inputs changed: ...`) and published again; a pending attempt such a run launched is voided the same way when a later invocation resolves it. These voids may pass the two exempt void cap, which they still count toward, so the trial reads `void` and the result blocked. CI refuses such a void in a run whose recorded recheck passed.
+
+One invocation runs at a time per result. An invocation holds `<result>.lock` while it runs, naming its pid and run ID; a second invocation for the same source hash refuses, naming the holder, and launches nothing. A lock whose pid is gone, as after a kill, is taken over, one taker at a time under `<result>.lock.takeover`; a leftover takeover file refuses, naming itself, and may be removed when no gate invocation runs and its pid is gone. A lock naming the new invocation's own pid is a killed holder's and is taken over. If the pid has since been reused by another process, the lock refuses until it is removed by hand. The lock sits beside the result, outside the evaluation identity, and is ignored by git.
+
 ## Execution bounds
 
 | Bound | Value |
@@ -154,6 +158,7 @@ The harness refuses, by resolved path, scratch directories beneath `~/shepherds`
 |---|---|
 | `evals/shepherd/results/<source-hash>.json` | the result record, validated before every publication |
 | `evals/shepherd/results/<source-hash>.md` | the summary generated from the JSON |
+| `evals/shepherd/results/<source-hash>.json.lock` | the running invocation's pid and run ID, removed when it ends; never committed |
 | `evals/shepherd/artifacts/<source-hash>/<run-id>/<trial>/attempt-<n>/` | that attempt's exported evidence |
 | `evals/shepherd/validation/<source-hash>/<run-id>/` | a regression validation run: `result.json`, `result.md` and `<trial>/attempt-<n>/` evidence; the gate never reads it |
 

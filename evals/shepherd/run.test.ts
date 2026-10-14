@@ -35,6 +35,7 @@ import {
 	readVersion,
 	recheck,
 	runTrials,
+	scoreJobs,
 	subjectEnv,
 } from "./run";
 
@@ -546,5 +547,47 @@ describe("regression validation options (8.5)", () => {
 		expect(() =>
 			parseOptions(["--validation", "--validation", "--trials", "D"]),
 		).toThrow(/once/);
+	});
+});
+
+describe("the gate's scorer (fix round 3, S3)", () => {
+	test("forwards each invocation to the gate as it ends", async () => {
+		const dir = realpathSync(
+			mkdtempSync(join(tmpdir(), "shepherd-evals-scorejobs-")),
+		);
+		try {
+			// Never a model: a stand-in CLI whose reply is unparsable.
+			const claude = join(dir, "claude");
+			writeFileSync(claude, "#!/bin/sh\ncat >/dev/null\necho not-json\n");
+			chmodSync(claude, 0o755);
+			const reported: (string | null)[] = [];
+			const scored = await scoreJobs(
+				{
+					claude,
+					model: "claude-opus-5-5",
+					effort: "high",
+					timeoutMs: 10_000,
+					graceMs: 100,
+					workRoot: join(dir, "work"),
+					env: { PATH: process.env.PATH ?? "" },
+					prompt: "p",
+				},
+				"9.9.9",
+			)({
+				trial: "E",
+				packet: { text: "x", sha256: `sha256:${"0".repeat(64)}`, files: [] },
+				requested: ["E.M1"],
+				round: 1,
+				deadline: Date.now() + 60_000,
+				onInvocation: (invocation) => reported.push(invocation.failure),
+			});
+			expect(scored.invocations).toHaveLength(2);
+			expect(reported).toEqual([
+				"unparsable CLI output",
+				"unparsable CLI output",
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -898,3 +898,53 @@ describe("concurrency (4.5)", () => {
 		expect(readdirSync(config.workRoot).length).toBe(5);
 	}, 30_000);
 });
+
+describe("durable scoring (fix round 3, S3)", () => {
+	test("each invocation is reported with its output as it ends, before a retry starts", async () => {
+		plan({ result: { decisions: [] } }, { result: good() });
+		const packet = buildPacket({
+			trial: "A",
+			dir: exported(),
+			requested: ["A.M2"],
+			rubric,
+		});
+		const reported: [string, number, boolean, boolean][] = [];
+		const scored = await scoreAttempt({
+			config,
+			packet,
+			requested: ["A.M2"],
+			round: 1,
+			cliVersion: "9.9.9",
+			onInvocation: (invocation, output, decisions) =>
+				reported.push([
+					invocation.failure ?? "verdict",
+					calls().filter((c) => "start" in c).length,
+					output.includes('"modelUsage"'),
+					decisions !== undefined,
+				]),
+		});
+		expect(reported).toEqual([
+			[expect.stringMatching(/schema-invalid/), 1, true, false],
+			["verdict", 2, true, true],
+		]);
+		expect(scored.invocations).toHaveLength(2);
+	});
+
+	test("a job that throws stops new jobs and rejects only once running ones end", async () => {
+		const events: string[] = [];
+		const jobs = [
+			async () => {
+				throw new Error("scorer host lost");
+			},
+			async () => {
+				await Bun.sleep(50);
+				events.push("sibling ended");
+			},
+			async () => {
+				events.push("third started");
+			},
+		];
+		await expect(scoreAll(jobs, 2)).rejects.toThrow(/scorer host lost/);
+		expect(events).toEqual(["sibling ended"]);
+	});
+});

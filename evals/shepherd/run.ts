@@ -50,7 +50,7 @@ import {
 	sameSource,
 	versionLine,
 } from "../../scripts/shepherd-source";
-import { runGate } from "./gate";
+import { runGate, type ScoreJob } from "./gate";
 import { type EvaluationIdentity, evaluationIdentity } from "./identity";
 import { canonicalJson, GATE_TRIALS, loadRubric, policyHash } from "./schema";
 
@@ -488,6 +488,25 @@ function writeConfig(run: RunPaths, subject: string, policy: Policy): string {
 	return path;
 }
 
+/** The gate's scorer: one scoring round per job (4.5), each invocation reported as it ends. */
+export function scoreJobs(
+	config: ScorerConfig,
+	cliVersion: string,
+	signal?: AbortSignal,
+): (job: ScoreJob) => ReturnType<typeof scoreAttempt> {
+	return (job) =>
+		scoreAttempt({
+			config,
+			packet: job.packet,
+			requested: job.requested,
+			round: job.round,
+			cliVersion,
+			signal,
+			deadline: job.deadline,
+			onInvocation: job.onInvocation,
+		});
+}
+
 /** Fixtures refuse to build after 23:40 local time; so does the wrapper. */
 export function lateStart(now: Date): string | undefined {
 	return now.getHours() * 60 + now.getMinutes() > 23 * 60 + 40
@@ -668,16 +687,7 @@ async function main(): Promise<number> {
 					exitCode: outcome.exitCode,
 				}));
 		},
-		score: (job) =>
-			scoreAttempt({
-				config: scorer,
-				packet: job.packet,
-				requested: job.requested,
-				round: job.round,
-				cliVersion,
-				signal: controller.signal,
-				deadline: job.deadline,
-			}),
+		score: scoreJobs(scorer, cliVersion, controller.signal),
 		scorerConcurrency: policy.scorer.maxConcurrent,
 		scorerTimeoutMs: scorer.timeoutMs,
 		recheck: () => recheck(frozen, { root }),

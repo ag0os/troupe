@@ -368,6 +368,21 @@ export function awaitingScore(attempt: Attempt): boolean {
 	);
 }
 
+/** The void reason prefix of an attempt relabelled after its run's frozen-input recheck failed. */
+export const FROZEN_CHANGED = "frozen inputs changed: ";
+
+/**
+ * An attempt voided because its run's frozen inputs changed (2.5). The gate
+ * relabels after the run, so such voids may pass the exempt void cap and
+ * did not stand when the run launched its later attempts.
+ */
+export function frozenVoid(attempt: Attempt): boolean {
+	return (
+		attempt.kind === "void" &&
+		attempt.voidReasons.some((reason) => reason.startsWith(FROZEN_CHANGED))
+	);
+}
+
 /**
  * Voids, plus unscored attempts whose scoring rounds are exhausted: they
  * consumed no behavioural attempt (R1) and count against the same cap.
@@ -613,7 +628,11 @@ function checkEvaluation(
 	for (const trial of evaluation.trials) {
 		const at = `${where} trial ${trial.trial}`;
 		trial.attempts.forEach((attempt, index) => {
-			const before = trial.attempts.slice(0, index);
+			// The trial as it stood when this attempt launched: its own run's
+			// frozen-input voids were relabelled only after the run.
+			const before = trial.attempts
+				.slice(0, index)
+				.filter((a) => !(frozenVoid(a) && a.runId === attempt.runId));
 			const state = deriveTrial(before, rubric);
 			if (index > 0 && state !== "pending")
 				report(
@@ -642,7 +661,10 @@ function checkEvaluation(
 			if (a.behavioralOrdinal !== index + 1)
 				report(`${at}: behavioural ordinals must run 1, 2 in order`);
 		});
-		if (exemptVoids(trial.attempts) > MAX_EXEMPT_VOIDS)
+		if (
+			exemptVoids(trial.attempts.filter((a) => !frozenVoid(a))) >
+			MAX_EXEMPT_VOIDS
+		)
 			report(`${at}: more than ${MAX_EXEMPT_VOIDS} exempt void attempts`);
 		if (trial.attempts.slice(0, -1).some((a) => a.kind === "pending"))
 			report(`${at}: only the last attempt may be pending`);

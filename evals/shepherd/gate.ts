@@ -8,9 +8,10 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	existsSync,
+	linkSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -40,6 +41,7 @@ import {
 	deriveAggregate,
 	deriveTrial,
 	type Evaluation,
+	FROZEN_CHANGED,
 	GATE_TRIALS,
 	loadRubric,
 	type Must,
@@ -76,6 +78,15 @@ export interface ScoreJob {
 	round: number;
 	/** Epoch milliseconds; no invocation starts that could not finish by then. */
 	deadline: number;
+	/**
+	 * Records an invocation as it ends and publishes it, before any retry
+	 * starts. Invocations returned and never reported are recorded afterwards.
+	 */
+	onInvocation?(
+		invocation: ScorerInvocation,
+		output: string,
+		decisions?: Decision[],
+	): void;
 }
 
 export interface Scored {
@@ -413,61 +424,56 @@ export const scorerOutputName = (index: number, round: number) =>
 	`scorer-${index + 1}-r${round}.json`;
 
 /**
- * Apply a scoring round's outcome to an attempt (4.4, 4.5, R1). The verdict
- * recorded is what its archived, redacted output reads against the archived
- * packet, so CI derives the same decisions from the same bytes.
+ * Record one scorer invocation of an attempt as it ends (4.4, 4.5, R1). The
+ * verdict recorded is what its archived, redacted output reads against the
+ * archived packet, so CI derives the same decisions from the same bytes.
  */
-function applyScoring(
+function applyInvocation(
 	pending: Pending,
-	scored: Scored,
+	ended: ScorerInvocation,
+	output: string,
+	decisions: Decision[] | undefined,
 	packet: Packet,
 	context: RedactionContext,
 ): void {
 	const { attempt, dir } = pending;
 	const scoring = attempt.scoring;
 	if (!scoring) throw new Error("scoring without a packet");
-	const offset = scoring.invocations.length;
-	const outputs = scored.invocations.map((invocation, index) => {
-		const name = scorerOutputName(offset + index, invocation.round);
-		attempt.artifacts.push(
-			writeArtifact(dir, name, scored.outputs[index] ?? "", context),
-		);
-		return archivedText(readFileSync(join(dir, name)));
-	});
-	const verdict = scored.invocations.at(-1);
-	let decisions: Decision[] | undefined;
-	if (scored.decisions && verdict) {
+	const index = scoring.invocations.length;
+	const name = scorerOutputName(index, ended.round);
+	if (!attempt.artifacts.some((a) => a.path === name))
+		setAsideOrphan(join(dir, name));
+	attempt.artifacts.push(writeArtifact(dir, name, output, context));
+	// A copy: the scorer's own record of the invocation decides its retry.
+	const invocation = { ...ended };
+	let verdict: Decision[] | undefined;
+	if (decisions) {
 		const archived = readScorerOutput(
-			outputs.at(-1) ?? "",
-			verdict.requestedModel,
+			archivedText(readFileSync(join(dir, name))),
+			invocation.requestedModel,
 			pending.requested,
 			packet,
 		);
-		decisions = archived.decisions;
-		if (!decisions)
-			verdict.failure = `the archived output reads no verdict: ${archived.failure ?? "no decisions"}`;
+		verdict = archived.decisions;
+		if (!verdict)
+			invocation.failure = `the archived output reads no verdict: ${archived.failure ?? "no decisions"}`;
 	}
-	scoring.invocations.push(
-		...scored.invocations.map((invocation) =>
-			redactStrings(invocation, context),
-		),
-	);
-	attempt.cost.scorer.push(...scored.invocations.map((i) => i.cost));
-	if (!decisions) {
+	scoring.invocations.push(redactStrings(invocation, context));
+	attempt.cost.scorer.push(invocation.cost);
+	if (!verdict) {
 		attempt.kind = "unscored";
 		attempt.behavioralOrdinal = null;
 		return;
 	}
-	const last = offset + scored.invocations.length - 1;
-	for (const decision of decisions) {
+	for (const decision of verdict) {
 		attempt.musts.push({
 			id: decision.id,
 			class: "judged",
 			outcome: decision.outcome,
 			checkerVersion: null,
 			scorer: {
-				sessionId: scoring.invocations[last]?.sessionId ?? null,
-				invocation: last,
+				sessionId: scoring.invocations[index]?.sessionId ?? null,
+				invocation: index,
 			},
 			rationale: decision.rationale,
 			evidence: decision.evidence,
@@ -476,19 +482,139 @@ function applyScoring(
 	attempt.kind = "behavioral";
 }
 
-export async function runGate(
-	options: GateOptions,
-): Promise<{ result: Result }> {
-	const now = () => iso(options.now?.() ?? new Date());
-	const checks = options.checks ?? pythonChecks;
-	const subjectCost = options.subjectCost ?? pythonCost;
-	const context: RedactionContext = {
-		scratchRoot: options.scratchRoot,
-		home: options.home,
-		repoRoot: resolve(options.evalsDir, "../.."),
+/**
+ * Move aside a scorer output that an invocation wrote but never recorded,
+ * renamed `.orphan`, so it never stops a later invocation writing its own.
+ */
+function setAsideOrphan(path: string): void {
+	if (!existsSync(path)) return;
+	let target = `${path}.orphan`;
+	for (let n = 2; existsSync(target); n++) target = `${path}.orphan-${n}`;
+	renameSync(path, target);
+}
+
+/** Whether a process with this pid exists; one owned by another user does too. */
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** Run IDs whose gate lock this process holds. */
+const heldRuns = new Set<string>();
+
+/**
+ * The holder a lock names, refusing a lock that names none or whose holder
+ * lives. A lock naming this process is stale unless this process holds its
+ * run: its pid was a killed holder's.
+ */
+function staleHolder(path: string, held: string): void {
+	let holder: { pid?: unknown; runId?: unknown } | undefined;
+	try {
+		holder = JSON.parse(held);
+	} catch {
+		// Refused below as naming no holder.
+	}
+	const pid = holder?.pid;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
+		throw new Error(
+			`Refusing: the gate lock ${path} names no holder; remove it if no gate invocation is running`,
+		);
+	const ours = pid === process.pid;
+	if (ours ? heldRuns.has(String(holder?.runId)) : alive(pid))
+		throw new Error(
+			`Refusing: another gate invocation (pid ${pid}, run ${String(holder?.runId)}) holds ${path}; if that pid is no gate invocation, remove the lock`,
+		);
+}
+
+/**
+ * Hold `<result>.lock` for one invocation, so a second invocation for the
+ * same result refuses, naming the holder, instead of merging into it (5.6
+ * across invocations). The lock names the holder's pid and run. A lock
+ * whose pid is gone, as after a kill, is taken over under `<lock>.takeover`,
+ * so only one taker replaces it; a reused pid keeps a dead holder's lock
+ * until it is removed by hand. Returns the release, which never throws.
+ * `hooks` is for tests: `takingOver` runs while the takeover is guarded.
+ */
+export function holdLock(
+	json: string,
+	runId: string,
+	hooks: { takingOver?(): void } = {},
+): () => void {
+	const path = `${json}.lock`;
+	const mine = `${JSON.stringify({ pid: process.pid, runId })}\n`;
+	const read = () => {
+		try {
+			return readFileSync(path, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		}
 	};
+	mkdirSync(dirname(path), { recursive: true });
+	// Written whole, then linked into place: a lock is never seen half written.
+	const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+	writeFileSync(temp, mine);
+	const take = () => {
+		try {
+			linkSync(temp, path);
+			return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+			throw error;
+		}
+	};
+	const tookOver = () =>
+		new Error(`Refusing: another gate invocation took the gate lock ${path}`);
+	try {
+		if (!take()) {
+			const first = read();
+			if (first !== undefined) staleHolder(path, first);
+			const guard = `${path}.takeover`;
+			try {
+				writeFileSync(guard, `${JSON.stringify({ pid: process.pid })}\n`, {
+					flag: "wx",
+				});
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				throw new Error(
+					`Refusing: another gate invocation is taking over the gate lock ${path} (${guard}); it is stale if no gate invocation runs and its pid is gone, and may then be removed`,
+				);
+			}
+			try {
+				hooks.takingOver?.();
+				// Under the guard, the lock is read again: a taker that went
+				// first may hold it by now.
+				const held = read();
+				if (held !== undefined) {
+					staleHolder(path, held);
+					rmSync(path, { force: true });
+				}
+				if (!take()) throw tookOver();
+			} finally {
+				rmSync(guard, { force: true });
+			}
+		}
+	} finally {
+		rmSync(temp, { force: true });
+	}
+	heldRuns.add(runId);
+	return () => {
+		heldRuns.delete(runId);
+		try {
+			if (read() === mine) rmSync(path, { force: true });
+		} catch {
+			// Best effort: the invocation's own outcome stands.
+		}
+	};
+}
+
+/** Refuse validation trials that are not distinct gate trials, fewer than all six. */
+function checkValidation(only: string[] | undefined): void {
 	const trials: readonly string[] = GATE_TRIALS;
-	const only = options.validation?.trials;
 	if (
 		only &&
 		(only.length === 0 ||
@@ -500,6 +626,30 @@ export async function runGate(
 			`validation needs distinct gate trials (${trials.join(", ")}), fewer than all six, not "${only.join(",")}"`,
 		);
 	}
+}
+
+export async function runGate(
+	options: GateOptions,
+): Promise<{ result: Result }> {
+	checkValidation(options.validation?.trials);
+	const release = holdLock(gatePaths(options).json, options.runId);
+	try {
+		return await runLocked(options);
+	} finally {
+		release();
+	}
+}
+
+async function runLocked(options: GateOptions): Promise<{ result: Result }> {
+	const now = () => iso(options.now?.() ?? new Date());
+	const checks = options.checks ?? pythonChecks;
+	const subjectCost = options.subjectCost ?? pythonCost;
+	const context: RedactionContext = {
+		scratchRoot: options.scratchRoot,
+		home: options.home,
+		repoRoot: resolve(options.evalsDir, "../.."),
+	};
+	const only = options.validation?.trials;
 	const paths = gatePaths(options);
 	let existing: Result | undefined;
 	try {
@@ -533,10 +683,14 @@ export async function runGate(
 	const scorerTimeout = options.scorerTimeoutMs ?? 300_000;
 	// Every recorded attempt is published at once, so a crash or kill later in
 	// the invocation cannot lose it or give its trial fresh allowances (6.4).
+	// What was last published, so a failure to publish the in-memory result
+	// can still record this run's recheck on it.
+	let published: Result | undefined;
 	const persist = () => {
 		invocation.endedAt = now();
 		finalize(result, invocation.endedAt);
 		publishResult(options.evalsDir, result, options.rubric, paths);
+		published = structuredClone(result);
 	};
 	// Unscored attempts leave the behavioural sequence; number the rest in order.
 	const renumber = () => {
@@ -561,13 +715,6 @@ export async function runGate(
 						`archived packet of ${pending.trial} attempt ${pending.attempt.ordinal} changed`,
 					);
 				}
-				const scored = await options.score({
-					trial: pending.trial,
-					packet,
-					requested: pending.requested,
-					round: scoringRounds(pending.attempt) + 1,
-					deadline: options.deadline,
-				});
 				// The output is redacted as its packet was: with the scratch root
 				// of the run that exported the attempt, so a quote of a kept path
 				// still reads as the packet shows it.
@@ -575,11 +722,42 @@ export async function runGate(
 					pending.attempt.runId === options.runId
 						? context.scratchRoot
 						: runScratchRoot(pending.attempt);
-				applyScoring(pending, scored, packet, {
+				const at = {
 					...context,
 					scratchRoot: own ?? context.scratchRoot,
 					emails: pending.emails ?? new Map(),
+				};
+				// Each invocation is published as it ends, so a kill or crash
+				// later loses no verdict and no spend (6.4).
+				let recorded = 0;
+				const onInvocation = (
+					invocation: ScorerInvocation,
+					output: string,
+					decisions?: Decision[],
+				) => {
+					applyInvocation(pending, invocation, output, decisions, packet, at);
+					recorded++;
+					renumber();
+					persist();
+				};
+				const scored = await options.score({
+					trial: pending.trial,
+					packet,
+					requested: pending.requested,
+					round: scoringRounds(pending.attempt) + 1,
+					deadline: options.deadline,
+					onInvocation,
 				});
+				const last = scored.invocations.length - 1;
+				for (let n = recorded; n <= last; n++) {
+					const invocation = scored.invocations[n];
+					if (invocation)
+						onInvocation(
+							invocation,
+							scored.outputs[n] ?? "",
+							n === last ? scored.decisions : undefined,
+						);
+				}
 			}),
 			concurrency,
 		);
@@ -772,14 +950,95 @@ export async function runGate(
 		);
 	};
 
+	/**
+	 * The frozen-input recheck after execution (2.5), recorded and published
+	 * however the invocation ends, so no later invocation builds a result on
+	 * attempts whose inputs changed. A recheck that cannot run counts as
+	 * failed. A failed one is published first with the attempts as they are,
+	 * then this run's attempts are voided and published again. When the
+	 * in-memory result cannot be published, the recheck is recorded on the
+	 * last published one instead. `error` is the invocation's own, which is
+	 * thrown whatever happens here; a recheck that cannot be published at
+	 * all is named beside it.
+	 */
+	const settle = (error?: unknown) => {
+		let reasons: string[];
+		try {
+			reasons = options.recheck();
+		} catch (failure) {
+			reasons = [`the recheck could not run: ${(failure as Error).message}`];
+		}
+		reasons = reasons.map((reason) => redactText(reason, context).text);
+		const recheck = { valid: reasons.length === 0, reasons };
+		invocation.recheck = recheck;
+		try {
+			if (reasons.length > 0) {
+				persist();
+				for (const attempt of created) voidFrozen(attempt, reasons);
+			}
+			persist();
+		} catch (failure) {
+			const first = error ?? failure;
+			try {
+				publishStanding(recheck);
+			} catch (fallback) {
+				throw new Error(
+					`${(first as Error).message}\nThe recheck could not be recorded on the last published result either: ${(fallback as Error).message}`,
+					{ cause: first },
+				);
+			}
+			throw first;
+		}
+		if (error !== undefined) throw error;
+	};
+	// The last published result with this run's recheck, its attempts voided
+	// when it failed; failing that, with the recheck alone.
+	const publishStanding = (recheck: { valid: boolean; reasons: string[] }) => {
+		const record = (relabel: boolean) => {
+			if (!published) return;
+			const standing: Result = structuredClone(published);
+			const run = standing.evaluation.invocations.find(
+				(i) => i.runId === options.runId,
+			);
+			if (!run) return;
+			run.recheck = recheck;
+			if (relabel && !recheck.valid)
+				for (const trial of standing.evaluation.trials)
+					for (const attempt of trial.attempts)
+						if (attempt.runId === options.runId && attempt.kind !== "pending")
+							voidFrozen(attempt, recheck.reasons);
+			publishResult(
+				options.evalsDir,
+				finalize(standing, now()),
+				options.rubric,
+				paths,
+			);
+		};
+		try {
+			record(true);
+		} catch {
+			record(false);
+		}
+	};
+
 	try {
 		// Attempts an earlier invocation launched but never recorded (6.4).
+		// One launched by a run whose recheck failed is void, as that run's
+		// recorded attempts are.
+		const failed = new Map(
+			evaluation.invocations
+				.filter((i) => !i.recheck.valid)
+				.map((i) => [i.runId, i.recheck.reasons]),
+		);
 		let stale = false;
 		for (const trial of evaluation.trials) {
 			trial.attempts = trial.attempts.map((attempt) => {
 				if (attempt.kind !== "pending") return attempt;
 				stale = true;
-				return resolvePending(attempt);
+				const resolved = resolvePending(attempt);
+				const reasons = failed.get(resolved.runId);
+				if (reasons) voidFrozen(resolved, reasons);
+				return resolved;
 			});
 		}
 		if (stale) {
@@ -875,31 +1134,20 @@ export async function runGate(
 			persist();
 		}
 	} catch (error) {
-		try {
-			persist();
-		} catch {
-			// Keep the original error; the last good publication stands.
-		}
+		settle(error);
 		throw error;
 	}
-
-	const reasons = options
-		.recheck()
-		.map((reason) => redactText(reason, context).text);
-	invocation.recheck = { valid: reasons.length === 0, reasons };
-	if (reasons.length > 0) {
-		for (const attempt of created) {
-			attempt.kind = "void";
-			attempt.valid = false;
-			attempt.behavioralOrdinal = null;
-			attempt.musts = [];
-			attempt.voidReasons.push(
-				...reasons.map((r) => `frozen inputs changed: ${r}`),
-			);
-		}
-	}
-	persist();
+	settle();
 	return { result };
+}
+
+/** Void an attempt whose run's frozen inputs changed (2.5). */
+function voidFrozen(attempt: Attempt, reasons: string[]): void {
+	attempt.kind = "void";
+	attempt.valid = false;
+	attempt.behavioralOrdinal = null;
+	attempt.musts = [];
+	attempt.voidReasons.push(...reasons.map((r) => `${FROZEN_CHANGED}${r}`));
 }
 
 /** A launched attempt, recorded before its outcome is known. */

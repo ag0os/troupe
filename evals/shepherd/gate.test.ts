@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -23,6 +24,7 @@ import {
 import {
 	findNativeLog,
 	type GateOptions,
+	holdLock,
 	publishResult,
 	pythonChecks,
 	runGate,
@@ -1815,6 +1817,116 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 		);
 		expect(verified()).toEqual([]);
 	});
+
+	const CHANGED = ["subject binary bytes changed after execution"];
+	const onDisk = (r: Result) =>
+		JSON.parse(
+			readFileSync(
+				join(evalsDir, `results/${r.source.hash.replace("sha256:", "")}.json`),
+				"utf8",
+			),
+		) as Result;
+
+	test("S2 (PROBE-B): a relabel past the void cap publishes a blocked record, and the next run stays blocked", async () => {
+		const { result: first } = await runGate(
+			real(
+				{ E: ["void", "good", "good"] },
+				{ recheck: () => CHANGED },
+				{ E: ["fail", "pass"] },
+			),
+		);
+		expect([first.outcome, trial(first, "E")?.outcome]).toEqual([
+			"blocked",
+			"void",
+		]);
+		expect(onDisk(first)).toEqual(first);
+		launches = [];
+		const { result } = await runGate(real({}));
+		expect(launches.filter((l) => l.trial === "E")).toEqual([]);
+		expect([result.outcome, trial(result, "E")?.outcome]).toEqual([
+			"blocked",
+			"void",
+		]);
+		expect(verified()).toEqual(["the result is blocked: E void"]);
+	});
+
+	test("S2 (PROBE-A): a crash before the recheck still records it, so no later run qualifies on the crashed run's attempts", async () => {
+		const first = real({}, { recheck: () => CHANGED });
+		const score = first.score;
+		first.score = async (job) => {
+			if (job.trial === "E") throw new Error("scorer host lost");
+			return score(job);
+		};
+		await expect(runGate(first)).rejects.toThrow(/scorer host lost/);
+		const { result } = await runGate(real({}));
+		expect(result.evaluation.invocations[0]?.recheck).toEqual({
+			valid: false,
+			reasons: CHANGED,
+		});
+		const kinds = result.evaluation.trials.flatMap((t) =>
+			t.attempts.filter((a) => a.runId === first.runId).map((a) => a.kind),
+		);
+		expect(new Set(kinds)).toEqual(new Set(["void"]));
+		expect(verified()).toEqual([]);
+	});
+
+	test("S2 (V1, PROBE-F): when the crashed run's own result cannot be published, the last published one records the failed recheck", async () => {
+		const first = real({}, { recheck: () => CHANGED });
+		const score = first.score;
+		first.score = async (job) => {
+			if (job.trial !== "E") return score(job);
+			// An invocation that names another packet: no result holding it publishes.
+			const stray = {
+				...invocation({
+					round: job.round,
+					packetSha256: `sha256:${"0".repeat(64)}`,
+				}),
+				failure: "nonzero exit 1: overloaded",
+				exitStatus: 1,
+			};
+			return { invocations: [stray], outputs: ["{}"] };
+		};
+		await expect(runGate(first)).rejects.toThrow(
+			/Refusing to publish an invalid result/,
+		);
+		const { result } = await runGate(real({}));
+		expect(
+			result.evaluation.invocations.find((i) => i.runId === first.runId)
+				?.recheck,
+		).toEqual({ valid: false, reasons: CHANGED });
+		const kinds = result.evaluation.trials.flatMap((t) =>
+			t.attempts.filter((a) => a.runId === first.runId).map((a) => a.kind),
+		);
+		expect(new Set(kinds)).toEqual(new Set(["void"]));
+		expect(verified()).toEqual([]);
+	});
+
+	test("S2: a frozen-input void in a run whose recheck passed fails verification", async () => {
+		const { result } = await runGate(real({}));
+		const a = trial(result, "A");
+		const forged = a?.attempts[0];
+		if (!a || !forged) throw new Error("no A attempt");
+		forged.kind = "void";
+		forged.valid = false;
+		forged.behavioralOrdinal = null;
+		forged.musts = [];
+		forged.voidReasons = ["frozen inputs changed: forged"];
+		a.outcome = deriveTrial(a.attempts);
+		result.evaluation.outcome = deriveAggregate(
+			result.evaluation.trials.map((t) => t.outcome),
+		);
+		result.outcome = result.evaluation.outcome;
+		writeFileSync(
+			join(
+				evalsDir,
+				`results/${result.source.hash.replace("sha256:", "")}.json`,
+			),
+			JSON.stringify(result),
+		);
+		expect(verified()).toContain(
+			`A attempt 1: voided for changed frozen inputs, but run ${result.evaluation.invocations[0]?.runId} passed its recheck`,
+		);
+	});
 });
 
 describe("verdicts recorded from the archived output (fix round 3, S1)", () => {
@@ -1870,5 +1982,346 @@ describe("verdicts recorded from the archived output (fix round 3, S1)", () => {
 			"the archived output reads no verdict: unparsable CLI output",
 		);
 		expect(validateResult(result)).toEqual([]);
+	});
+});
+
+describe("durable, exclusive gate invocations (fix round 3, S2 to S4)", () => {
+	const lock = () => join(evalsDir, `results/${HEX}.json.lock`);
+	/** A pid that no process holds: a child that has exited and been reaped. */
+	const deadPid = () => spawnSync("true").pid;
+	/** What SIGKILL leaves: the lock of a holder that is gone. */
+	const killHolder = () =>
+		writeFileSync(
+			lock(),
+			JSON.stringify({ pid: deadPid(), runId: "20261013T000000Z-killed" }),
+		);
+
+	test("S2: a relabel past the void cap is published, and the record reads blocked", async () => {
+		const { result } = await runGate(
+			options(
+				{ E: ["void", "good", "good"] },
+				{ E: ["fail", "pass"] },
+				{ recheck: () => ["subject binary bytes changed after execution"] },
+			),
+		);
+		expect(read()).toEqual(result);
+		expect(read().evaluation.invocations[0]?.recheck).toEqual({
+			valid: false,
+			reasons: ["subject binary bytes changed after execution"],
+		});
+		expect(trial(read(), "E")?.attempts.map((a) => a.kind)).toEqual([
+			"void",
+			"void",
+			"void",
+		]);
+		expect([read().outcome, trial(read(), "E")?.outcome]).toEqual([
+			"blocked",
+			"void",
+		]);
+	});
+
+	test("S2: a crash mid-wave with a failed recheck voids the crashed run's pending attempts when resolved", async () => {
+		const first = options(
+			{},
+			{},
+			{ recheck: () => ["subject binary bytes changed after execution"] },
+		);
+		const wave = first.runWave;
+		first.runWave = async (jobs) => {
+			await wave(jobs);
+			throw new Error("machine went to sleep");
+		};
+		await expect(runGate(first)).rejects.toThrow(/sleep/);
+		expect(read().evaluation.invocations[0]?.recheck.valid).toBe(false);
+		const { result } = await runGate(options({}));
+		for (const t of result.evaluation.trials) {
+			expect([t.trial, t.attempts[0]?.runId, t.attempts[0]?.kind]).toEqual([
+				t.trial,
+				first.runId,
+				"void",
+			]);
+			expect(t.attempts[0]?.voidReasons.at(-1)).toBe(
+				"frozen inputs changed: subject binary bytes changed after execution",
+			);
+		}
+		expect(result.outcome).toBe("pass");
+	});
+
+	test("S3: each scorer verdict is published as it arrives, and recovery after a kill scores only what was not", async () => {
+		const first = options({}, {}, { scorerConcurrency: 6 });
+		const score = first.score;
+		const done = new Set<string>();
+		first.score = async (job) => {
+			// E's scorer never returns: the invocation is killed while it runs.
+			if (job.trial === "E") await new Promise(() => {});
+			const out = await score(job);
+			done.add(job.trial);
+			return out;
+		};
+		void runGate(first);
+		for (let i = 0; i < 300 && !(done.has("A") && done.has("D")); i++)
+			await Bun.sleep(10);
+		const d = trial(read(), "D")?.attempts[0];
+		expect([d?.kind, d?.scoring?.invocations.length]).toEqual([
+			"behavioral",
+			1,
+		]);
+		expect(d?.musts.some((m) => m.class === "judged" && m.scorer)).toBe(true);
+		killHolder();
+		scored.length = 0;
+		launches = [];
+		const { result } = await runGate(options({}));
+		expect(scored).toEqual([{ trial: "E", round: 1 }]);
+		expect(launches).toEqual([]);
+		expect(result.outcome).toBe("pass");
+	});
+
+	test("S3: a leftover unlisted scorer output beside an unscored attempt does not stop the next invocation", async () => {
+		const crashing = options({});
+		crashing.score = async () => {
+			throw new Error("scorer host lost");
+		};
+		await expect(runGate(crashing)).rejects.toThrow(/scorer host lost/);
+		const e = trial(read(), "E")?.attempts[0];
+		const dir = join(evalsDir, e?.artifactDir ?? "?");
+		writeFileSync(join(dir, "scorer-1-r1.json"), "written, never recorded\n");
+		const { result } = await runGate(options({}));
+		expect(trial(result, "E")?.outcome).toBe("pass");
+		expect(readFileSync(join(dir, "scorer-1-r1.json.orphan"), "utf8")).toBe(
+			"written, never recorded\n",
+		);
+		expect(readFileSync(join(dir, "scorer-1-r1.json"), "utf8")).not.toContain(
+			"never recorded",
+		);
+	});
+
+	test("S3: a failed scorer invocation is published before its retry runs", async () => {
+		const opts = options({});
+		const score = opts.score;
+		let seen: string[] | undefined;
+		opts.score = async (job) => {
+			if (job.trial !== "E") return score(job);
+			const failed = {
+				...invocation({ round: job.round, packetSha256: job.packet.sha256 }),
+				failure: "nonzero exit 1: overloaded",
+				exitStatus: 1,
+			};
+			const output = scorerOutput('{"decisions":[]}', failed);
+			job.onInvocation?.(failed, output);
+			seen = trial(read(), "E")?.attempts[0]?.scoring?.invocations.map(
+				(i) => i.failure ?? "verdict",
+			);
+			const verdict = await score(job);
+			const [second] = verdict.invocations;
+			if (!second) throw new Error("no verdict");
+			second.retryReason = failed.failure;
+			return {
+				...verdict,
+				invocations: [failed, second],
+				outputs: [output, ...verdict.outputs],
+			};
+		};
+		const { result } = await runGate(opts);
+		expect(seen).toEqual(["nonzero exit 1: overloaded"]);
+		const e = trial(result, "E")?.attempts[0];
+		expect(e?.scoring?.invocations.map((i) => i.failure)).toEqual([
+			"nonzero exit 1: overloaded",
+			null,
+		]);
+		expect(e?.artifacts.map((a) => a.path)).toContain("scorer-2-r1.json");
+		expect(result.outcome).toBe("pass");
+	});
+
+	test("S4: a second invocation for the same source hash refuses, naming the holder, and launches nothing", async () => {
+		let release: () => void = () => {};
+		const held = new Promise<void>((done) => {
+			release = done;
+		});
+		const first = options({});
+		const wave = first.runWave;
+		let waves = 0;
+		first.runWave = async (jobs) => {
+			if (waves++ === 0) await held;
+			return wave(jobs);
+		};
+		const one = runGate(first);
+		await Bun.sleep(20);
+		const before = launches.length;
+		await expect(runGate(options({}))).rejects.toThrow(
+			new RegExp(`pid ${process.pid}.*run ${first.runId}`),
+		);
+		expect(launches.length).toBe(before);
+		release();
+		const { result } = await one;
+		expect(result.outcome).toBe("pass");
+		expect(read().evaluation.invocations.map((i) => i.runId)).toEqual([
+			first.runId,
+		]);
+		expect(existsSync(lock())).toBe(false);
+	});
+
+	test("S4: the lock of a holder that is gone is taken over", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		killHolder();
+		const { result } = await runGate(options({}));
+		expect(result.outcome).toBe("pass");
+		expect(existsSync(lock())).toBe(false);
+	});
+
+	/** A live process that is no gate invocation; stopped after the test. */
+	const liveChild = () => {
+		const child = Bun.spawn(["sleep", "30"]);
+		children.push(child);
+		return child.pid;
+	};
+	const children: { kill(): void }[] = [];
+	afterEach(() => {
+		for (const child of children.splice(0)) child.kill();
+	});
+
+	test("S4 (finding 3): a takeover in progress makes every other taker refuse, naming the takeover file, and leaves one holder", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		killHolder();
+		const json = join(evalsDir, `results/${HEX}.json`);
+		const others: string[] = [];
+		const release = holdLock(json, "run-B", {
+			takingOver: () => {
+				for (const run of ["run-C", "run-D"]) {
+					try {
+						holdLock(json, run);
+						others.push(`${run} holds`);
+					} catch (error) {
+						others.push((error as Error).message);
+					}
+				}
+			},
+		});
+		expect(others).toEqual([
+			expect.stringContaining(`${lock()}.takeover`),
+			expect.stringContaining(`${lock()}.takeover`),
+		]);
+		expect(others[0]).toMatch(
+			/stale if no gate invocation runs and its pid is gone/,
+		);
+		expect(JSON.parse(readFileSync(lock(), "utf8")).runId).toBe("run-B");
+		expect(existsSync(`${lock()}.takeover`)).toBe(false);
+		release();
+		expect(existsSync(lock())).toBe(false);
+	});
+
+	test("S4 (finding 3): a takeover re-reads the lock under its guard and refuses a holder that took it meanwhile", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		killHolder();
+		const json = join(evalsDir, `results/${HEX}.json`);
+		const pid = liveChild();
+		const live = JSON.stringify({ pid, runId: "run-live" });
+		expect(() =>
+			holdLock(json, "run-B", {
+				takingOver: () => writeFileSync(lock(), live),
+			}),
+		).toThrow(new RegExp(`pid ${pid}, run run-live`));
+		expect(readFileSync(lock(), "utf8")).toBe(live);
+	});
+
+	test("S4 (finding 3): a leftover takeover file refuses, naming it", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		killHolder();
+		writeFileSync(`${lock()}.takeover`, JSON.stringify({ pid: deadPid() }));
+		await expect(runGate(options({}))).rejects.toThrow(`${lock()}.takeover`);
+		expect(launches).toEqual([]);
+	});
+
+	test("S4 (finding 4): a lock naming this process's pid but a run it does not hold is stale", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		writeFileSync(
+			lock(),
+			JSON.stringify({ pid: process.pid, runId: "20261012T000000Z-killed" }),
+		);
+		const { result } = await runGate(options({}));
+		expect(result.outcome).toBe("pass");
+	});
+
+	test("S4 (finding 5): a lock held by another process refuses, naming its pid", async () => {
+		const json = join(evalsDir, `results/${HEX}.json`);
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { holdLock } = await import(${JSON.stringify(join(import.meta.dir, "gate.ts"))});
+holdLock(${JSON.stringify(json)}, "run-child");
+console.log("held");
+await Bun.sleep(30_000);`,
+			],
+			{ stdout: "pipe" },
+		);
+		children.push(holder);
+		const reader = holder.stdout.getReader();
+		const { value } = await reader.read();
+		expect(new TextDecoder().decode(value)).toBe("held\n");
+		await expect(runGate(options({}))).rejects.toThrow(
+			`pid ${holder.pid}, run run-child`,
+		);
+		expect(launches).toEqual([]);
+	});
+
+	test("S4 (finding 5): processes racing for one lock leave exactly one holder each time", async () => {
+		const dir = join(scratch, "race");
+		mkdirSync(dir);
+		const ROUNDS = 25;
+		const start = Date.now() + 1_500;
+		const racers = Array.from({ length: 6 }, (_, n) =>
+			Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					`const { holdLock } = await import(${JSON.stringify(join(import.meta.dir, "gate.ts"))});
+const won = [];
+for (let round = 0; round < ${ROUNDS}; round++) {
+	const at = ${start} + round * 25;
+	while (Date.now() < at) {}
+	try {
+		holdLock(${JSON.stringify(dir)} + "/r" + round + ".json", "racer-${n}");
+		won.push(round);
+	} catch {}
+}
+console.log(JSON.stringify(won));
+await Bun.sleep(500);`,
+				],
+				{ stdout: "pipe" },
+			),
+		);
+		children.push(...racers);
+		const won = await Promise.all(
+			racers.map(async (racer) =>
+				JSON.parse((await new Response(racer.stdout).text()).trim()),
+			),
+		);
+		const holders = Array.from(
+			{ length: ROUNDS },
+			(_, round) => won.filter((rounds) => rounds.includes(round)).length,
+		);
+		expect(holders).toEqual(Array(ROUNDS).fill(1));
+	}, 30_000);
+
+	test("S4: a lock that cannot be read at release does not replace the result", async () => {
+		const opts = options({});
+		const wave = opts.runWave;
+		opts.runWave = async (jobs) => {
+			chmodSync(lock(), 0o000);
+			return wave(jobs);
+		};
+		try {
+			const { result } = await runGate(opts);
+			expect(result.outcome).toBe("pass");
+		} finally {
+			chmodSync(lock(), 0o644);
+		}
+	});
+
+	test("S4: an unreadable lock refuses, naming the file", async () => {
+		mkdirSync(join(evalsDir, "results"), { recursive: true });
+		writeFileSync(lock(), "");
+		await expect(runGate(options({}))).rejects.toThrow(lock());
+		expect(launches).toEqual([]);
 	});
 });

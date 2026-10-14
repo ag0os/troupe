@@ -804,6 +804,12 @@ export async function scoreAttempt(options: {
 	signal?: AbortSignal;
 	/** Epoch milliseconds; no invocation starts that could not finish by then. */
 	deadline?: number;
+	/** Called as each invocation ends, before any retry starts, so it can be recorded. */
+	onInvocation?(
+		invocation: ScorerInvocation,
+		output: string,
+		decisions?: Decision[],
+	): void;
 }): Promise<{
 	invocations: ScorerInvocation[];
 	decisions?: Decision[];
@@ -824,28 +830,39 @@ export async function scoreAttempt(options: {
 		});
 		invocations.push(invocation);
 		outputs.push(stdout);
+		options.onInvocation?.(invocation, stdout, decisions);
 		if (invocation.failure === null) return { invocations, decisions, outputs };
 		if (!retryable) break;
 	}
 	return { invocations, outputs };
 }
 
-/** Run jobs with at most `limit` running at once. */
+/**
+ * Run jobs with at most `limit` running at once. A job that throws starts no
+ * more jobs, and its error is thrown once the running ones end, so none of
+ * them outlives the call.
+ */
 export async function scoreAll<T>(
 	jobs: (() => Promise<T>)[],
 	limit = 2,
 ): Promise<T[]> {
 	const results: T[] = new Array(jobs.length);
 	let next = 0;
+	let failed: { error: unknown } | undefined;
 	const worker = async () => {
-		while (next < jobs.length) {
+		while (!failed && next < jobs.length) {
 			const index = next++;
 			const job = jobs[index];
-			if (job) results[index] = await job();
+			try {
+				if (job) results[index] = await job();
+			} catch (error) {
+				failed ??= { error };
+			}
 		}
 	};
 	await Promise.all(
 		Array.from({ length: Math.min(limit, jobs.length) }, worker),
 	);
+	if (failed) throw failed.error;
 	return results;
 }
