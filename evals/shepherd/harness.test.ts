@@ -22,6 +22,18 @@ describe("Python harness self-checks on handmade data (8.4)", () => {
 		expect(output).toMatch(/skipped=4\)/);
 	}, 120_000);
 
+	test("check-musts.py passes on handmade snapshots and log fragments (8.3)", () => {
+		const child = Bun.spawnSync(
+			["python3", "-I", join(EVALS_DIR, "check-musts.py")],
+			{ cwd: EVALS_DIR, stdout: "pipe", stderr: "pipe", timeout: 120_000 },
+		);
+		const output = `${child.stdout.toString()}${child.stderr.toString()}`;
+		if (child.exitCode !== 0) console.error(output);
+		expect(child.exitCode).toBe(0);
+		expect(output).toMatch(/Ran \d{2,} tests/);
+		expect(output).toMatch(/\nOK\n/);
+	}, 120_000);
+
 	test("shell wrappers pass a syntax check", () => {
 		for (const name of ["run-trial.sh", "fixtures.sh"]) {
 			const child = Bun.spawnSync(["bash", "-n", join(EVALS_DIR, name)]);

@@ -6,6 +6,7 @@ writes: the scratch-compiled subject binary, an optional distinct comparison
 binary for legacy modes, the scratch parent and the artifact root.
 """
 import argparse
+import base64
 from dataclasses import dataclass
 import datetime as dt
 import difflib
@@ -41,6 +42,10 @@ SETTINGS_ALLOW = {"model", "effortLevel", "alwaysThinkingEnabled", "outputStyle"
                   "permissions.defaultMode", "cleanupPeriodDays", "includeCoAuthoredBy"}
 MANAGED_SETTINGS = Path("/Library/Application Support/ClaudeCode/managed-settings.json" if sys.platform == "darwin"
                         else "/etc/claude-code/managed-settings.json")
+
+def utc_now():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
 
 def refuse(message):
     print(message, file=sys.stderr)
@@ -431,6 +436,25 @@ def launch(argv, workspace, root, env, stdout, stderr, timeout):
         raise Interrupted(received[0])
     return rc
 
+def snapshot(root):
+    """The workspace as path-to-content records; symlinks keep their targets."""
+    root = Path(root)
+    files = {}
+    for directory, dirs, names in os.walk(root, followlinks=False):
+        for name in sorted(dirs + names):
+            path = Path(directory) / name
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                files[rel] = {'type': 'symlink', 'target': os.readlink(path)}
+            elif path.is_file():
+                raw = path.read_bytes()
+                try:
+                    files[rel] = {'type': 'file', 'encoding': 'utf-8', 'content': raw.decode('utf-8')}
+                except UnicodeDecodeError:
+                    files[rel] = {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(raw).decode()}
+    return {'snapshotVersion': 1, 'files': dict(sorted(files.items()))}
+
+
 def diff_workspace(baseline, workspace):
     names = sorted({str(p.relative_to(base)) for base in (baseline, workspace)
                     for p in base.rglob('*') if p.is_file() or p.is_symlink()})
@@ -593,7 +617,7 @@ def void_reasons(provenance_legs):
     return reasons
 
 
-def run(config, trial, backend, rerun=False, before=False):
+def run(config, trial, backend, rerun=False, before=False, attempt=None):
     if (before and backend != 'claude') or (trial == 'I' and (backend != 'claude' or before)):
         refuse('--before requires Claude; I requires Claude without --before')
     if before and trial not in ('C', 'D'):
@@ -606,7 +630,8 @@ def run(config, trial, backend, rerun=False, before=False):
     policy = config.policy
     subject = config.subject
     name = backend + ('-before' if before else '-rerun' if rerun else '')
-    dest = config.artifact_root / trial
+    # Gate attempts each get a directory; legacy modes keep the trial directory.
+    dest = config.artifact_root / trial / (f'attempt-{attempt}' if attempt else '')
     # Refuse overwrites so first failures remain available to the scorer.
     if any(dest.glob(name + '.*')) or any(dest.glob(name + '-*')):
         refuse(f'Artifacts already exist for {trial}/{name}; preserve or move them before another run')
@@ -652,11 +677,13 @@ def run(config, trial, backend, rerun=False, before=False):
                 'cli_version': cli_version(env, policy['toolTimeoutSeconds']) if backend == 'claude' else None,
                 'backend_settings': backend_settings(HOME) if backend == 'claude' else None,
                 'exit_codes': [], 'timed_out': False, 'observed_models': [], 'binary_evidence_call_ids': [],
-                'provenance': [], 'validity': {'valid': False, 'void_reasons': []}}
+                'provenance': [], 'validity': {'valid': False, 'void_reasons': []},
+                'started_at': utc_now(), 'ended_at': None}
     run_file = dest / (name + '-run.json')
 
     def void(reason, text=''):
         manifest['validity'] = {'valid': False, 'void_reasons': [reason]}
+        manifest['ended_at'] = utc_now()
         write(run_file.parent, run_file.name, json.dumps(manifest, indent=2))
         write(dest, name + '.md', f'# VOID\n\n{reason}\n\n{text}')
         print(f'VOID: {trial}: {reason}', file=sys.stderr, flush=True)
@@ -671,6 +698,7 @@ def run(config, trial, backend, rerun=False, before=False):
     write(dest, name + '-start.json', json.dumps(start, indent=2))
     baseline = root / 'baseline'
     shutil.copytree(workspace, baseline)
+    write(dest, name + '-baseline.json', json.dumps(snapshot(workspace), indent=1))
     write(run_file.parent, run_file.name, json.dumps(manifest, indent=2))
     print(f'Scratch root retained: {root}', flush=True)
     started = time.time()
@@ -746,6 +774,7 @@ def run(config, trial, backend, rerun=False, before=False):
         problems.append(f'Missing or incomplete session log: {error}')
     finally:
         write(dest, name + '-diff.patch', diff_workspace(baseline, workspace))
+        write(dest, name + '-final.json', json.dumps(snapshot(workspace), indent=1))
     manifest['exit_codes'] = statuses
     manifest['timed_out'] = 124 in statuses
     manifest['interrupted'] = interrupted
@@ -755,6 +784,7 @@ def run(config, trial, backend, rerun=False, before=False):
     if not proof and not reasons:
         reasons.append('Missing or incomplete session log provenance')
     manifest['validity'] = {'valid': not reasons, 'void_reasons': reasons}
+    manifest['ended_at'] = utc_now()
     write(run_file.parent, run_file.name, json.dumps(manifest, indent=2))
     if reasons:
         text = '# VOID\n\n' + '\n'.join(reasons) + '\n\n' + text
@@ -779,6 +809,7 @@ def main():
     runner.add_argument('backend', choices=('claude', 'codex'))
     runner.add_argument('--rerun', action='store_true')
     runner.add_argument('--before', action='store_true')
+    runner.add_argument('--attempt', type=int, help='attempt ordinal; artifacts go to <trial>/attempt-<n>/')
     args = parser.parse_args()
     if args.command == 'scratch':
         print(isolated(args.directory))
@@ -789,7 +820,7 @@ def main():
     if args.command == 'fixture':
         fixture(config, args.trial, args.directory)
     else:
-        raise SystemExit(run(config, args.trial, args.backend, args.rerun, args.before))
+        raise SystemExit(run(config, args.trial, args.backend, args.rerun, args.before, args.attempt))
 
 
 if __name__ == '__main__':

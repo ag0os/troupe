@@ -9,5 +9,12 @@
 	"subjectTimeoutSeconds": 1200,
 	"toolTimeoutSeconds": 60,
 	"invocationTimeoutSeconds": 5400,
-	"shepherdSettings": {}
+	"shepherdSettings": {},
+	"scorer": {
+		"family": "claude",
+		"model": "claude-opus-5-5",
+		"effort": "high",
+		"timeoutSeconds": 300,
+		"maxConcurrent": 2
+	}
 }

@@ -12,7 +12,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
-[[ $# -ge 3 ]] || { echo 'Usage: run-trial.sh <run-config.json> <trial> <claude|codex> [--rerun|--before]' >&2; exit 2; }
+[[ $# -ge 3 ]] || { echo 'Usage: run-trial.sh <run-config.json> <trial> <claude|codex> [--rerun|--before] [--attempt <n>]' >&2; exit 2; }
 config=$1
 shift
 # Python handles the session timeout and terminates the full backend process

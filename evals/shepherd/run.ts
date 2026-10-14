@@ -4,15 +4,18 @@
  * per-run scratch `bin/shepherd`, freeze the evaluated inputs, and run the
  * gate's trials through the Python harness with an explicit configuration:
  * the resolved subject binary, the run's scratch directory and its artifact
- * root. The repository `bin/`, the live launcher, is never written.
+ * root. The repository `bin/`, the live launcher, is never written. Each
+ * finished trial becomes an attempt in `results/<source-hash>.json`, with
+ * its redacted evidence under `artifacts/` (see `gate.ts`).
  *
  * Usage:
  *   bun run evals:shepherd [--scratch <dir>] [--artifacts <dir>]
  *   bun run evals:shepherd --check [--scratch <dir>]
  *
- * `--check` runs the shell syntax checks and `check-harness.py` against a
- * scratch-compiled subject, including real fixture shapes. Its session
- * launches are fake, and a stub `claude` sits first on PATH.
+ * `--check` runs the shell syntax checks, `check-harness.py` against a
+ * scratch-compiled subject, including real fixture shapes, and
+ * `check-musts.py`. Its session launches are fake, and a stub `claude` sits
+ * first on PATH.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -25,7 +28,7 @@ import {
 	realpathSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -41,10 +44,23 @@ import {
 	sameSource,
 	versionLine,
 } from "../../scripts/shepherd-source";
+import { runGate } from "./gate";
 import { type EvaluationIdentity, evaluationIdentity } from "./identity";
+import { canonicalJson, loadRubric, policyHash } from "./schema";
+
+export { canonicalJson };
+
+import {
+	checkIsolation,
+	type ScorerConfig,
+	scoreAttempt,
+	scorerEnv,
+	stopScorers,
+} from "./scorer";
 
 export const EVALS_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(EVALS_DIR, "../..");
+const RUBRIC = join(EVALS_DIR, "rubric.json");
 
 /** The fixed subject and execution policy (spec 5.1), from `policy.json`. */
 export interface Policy {
@@ -60,28 +76,25 @@ export interface Policy {
 	invocationTimeoutSeconds: number;
 	/** Written as the scratch `XDG_CONFIG_HOME/shepherd/config.json`. */
 	shepherdSettings: Record<string, unknown>;
+	/** The judged-Must scorer (4.1, 4.5). */
+	scorer: {
+		family: "claude";
+		model: string;
+		effort: string;
+		timeoutSeconds: number;
+		maxConcurrent: number;
+	};
 }
 
 export function sha256(data: string | Uint8Array): string {
 	return createHash("sha256").update(data).digest("hex");
 }
 
-/** JSON with object keys sorted, so equal values hash equally. */
-export function canonicalJson(value: unknown): string {
-	return JSON.stringify(value, (_, item) =>
-		item && typeof item === "object" && !Array.isArray(item)
-			? Object.fromEntries(
-					Object.entries(item).sort(([a], [b]) => (a < b ? -1 : 1)),
-				)
-			: item,
-	);
-}
-
 export function loadPolicy(dir = EVALS_DIR): { policy: Policy; hash: string } {
 	const policy = JSON.parse(
 		readFileSync(join(dir, "policy.json"), "utf8"),
 	) as Policy;
-	return { policy, hash: `sha256:${sha256(canonicalJson(policy))}` };
+	return { policy, hash: policyHash(policy) };
 }
 
 function refuseInside(root: string, path: string, what: string): void {
@@ -212,6 +225,8 @@ export interface Frozen {
 	evaluation: EvaluationIdentity;
 	policy: Policy;
 	policyHash: string;
+	/** The rubric the checks and the scorer use. */
+	rubricSha256: string;
 	/** The run configuration every harness process reads. */
 	config: string;
 	configSha256: string;
@@ -228,6 +243,7 @@ export function freeze(options: {
 	policy: Policy;
 	policyHash: string;
 	git?: GitRunner;
+	rubric?: string;
 }): Frozen {
 	const expected = `${versionLine(options.provenance)}\n`;
 	if (options.versionOutput !== expected) {
@@ -247,6 +263,7 @@ export function freeze(options: {
 		evaluation: evaluationIdentity(options.root, { git: options.git }),
 		policy: options.policy,
 		policyHash: options.policyHash,
+		rubricSha256: `sha256:${sha256(readFileSync(options.rubric ?? RUBRIC))}`,
 		config: options.config,
 		configSha256: sha256(readFileSync(options.config)),
 		frozenAt: new Date().toISOString(),
@@ -279,6 +296,11 @@ export function recheck(
 		sha256(readFileSync(frozen.config)) === frozen.configSha256
 			? undefined
 			: `run configuration changed after freezing: ${frozen.config}`,
+	);
+	attempt("rubric", () =>
+		`sha256:${sha256(readFileSync(RUBRIC))}` === frozen.rubricSha256
+			? undefined
+			: `rubric changed after freezing: ${RUBRIC}`,
 	);
 	attempt("source identity", () => {
 		const now = readWorktreeSource(options.root, { git });
@@ -493,6 +515,7 @@ async function main(): Promise<number> {
 	}
 	process.on("exit", () => {
 		for (const pgid of liveGroups) signalGroup(pgid, "SIGKILL");
+		stopScorers();
 	});
 
 	const late = lateStart(new Date());
@@ -546,14 +569,13 @@ async function main(): Promise<number> {
 		chmodSync(join(stubs, "claude"), 0o755);
 		const env = subjectEnv(subject);
 		env.PATH = `${stubs}:${env.PATH}`;
-		const [outcome] = await runTrials({
-			trials: ["check-harness"],
-			command: () => [
+		const outcomes = await runTrials({
+			trials: ["check-harness", "check-musts"],
+			command: (name) => [
 				"python3",
 				"-I",
-				join(EVALS_DIR, "check-harness.py"),
-				"--config",
-				config,
+				join(EVALS_DIR, `${name}.py`),
+				...(name === "check-harness" ? ["--config", config] : []),
 			],
 			env,
 			cwd: EVALS_DIR,
@@ -562,46 +584,117 @@ async function main(): Promise<number> {
 			signal: controller.signal,
 		});
 		if (interrupted) return interrupted;
-		return outcome?.exitCode === 0 ? 0 : 1;
+		return outcomes.every((outcome) => outcome.exitCode === 0) ? 0 : 1;
 	}
 
 	writeJson(join(run.artifactRoot, "frozen.json"), frozen);
-	const outcomes = await runTrials({
-		trials: policy.trials,
-		command: (trial) => [
-			"bash",
-			join(EVALS_DIR, "run-trial.sh"),
-			config,
-			trial,
-			policy.backend,
-		],
-		env: subjectEnv(subject),
-		cwd: run.runDir,
-		maxConcurrent: policy.maxConcurrentSubjects,
-		timeoutMs: deadline - Date.now(),
-		signal: controller.signal,
+	const scorer: ScorerConfig = {
+		claude: "claude",
+		model: policy.scorer.model,
+		effort: policy.scorer.effort,
+		timeoutMs: policy.scorer.timeoutSeconds * 1000,
+		workRoot: join(run.runDir, "scorer"),
+		env: scorerEnv(),
+		prompt: readFileSync(join(EVALS_DIR, "scorer-prompt.md"), "utf8"),
+	};
+	// Unsupported scorer isolation is an error before any subject launches.
+	const { cliVersion } = checkIsolation(scorer);
+	const waves: Awaited<ReturnType<typeof runTrials>>[] = [];
+	const { result } = await runGate({
+		evalsDir: EVALS_DIR,
+		sourceHash: frozen.manifest.source,
+		manifest: frozen.manifest.entries,
+		identity: {
+			hash: frozen.evaluation.hash,
+			rubricSha256: frozen.rubricSha256,
+			policySha256: frozen.policyHash,
+			policy: { ...policy },
+			scorer: {
+				family: policy.scorer.family,
+				model: policy.scorer.model,
+				effort: policy.scorer.effort,
+			},
+		},
+		build: {
+			revision: frozen.revision,
+			dirty: frozen.dirty,
+			sourceDirty: frozen.sourceDirty,
+			version: frozen.version,
+			binarySha256: frozen.binarySha256,
+			bunVersion: Bun.version,
+			platform: process.platform,
+			arch: process.arch,
+			builtAt: frozen.frozenAt,
+		},
+		runId: run.runId,
+		scratchRoot: run.runDir,
+		artifactRoot: run.artifactRoot,
+		home: homedir(),
+		rubric: loadRubric(),
+		deadline,
+		runWave: async (jobs) => {
+			if (controller.signal.aborted) return [];
+			const ordinals = new Map(jobs.map((job) => [job.trial, job.ordinal]));
+			const outcomes = await runTrials({
+				trials: jobs.map((job) => job.trial),
+				command: (trial) => [
+					"bash",
+					join(EVALS_DIR, "run-trial.sh"),
+					config,
+					trial,
+					policy.backend,
+					"--attempt",
+					String(ordinals.get(trial)),
+				],
+				env: subjectEnv(subject),
+				cwd: run.runDir,
+				maxConcurrent: policy.maxConcurrentSubjects,
+				timeoutMs: deadline - Date.now(),
+				signal: controller.signal,
+			});
+			waves.push(outcomes);
+			return outcomes
+				.filter((outcome) => outcome.started)
+				.map((outcome) => ({
+					trial: outcome.trial,
+					ordinal: ordinals.get(outcome.trial) ?? 0,
+					exitCode: outcome.exitCode,
+				}));
+		},
+		score: (job) =>
+			scoreAttempt({
+				config: scorer,
+				packet: job.packet,
+				requested: job.requested,
+				round: job.round,
+				cliVersion,
+				signal: controller.signal,
+				deadline: job.deadline,
+			}),
+		scorerConcurrency: policy.scorer.maxConcurrent,
+		scorerTimeoutMs: scorer.timeoutMs,
+		recheck: () => recheck(frozen, { root }),
 	});
-	const reasons = recheck(frozen, { root });
+	const reasons = result.evaluation.invocations.at(-1)?.recheck.reasons ?? [];
 	writeJson(join(run.artifactRoot, "invocation.json"), {
 		runId: run.runId,
 		startedAt: new Date(startedAt).toISOString(),
 		endedAt: new Date().toISOString(),
-		outcomes,
+		waves,
 		recheck: { valid: reasons.length === 0, reasons },
 	});
-	for (const outcome of outcomes) {
-		const how = outcome.timedOut
-			? "stopped by the invocation bound"
-			: outcome.cancelled
-				? "cancelled"
-				: `exit ${outcome.exitCode ?? outcome.signal}`;
-		console.log(`${outcome.trial}: ${outcome.started ? how : "not started"}`);
+	for (const trial of result.evaluation.trials) {
+		console.log(
+			`${trial.trial}: ${trial.outcome} (${trial.attempts.length} attempts)`,
+		);
 	}
 	for (const reason of reasons) console.error(`INVALID: ${reason}`);
-	console.log(`Artifacts: ${run.artifactRoot}`);
+	console.log(
+		`Result: ${result.outcome}, ${join(EVALS_DIR, "results", `${frozen.manifest.source.replace(/^sha256:/, "")}.json`)}`,
+	);
 	if (interrupted) return interrupted;
 	if (reasons.length > 0) return 4;
-	return outcomes.every((outcome) => outcome.exitCode === 0) ? 0 : 1;
+	return result.outcome === "blocked" ? 1 : 0;
 }
 
 function parseOptions(argv: string[]) {

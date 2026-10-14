@@ -1,21 +1,42 @@
-"""Print the native log's own usage summary per run; no estimates."""
-import json, sys
-for path in sys.argv[1:]:
-    found = []
-    for line in open(path):
+#!/usr/bin/env python3
+"""A session's own cost from its native log; no estimates.
+
+Usage: cost.py <claude.jsonl>... Prints one JSON object per log. Claude's
+`cost-state` records are cumulative, so the session cost is the last one,
+never their sum. Unknown cost is null with a reason, never zero.
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+
+
+def subject_cost(path):
+    path = Path(path)
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        return {'usd': None, 'reason': f'unreadable log: {error}', 'usage': None, 'source': path.name}
+    last = None
+    for number, line in enumerate(lines, 1):
         try:
-            e = json.loads(line)
+            event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        def walk(v, trail):
-            if isinstance(v, dict):
-                if 'modelUsage' in v:
-                    found.append((e.get('type'), trail, v['modelUsage'], {k: v.get(k) for k in ('totalDuration', 'totalToolDuration')}))
-                for k, w in v.items():
-                    walk(w, trail + [k])
-        walk(e, [])
-    print(path)
-    for f in found:
-        print('  ', json.dumps(f))
-    if not found:
-        print('   no modelUsage record')
+        if isinstance(event, dict) and event.get('type') == 'cost-state':
+            last = (number, event)
+    if last is None:
+        return {'usd': None, 'reason': 'no cost-state record in the log', 'usage': None, 'source': path.name}
+    number, event = last
+    usage = event.get('modelUsage') if isinstance(event.get('modelUsage'), dict) else None
+    source = f'{path.name} cost-state line {number}'
+    usd = event.get('totalCostUSD')
+    if event.get('hasUnknownModelCost') or not isinstance(usd, (int, float)) or isinstance(usd, bool):
+        return {'usd': None, 'reason': 'the log marks the model cost unknown', 'usage': usage, 'source': source}
+    return {'usd': usd, 'reason': None, 'usage': usage, 'source': source}
+
+
+if __name__ == '__main__':
+    for log in sys.argv[1:]:
+        print(json.dumps(subject_cost(log)))

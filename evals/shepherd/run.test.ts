@@ -214,6 +214,17 @@ describe("policy (5.1)", () => {
 		expect(policy.shepherdSettings).toEqual({});
 		expect(hash).toMatch(/^sha256:[0-9a-f]{64}$/);
 	});
+
+	test("fixes the scorer policy (4.1, 4.5)", () => {
+		const { policy } = loadPolicy();
+		expect(policy.scorer).toEqual({
+			family: "claude",
+			model: "claude-opus-5-5",
+			effort: "high",
+			timeoutSeconds: 300,
+			maxConcurrent: 2,
+		});
+	});
 });
 
 describe("frozen inputs (2.5)", () => {
@@ -261,11 +272,24 @@ describe("frozen inputs (2.5)", () => {
 		expect(frozen.policy.model).toBe("claude-opus-5-5");
 		expect(frozen.policyHash).toMatch(/^sha256:/);
 		expect(frozen.subject).toBe(built.subject);
+		expect(frozen.rubricSha256).toBe(
+			`sha256:${new Bun.CryptoHasher("sha256").update(readFileSync(join(EVALS_DIR, "rubric.json"))).digest("hex")}`,
+		);
 		expect(frozen.configSha256).toBe(
 			new Bun.CryptoHasher("sha256")
 				.update('{"subject": "fixture"}\n')
 				.digest("hex"),
 		);
+	});
+
+	test("a changed rubric invalidates the run", async () => {
+		const { root, frozen } = await frozenRun();
+		expect(
+			recheck(
+				{ ...frozen, rubricSha256: `sha256:${"0".repeat(64)}` },
+				{ root, git: testGit },
+			),
+		).toEqual([expect.stringMatching(/rubric/)]);
 	});
 
 	test("a changed run configuration invalidates the run", async () => {

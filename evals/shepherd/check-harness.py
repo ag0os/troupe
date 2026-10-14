@@ -652,7 +652,7 @@ class PortableChecks(unittest.TestCase):
         for entry in captured.values():
             self.assertRegex(entry['sha256'], r'^[0-9a-f]{64}$')
 
-    def fake_run(self, config, trial='A', model=None, marker=None, write_log=True, rc=0, **patches):
+    def fake_run(self, config, trial='A', model=None, marker=None, write_log=True, rc=0, attempt=None, **patches):
         """Run one trial with fake fixture tools and a fake session."""
         launched = []
         def prepare(config, trial, workspace):
@@ -683,8 +683,8 @@ class PortableChecks(unittest.TestCase):
             stack.enter_context(patch.object(h, 'HOME', self.home))
             for name, value in values.items():
                 stack.enter_context(patch.object(h, name, value))
-            rc = h.run(config, trial, 'claude')
-        dest = config.artifact_root / trial
+            rc = h.run(config, trial, 'claude', attempt=attempt)
+        dest = config.artifact_root / trial / (f'attempt-{attempt}' if attempt else '')
         record = json.loads((dest / 'claude-run.json').read_text())
         return rc, record, (dest / 'claude.md').read_text(), launched
 
@@ -712,6 +712,8 @@ class PortableChecks(unittest.TestCase):
         self.assertEqual(launched[0]['root'].parent, self.root)
         self.assertEqual(record['validity'], {'valid': True, 'void_reasons': []})
         self.assertEqual(record['cli_version'], 'fake 2.0.0')
+        self.assertRegex(record['started_at'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$')
+        self.assertLessEqual(record['started_at'], record['ended_at'])
         self.assertEqual(set(record['backend_settings']), {'user', 'userLocal', 'managed'})
         self.assertEqual(env['ZDOTDIR'], str(launched[0]['root'] / 'zdotdir'))
         self.assertEqual(record['session_shepherd'], [str(self.subject)] * 2)
@@ -729,6 +731,41 @@ class PortableChecks(unittest.TestCase):
         self.assertNotEqual(second[0]['root'], launched[0]['root'])
         self.assertNotEqual(again['argv'][again['argv'].index('--session-id') + 1],
                             record['argv'][record['argv'].index('--session-id') + 1])
+
+    def test_snapshots_are_path_to_content_records(self):
+        root = self.root / 'snap'
+        (root / '.shepherd/work').mkdir(parents=True)
+        (root / '.shepherd/work/STATUS.md').write_text('# s\n')
+        (root / 'blob.bin').write_bytes(b'\xff\x00raw')
+        (root / 'link.txt').symlink_to('blob.bin')
+        (root / 'linked-dir').symlink_to('.shepherd')
+        (root / 'empty').mkdir()
+        snap = h.snapshot(root)
+        self.assertEqual(snap['snapshotVersion'], 1)
+        self.assertEqual(snap['files'], {
+            '.shepherd/work/STATUS.md': {'type': 'file', 'encoding': 'utf-8', 'content': '# s\n'},
+            'blob.bin': {'type': 'file', 'encoding': 'base64', 'content': '/wByYXc='},
+            'link.txt': {'type': 'symlink', 'target': 'blob.bin'},
+            'linked-dir': {'type': 'symlink', 'target': '.shepherd'}})
+
+    def test_runs_record_baseline_and_final_snapshots(self):
+        config = self.case('snapshots')
+        self.fake_run(config)
+        dest = config.artifact_root / 'A'
+        baseline = json.loads((dest / 'claude-baseline.json').read_text())
+        final = json.loads((dest / 'claude-final.json').read_text())
+        self.assertEqual(baseline['files']['ledger/settings.txt']['content'], 'page_size=16\n')
+        self.assertEqual(final['files']['ledger/settings.txt']['content'], 'page_size=24\n')
+
+    def test_attempts_get_their_own_artifact_directories(self):
+        config = self.case('attempts')
+        rc, record, _, _ = self.fake_run(config, attempt=1)
+        self.assertEqual(rc, 0)
+        self.assertTrue((config.artifact_root / 'A/attempt-1/claude-run.json').exists())
+        self.fake_run(config, attempt=2)
+        self.assertTrue((config.artifact_root / 'A/attempt-2/claude.jsonl').exists())
+        with patch.object(h, 'HOME', self.home):
+            self.assertIn('already exist', self.refused(h.run, config, 'A', 'claude', attempt=2))
 
     def test_artifact_overwrite_is_refused(self):
         config = self.case('overwrite')
