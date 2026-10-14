@@ -1908,7 +1908,12 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 			"blocked",
 			"void",
 		]);
-		expect(verified()).toEqual(["the result is blocked: E void"]);
+		const verification = verifyResults(repo, { git: testGit });
+		expect([verification.problems, verification.outcome?.aggregate]).toEqual([
+			[],
+			"blocked",
+		]);
+		expect(verification.notes.join("\n")).toMatch(/Outcome blocked: .*E void/);
 	});
 
 	test("S2 (PROBE-A): a crash before the recheck still records it, so no later run qualifies on the crashed run's attempts", async () => {
@@ -2339,7 +2344,7 @@ describe("durable, exclusive gate invocations (fix round 3, S2 to S4)", () => {
 			expect.stringContaining(`${lock()}.takeover`),
 		]);
 		expect(others[0]).toMatch(
-			/stale if no gate invocation runs and its pid is gone/,
+			/stale if no eval invocation runs and its pid is gone/,
 		);
 		expect(JSON.parse(readFileSync(lock(), "utf8")).runId).toBe("run-B");
 		expect(existsSync(`${lock()}.takeover`)).toBe(false);

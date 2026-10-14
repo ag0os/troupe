@@ -521,12 +521,12 @@ function staleHolder(path: string, held: string): void {
 	const pid = holder?.pid;
 	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
 		throw new Error(
-			`Refusing: the gate lock ${path} names no holder; remove it if no gate invocation is running`,
+			`Refusing: the eval lock ${path} names no holder; remove it if no eval invocation is running`,
 		);
 	const ours = pid === process.pid;
 	if (ours ? heldRuns.has(String(holder?.runId)) : alive(pid))
 		throw new Error(
-			`Refusing: another gate invocation (pid ${pid}, run ${String(holder?.runId)}) holds ${path}; if that pid is no gate invocation, remove the lock`,
+			`Refusing: another eval invocation (pid ${pid}, run ${String(holder?.runId)}) holds ${path}; if that pid is no eval invocation, remove the lock`,
 		);
 }
 
@@ -568,7 +568,7 @@ export function holdLock(
 		}
 	};
 	const tookOver = () =>
-		new Error(`Refusing: another gate invocation took the gate lock ${path}`);
+		new Error(`Refusing: another eval invocation took the eval lock ${path}`);
 	try {
 		if (!take()) {
 			const first = read();
@@ -581,7 +581,7 @@ export function holdLock(
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 				throw new Error(
-					`Refusing: another gate invocation is taking over the gate lock ${path} (${guard}); it is stale if no gate invocation runs and its pid is gone, and may then be removed`,
+					`Refusing: another eval invocation is taking over the eval lock ${path} (${guard}); it is stale if no eval invocation runs and its pid is gone, and may then be removed`,
 				);
 			}
 			try {
@@ -623,7 +623,7 @@ function checkValidation(only: string[] | undefined): void {
 			only.length === trials.length)
 	) {
 		throw new Error(
-			`validation needs distinct gate trials (${trials.join(", ")}), fewer than all six, not "${only.join(",")}"`,
+			`validation needs distinct suite trials (${trials.join(", ")}), fewer than all six, not "${only.join(",")}"`,
 		);
 	}
 }

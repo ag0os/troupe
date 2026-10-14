@@ -60,7 +60,14 @@ const HOST = [
 // stays one path token. The slug marker continues a token too, so a host
 // path holding the home slug is still redacted whole.
 const CHAR = String.raw`(?:[\p{L}\p{M}\p{N}._@%+=~-]|\\u[0-9a-fA-F]{4}|\[redacted-home\])`;
-const TOKEN = new RegExp(String.raw`^(?:${CHAR}|/)`, "u");
+// A separator: a slash after any run of backslashes, as a tool that escapes
+// slashes prints it (`\/`) and as each JSON layer around that output stores
+// it (`\\/`, ...).
+const SLASH = String.raw`\\*\/`;
+// A leading separator starts its whole backslash run, never inside it, so
+// matching stays linear in the run's length.
+const RUN_START = String.raw`(?<!\\)`;
+const TOKEN = new RegExp(`^(?:${CHAR}|${SLASH})`, "u");
 // After a prefix, a path continues on any of these.
 const CONTINUES = /^(?:[\p{L}\p{M}\p{N}._-]|\\u[0-9a-fA-F]{4})/u;
 // A JSON escape directly before a token: `\n`, `\t`, `\b`, `\f` and the like,
@@ -70,7 +77,7 @@ const AFTER_ESCAPE = String.raw`(?<=\\[nrtbf"])|(?<=\\u[0-9a-fA-F]{4})`;
 // An absolute path starts after a non-path character, or right after a JSON
 // escape, so paths inside encoded strings are found too.
 const PATH = new RegExp(
-	String.raw`(?:(?<![A-Za-z0-9._~/@%+=-])|${AFTER_ESCAPE})\/${CHAR}+(?:\/${CHAR}*)*`,
+	`(?:(?<![A-Za-z0-9._~/@%+=-])|${AFTER_ESCAPE})${RUN_START}${SLASH}${CHAR}+(?:${SLASH}${CHAR}*)*`,
 	"gu",
 );
 const EMAIL = new RegExp(
@@ -106,16 +113,25 @@ export interface RedactionContext {
 
 type Span = [number, number];
 
-/** Occurrences of `prefix` that end at a path boundary, extended over the rest of the path token. */
+/**
+ * Occurrences of `prefix`, each slash also matched after any run of
+ * backslashes, that end at a path boundary, extended over the rest of the
+ * path token.
+ */
 function occurrences(text: string, prefix: string): Span[] {
 	const spans: Span[] = [];
 	if (!prefix || prefix === "/") return spans;
-	for (
-		let at = text.indexOf(prefix);
-		at >= 0;
-		at = text.indexOf(prefix, at + 1)
-	) {
-		let end = at + prefix.length;
+	const pattern = new RegExp(
+		RUN_START +
+			prefix
+				.split("/")
+				.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+				.join(SLASH),
+		"g",
+	);
+	for (const found of text.matchAll(pattern)) {
+		const at = found.index;
+		let end = at + found[0].length;
 		if (CONTINUES.test(text.slice(end, end + 6))) continue;
 		// The longest token piece is the slug marker.
 		for (
@@ -132,7 +148,10 @@ function occurrences(text: string, prefix: string): Span[] {
 const overlaps = (spans: Span[], [a, b]: Span) =>
 	spans.some(([c, d]) => a < d && c < b);
 
-/** Spellings of a path: as given and as `ensure_ascii` JSON writes it. */
+/**
+ * Spellings of a path: as given and as `ensure_ascii` JSON writes it.
+ * `occurrences` also matches each with its slashes escaped at any depth.
+ */
 const spelled = (path: string) => [...new Set([path, asciiEscaped(path)])];
 
 /**
@@ -233,7 +252,8 @@ function redactOnce(
 	for (const match of text.matchAll(PATH)) {
 		const span: Span = [match.index, match.index + match[0].length];
 		if (overlaps(kept, span) || overlaps(spans(), span)) continue;
-		if (HOST.some((prefix) => `${match[0]}/`.startsWith(prefix)))
+		const path = match[0].replace(/\\+\//g, "/");
+		if (HOST.some((prefix) => `${path}/`.startsWith(prefix)))
 			redacted.push([...span, REDACTED]);
 	}
 	// The account name as the owner or group of a long listing (`ls -l`).

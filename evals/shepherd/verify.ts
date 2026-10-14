@@ -1,19 +1,25 @@
 /**
- * The CI gate (spec 7). It lists the paths a PR changed since the merge base
- * of its base and head (7.2); when any is gated (7.3), it recomputes the
- * source and evaluation identities of the checked-out PR head, opens only
- * the result for that exact source hash, and verifies it (7.4): schema,
- * identities and manifests, policy, provenance, hash-matching evidence,
- * mechanical checks recomputed from the archived artifacts, and the derived
- * aggregate. Revision and both dirty flags are reported, never rejected.
- * It never reads `validation/` or any other result file, runs no model and
- * needs no model credentials.
+ * The informational CI check (spec 7, as the on-demand shape amends it). It
+ * lists the paths a PR changed since the merge base of its base and head
+ * (7.2); when any is gated (7.3), it recomputes the source and evaluation
+ * identities of the checked-out PR head and opens only the result for that
+ * exact source hash. A missing result is a notice, naming the newest
+ * committed result. A stale one, recording another evaluation identity, is
+ * a notice too once its record's integrity checks. A current one is
+ * verified in full (7.4): schema, identities and manifests, policy,
+ * provenance, hash-matching evidence, mechanical checks recomputed from the
+ * archived artifacts, and the derived aggregate. Only a result that does
+ * not verify, or a check that cannot be decided, fails the job; a verified
+ * result's outcome, blocked included, is reported. Revision and both dirty flags are reported, never rejected. It
+ * never reads `validation/`, reads other results only to name the newest,
+ * runs no model and needs no model credentials.
  *
  *   bun evals/shepherd/verify.ts --base <revision> --head <revision>
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+	appendFileSync,
 	lstatSync,
 	mkdtempSync,
 	readFileSync,
@@ -44,7 +50,9 @@ import {
 	evaluationIdentity,
 } from "./identity";
 import {
+	type AggregateOutcome,
 	type Attempt,
+	type AttemptKind,
 	deriveAggregate,
 	deriveTrial,
 	frozenVoid,
@@ -52,6 +60,7 @@ import {
 	policyHash,
 	type Result,
 	type Rubric,
+	type TrialOutcome,
 	validateResult,
 } from "./schema";
 import {
@@ -95,7 +104,7 @@ export interface ChangedPaths {
 	paths: string[];
 }
 
-/** A Git failure that leaves the gate undecided: it fails closed. */
+/** A Git failure that leaves the check undecided: it fails closed. */
 export class GateError extends Error {
 	override name = "GateError";
 }
@@ -180,10 +189,34 @@ export function changedPaths(
 }
 
 export interface Verification {
+	/** Whether a result for the tree's source hash exists. */
+	found: boolean;
+	/** Whether that result verifies; its outcome, blocked included, does not matter. */
 	ok: boolean;
 	problems: string[];
 	/** Reported provenance: revisions, dirty flags, untracked entries, outcomes. */
 	notes: string[];
+	/** The verified result's derived outcome, set only when it verifies. */
+	outcome?: VerifiedOutcome;
+	/**
+	 * Set when the result records another evaluation identity than the tree's.
+	 * Only its record's integrity is then checked, and it is not verified;
+	 * `note` is the notice that says so.
+	 */
+	stale?: { recorded: string; current: string; note: string };
+}
+
+export interface VerifiedOutcome {
+	aggregate: AggregateOutcome;
+	trials: {
+		trial: string;
+		outcome: TrialOutcome;
+		attempts: {
+			ordinal: number;
+			kind: AttemptKind;
+			musts: { id: string; outcome: string }[];
+		}[];
+	}[];
 }
 
 export interface VerifyOptions {
@@ -680,6 +713,82 @@ interface PolicyFile {
 	scorer: { family: string; model: string; effort: string };
 }
 
+/** A relative path with no empty, `.` or `..` part, no backslash and no drive. */
+const plainRelative = (path: unknown): path is string =>
+	typeof path === "string" &&
+	path.length > 0 &&
+	!path.startsWith("/") &&
+	!path.includes("\\") &&
+	!/^[A-Za-z]:/.test(path) &&
+	!path.split("/").some((part) => part === "" || part === "." || part === "..");
+
+/**
+ * The integrity of a stale result this tree's schema cannot read, from its
+ * raw JSON: its source hash is the tree's, and every attempt's evidence
+ * sits in its own directory under this source hash's artifacts with its
+ * recorded length and SHA-256. Anything else in it is unchecked; evidence
+ * whose shape cannot be read is a problem.
+ */
+function checkUnreadable(
+	value: unknown,
+	current: string,
+	evalsDir: string,
+	hex: string,
+	resultPath: string,
+	report: (message: string) => void,
+): void {
+	type Raw = Record<string, unknown> | undefined;
+	const record = value as Raw;
+	const recordedSource = (record?.source as Raw)?.hash;
+	if (recordedSource !== current)
+		report(
+			`${resultPath} records source ${String(recordedSource)}, not ${current}`,
+		);
+	const trials = (record?.evaluation as Raw)?.trials;
+	if (!Array.isArray(trials)) {
+		report(`${resultPath}: its trials cannot be read to check its evidence`);
+		return;
+	}
+	const dirs = new Set<string>();
+	for (const trial of trials as Raw[]) {
+		const attempts = trial?.attempts;
+		if (typeof trial?.trial !== "string" || !Array.isArray(attempts)) {
+			report(`${resultPath}: a trial cannot be read to check its evidence`);
+			continue;
+		}
+		for (const attempt of attempts as Raw[]) {
+			const where = `${trial.trial} attempt ${String(attempt?.ordinal)}`;
+			const artifacts = attempt?.artifacts;
+			if (
+				!plainRelative(trial.trial) ||
+				!plainRelative(attempt?.runId) ||
+				!Number.isInteger(attempt?.ordinal) ||
+				!plainRelative(attempt?.artifactDir) ||
+				!Array.isArray(artifacts) ||
+				!artifacts.every(
+					(a: Raw) =>
+						plainRelative(a?.path) &&
+						typeof a?.sha256 === "string" &&
+						typeof a?.bytes === "number",
+				)
+			) {
+				report(`${where}: its evidence cannot be read`);
+				continue;
+			}
+			const dir = attempt?.artifactDir as string;
+			if (dirs.has(dir)) report(`${where}: shares artifact directory ${dir}`);
+			dirs.add(dir);
+			checkEvidence(
+				evalsDir,
+				hex,
+				{ ...attempt, trial: trial.trial, scoring: null } as unknown as Attempt,
+				where,
+				report,
+			);
+		}
+	}
+}
+
 /** Verify the checked-out tree at `root` against its committed result (7.4). */
 export function verifyResults(
 	root: string,
@@ -694,7 +803,15 @@ export function verifyResults(
 	const problems: string[] = [];
 	const notes: string[] = [];
 	const report = (message: string) => problems.push(message);
-	const done = () => ({ ok: problems.length === 0, problems, notes });
+	let found = false;
+	let stale: Verification["stale"];
+	const done = (): Verification => ({
+		found,
+		ok: found && !stale && problems.length === 0,
+		problems,
+		notes,
+		...(stale ? { stale } : {}),
+	});
 
 	let source: SourceManifest;
 	let identity: EvaluationIdentity;
@@ -716,11 +833,12 @@ export function verifyResults(
 	notes.push(`Source ${source.source}; evaluation identity ${identity.hash}.`);
 	const present = lstatSync(join(root, resultPath), { throwIfNoEntry: false });
 	if (!present) {
-		report(
-			`no result for source ${source.source}: expected ${resultPath}. Run bun run evals:shepherd and commit the result with its evidence.`,
+		notes.push(
+			`No result for source ${source.source}: expected ${resultPath}.`,
 		);
 		return done();
 	}
+	found = true;
 	if (!regularFile(root, resultPath)) {
 		report(`${resultPath} is not a regular file reached without symlinks`);
 		return done();
@@ -734,7 +852,24 @@ export function verifyResults(
 	}
 	const invalid = validateResult(value, rubric);
 	if (invalid.length > 0) {
-		report(`${resultPath} is not a valid result:\n  ${invalid.join("\n  ")}`);
+		// An honest result an earlier schema wrote is stale, not broken: when
+		// it records another identity, only what needs no schema is checked.
+		const recorded = (value as { evaluation?: { hash?: unknown } } | null)
+			?.evaluation?.hash;
+		if (
+			typeof recorded === "string" &&
+			/^sha256:[0-9a-f]{64}$/.test(recorded) &&
+			recorded !== identity.hash
+		) {
+			checkUnreadable(value, source.source, evalsDir, hex, resultPath, report);
+			if (problems.length > 0) return done();
+			const note = `Result ${resultPath} is out of date and this tree's schema cannot read it, so it was not verified: it records evaluation identity ${recorded}, and this tree computes ${identity.hash}.`;
+			stale = { recorded, current: identity.hash, note };
+			notes.push(note);
+			return done();
+		}
+		for (const entry of invalid)
+			report(`${resultPath} is not a valid result: ${entry}`);
 		return done();
 	}
 	const result = value as Result;
@@ -753,34 +888,40 @@ export function verifyResults(
 		notes.push(
 			`Evaluated with untracked source entries, compared by content: ${untracked.join(", ")}.`,
 		);
+	if (problems.length > 0) return done();
+	// A stale result is out of date, not broken: only checks that need no
+	// part of this tree's evaluation implementation run on it (its schema
+	// and derived outcomes, manifest, version lines, recheck and void flags,
+	// artifact directories and evidence hashes). The rubric, policy, scorer,
+	// session, scorer output and mechanical re-derivations would judge it by
+	// an implementation it was not evaluated with.
 	if (evaluation.hash !== identity.hash) {
 		const earlier = result.history.some((e) => e.hash === identity.hash)
-			? "; that identity is only in the result's history"
+			? " This tree's identity is in the result's history."
 			: "";
-		report(
-			`stale result: evaluated by evaluation identity ${evaluation.hash}, but the tree's is ${identity.hash}${earlier}. The harness, rubric, policy or checkers changed; evaluate again.`,
-		);
+		const note = `Result ${resultPath} is out of date and was not verified: it records evaluation identity ${evaluation.hash}, and this tree computes ${identity.hash}.${earlier} Its recorded outcome is ${result.outcome}.`;
+		stale = { recorded: evaluation.hash, current: identity.hash, note };
+		notes.push(note);
+	} else {
+		if (
+			evaluation.rubricSha256 !==
+			`sha256:${sha256(readFileSync(join(evalsDir, "rubric.json")))}`
+		)
+			report(
+				`the recorded rubric hash ${evaluation.rubricSha256} is not the tree's rubric.json`,
+			);
+		if (policyHash(evaluation.policy) !== policyHash(policy))
+			report("the recorded policy differs from the tree's policy.json");
+		const scorer = evaluation.scorer;
+		if (
+			scorer.family !== policy.scorer.family ||
+			scorer.model !== policy.scorer.model ||
+			scorer.effort !== policy.scorer.effort
+		)
+			report(
+				`the recorded scorer ${scorer.family} ${scorer.model} ${scorer.effort} is not the policy's`,
+			);
 	}
-	if (problems.length > 0) return done();
-
-	if (
-		evaluation.rubricSha256 !==
-		`sha256:${sha256(readFileSync(join(evalsDir, "rubric.json")))}`
-	)
-		report(
-			`the recorded rubric hash ${evaluation.rubricSha256} is not the tree's rubric.json`,
-		);
-	if (policyHash(evaluation.policy) !== policyHash(policy))
-		report("the recorded policy differs from the tree's policy.json");
-	const scorer = evaluation.scorer;
-	if (
-		scorer.family !== policy.scorer.family ||
-		scorer.model !== policy.scorer.model ||
-		scorer.effort !== policy.scorer.effort
-	)
-		report(
-			`the recorded scorer ${scorer.family} ${scorer.model} ${scorer.effort} is not the policy's`,
-		);
 
 	const unrechecked = new Set<string>();
 	for (const { runId, build, recheck } of evaluation.invocations) {
@@ -810,6 +951,7 @@ export function verifyResults(
 				report(`${where}: shares artifact directory ${attempt.artifactDir}`);
 			dirs.add(attempt.artifactDir);
 			const verified = checkEvidence(evalsDir, hex, attempt, where, report);
+			if (stale) continue;
 			checkPolicy(attempt, verified ?? new Map(), policy, where, report);
 			if (!verified) continue;
 			checkValidity(attempt, verified, rechecked, checks, where, report);
@@ -818,42 +960,194 @@ export function verifyResults(
 		}
 	}
 
-	const outcomes = evaluation.trials.map((t) => ({
+	// The outcome rules stay the gate's; a blocked result verifies and is reported.
+	const trials = evaluation.trials.map((t) => ({
 		trial: t.trial,
 		outcome: deriveTrial(t.attempts),
+		attempts: t.attempts.map((a) => ({
+			ordinal: a.ordinal,
+			kind: a.kind,
+			musts: a.musts.map((m) => ({ id: m.id, outcome: m.outcome })),
+		})),
 	}));
-	const aggregate = deriveAggregate(outcomes.map((o) => o.outcome));
-	notes.push(
-		`Outcome ${aggregate}: ${outcomes.map((o) => `${o.trial} ${o.outcome}`).join(", ")}.`,
-	);
-	if (aggregate === "blocked") {
-		report(
-			`the result is blocked: ${outcomes
-				.filter((o) => o.outcome !== "pass" && o.outcome !== "flaky-pass")
-				.map((o) => `${o.trial} ${o.outcome}`)
-				.join(", ")}`,
+	const aggregate = deriveAggregate(trials.map((t) => t.outcome));
+	if (!stale)
+		notes.push(
+			`Outcome ${aggregate}: ${trials.map((t) => `${t.trial} ${t.outcome}`).join(", ")}.`,
 		);
-	}
-	return done();
+	const verification = done();
+	if (verification.ok) verification.outcome = { aggregate, trials };
+	return verification;
 }
 
-/** The whole CI step: changed paths, then verification when any is gated. */
+/** One line per attempt that records Musts: `<trial> attempt <n>: <id> <outcome>, ...`. */
+function mustLines(outcome: VerifiedOutcome): string[] {
+	return outcome.trials.flatMap((t) =>
+		t.attempts
+			.filter((a) => a.musts.length > 0)
+			.map(
+				(a) =>
+					`${t.trial} attempt ${a.ordinal}: ${a.musts.map((m) => `${m.id} ${m.outcome}`).join(", ")}`,
+			),
+	);
+}
+
+const RESULT_FILE = new RegExp(
+	`^${EVALUATION_DIR}/results/[0-9a-f]{64}\\.json$`,
+);
+
+/**
+ * The newest committed result at the checked-out `HEAD`: among the result
+ * files still present there, the one with the latest commit time over the
+ * commits reachable from `HEAD` that added or changed it, ties going to the
+ * first in `git log --topo-order`. A merge does not count as touching what
+ * it brings in, so a branch's older result merged late is not the newest.
+ * Its revision is its last invocation's build revision and its outcome the
+ * one it records; neither is verified.
+ */
+export function newestCommittedResult(
+	root: string,
+	options: { git?: GitRunner } = {},
+): string {
+	const git = options.git ?? runGit;
+	const log = git(
+		[
+			"log",
+			"--topo-order",
+			"--diff-filter=AM",
+			"--name-only",
+			"--format=%x00%ct",
+			"HEAD",
+			"--",
+			`${EVALUATION_DIR}/results/`,
+		],
+		root,
+	);
+	if (log.code !== 0)
+		return `The newest committed result cannot be listed: ${printable(log.stderr.trim())}`;
+	const latest = new Map<string, number>();
+	for (const commit of decode(log.stdout).split("\0").slice(1)) {
+		const [time = "", ...paths] = commit.split("\n");
+		for (const path of paths) {
+			if (!RESULT_FILE.test(path)) continue;
+			latest.set(path, Math.max(latest.get(path) ?? 0, Number(time)));
+		}
+	}
+	// Map order is first appearance in topological order; the sort is stable.
+	const candidates = [...latest].sort((a, b) => b[1] - a[1]);
+	for (const [path] of candidates) {
+		const shown = git(["show", `HEAD:${path}`], root);
+		if (shown.code !== 0) continue;
+		const name = `Newest committed result: ${path}`;
+		try {
+			const value = JSON.parse(decode(shown.stdout));
+			const revision =
+				value?.evaluation?.invocations?.at?.(-1)?.build?.revision;
+			const outcome = value?.outcome;
+			// Printed in CI: only a revision and an outcome of the schema's shape.
+			if (
+				/^[0-9a-f]{40}$/.test(String(revision)) &&
+				["pass", "flaky-pass", "blocked"].includes(outcome)
+			)
+				return `${name}, revision ${revision}, outcome ${outcome} (recorded, not verified against this tree).`;
+		} catch {}
+		return `${name}, which cannot be read as a result.`;
+	}
+	return "No result is committed.";
+}
+
+/**
+ * `text` with every control character escaped (C0, DEL, C1 and the Unicode
+ * line and paragraph separators), so a record string or path name printed
+ * in CI stays on its line.
+ */
+export function printable(text: string): string {
+	let out = "";
+	for (const c of text) {
+		const n = c.codePointAt(0) ?? 0;
+		if (c === "\n") out += "\\n";
+		else if (c === "\r") out += "\\r";
+		else if (c === "\t") out += "\\t";
+		else if (
+			n < 0x20 ||
+			(n >= 0x7f && n <= 0x9f) ||
+			n === 0x2028 ||
+			n === 0x2029
+		)
+			out += `\\u${n.toString(16).padStart(4, "0")}`;
+		else out += c;
+	}
+	return out;
+}
+
+export interface CheckOutcome {
+	code: number;
+	/** Printed to stdout. */
+	lines: string[];
+	/** Markdown for the GitHub job summary. */
+	summary: string[];
+	/** One line for a GitHub notice when no result was found. */
+	notice?: string;
+}
+
+/**
+ * The outcome of the check: `lines` so far, then the headline and its
+ * detail. Every line may hold record strings or path names: each is made
+ * printable, and the summary's fence is longer than any backtick run in it.
+ */
+export function checkOutcome(
+	lines: string[],
+	code: number,
+	headline: string,
+	detail: string[],
+	notice?: string,
+): CheckOutcome {
+	const shown = detail.map(printable);
+	const longest = Math.max(
+		2,
+		...shown.flatMap((line) =>
+			[...line.matchAll(/`+/g)].map((m) => m[0].length),
+		),
+	);
+	const fence = "`".repeat(longest + 1);
+	const summary = ["## Shepherd evals", "", printable(headline)];
+	if (shown.length > 0) summary.push("", `${fence}text`, ...shown, fence);
+	return {
+		code,
+		lines: [...lines, headline, ...detail].map(printable),
+		summary,
+		...(notice ? { notice: printable(notice) } : {}),
+	};
+}
+
+/**
+ * The whole CI step: changed paths, then verification when any is gated.
+ * It fails only when the check cannot be decided or a result for the head's
+ * source hash does not verify.
+ */
 export function ciGate(
 	root: string,
 	base: string,
 	head: string,
 	options: VerifyOptions = {},
-): { code: number; lines: string[] } {
+): CheckOutcome {
 	const git = options.git ?? runGit;
 	const lines: string[] = [];
+	const finish = (
+		code: number,
+		headline: string,
+		detail: string[],
+		notice?: string,
+	): CheckOutcome => checkOutcome(lines, code, headline, detail, notice);
 	try {
 		const changed = changedPaths(root, base, head, { git });
 		const checkedOut = resolveCommit(git, root, "HEAD", "checked-out");
 		if (checkedOut !== changed.head) {
-			lines.push(
-				`Shepherd evals gate failed closed: the checkout ${checkedOut} is not the PR head ${changed.head}. Check out the PR head, not a merge checkout.`,
+			return finish(
+				1,
+				`Shepherd evals check failed closed: the checkout ${checkedOut} is not the PR head ${changed.head}. Check out the PR head, not a merge checkout.`,
+				[],
 			);
-			return { code: 1, lines };
 		}
 		const compared = `Compared head ${changed.head} with ${changed.mergeBase}, the merge base with base ${changed.base}.`;
 		const isGated = options.isGated ?? isGatedPath;
@@ -861,11 +1155,11 @@ export function ciGate(
 			(path) => isGated(path) || ALWAYS_GATED.includes(path),
 		);
 		if (gated.length === 0) {
-			lines.push(
+			return finish(
+				0,
 				`Shepherd evals not required: no gated path changed (${ADOPTED_GATED_PATHS} policy).`,
-				compared,
+				[compared],
 			);
-			return { code: 0, lines };
 		}
 		lines.push(
 			compared,
@@ -873,22 +1167,73 @@ export function ciGate(
 			...gated.map((path) => `  ${path}`),
 		);
 		const verification = verifyResults(root, options);
-		lines.push(...verification.notes);
-		if (verification.ok) {
-			lines.push("Shepherd evals verified.");
-			return { code: 0, lines };
+		if (verification.problems.length > 0) {
+			const headline = verification.found
+				? "Shepherd evals result does not verify:"
+				: "Shepherd evals check failed closed:";
+			return finish(1, headline, [
+				...verification.notes,
+				...verification.problems.map((problem) => `  ${problem}`),
+			]);
 		}
-		lines.push(
-			"Shepherd evals failed:",
-			...verification.problems.map((problem) => `  ${problem}`),
+		if (verification.stale) {
+			return finish(
+				0,
+				"Shepherd evals: the result for this source is out of date and was not verified; the check is informational and the suite runs on demand (docs/SHEPHERD-EVALS.md).",
+				verification.notes,
+				verification.stale.note,
+			);
+		}
+		if (!verification.outcome) {
+			const missing = verification.notes.at(-1) ?? "No result.";
+			const newest = newestCommittedResult(root, { git });
+			return finish(
+				0,
+				"Shepherd evals: no result for this source; the check is informational and the suite runs on demand (docs/SHEPHERD-EVALS.md).",
+				[...verification.notes, newest],
+				`${missing} ${newest}`,
+			);
+		}
+		return finish(
+			0,
+			`Shepherd evals result verified: outcome ${verification.outcome.aggregate}.`,
+			[...verification.notes, ...mustLines(verification.outcome)],
 		);
-		return { code: 1, lines };
 	} catch (error) {
-		lines.push(
-			`Shepherd evals gate failed closed: ${(error as Error).message}`,
+		return finish(
+			1,
+			`Shepherd evals check failed closed: ${(error as Error).message}`,
+			[],
 		);
-		return { code: 1, lines };
 	}
+}
+
+/** Escape a GitHub workflow command's message. */
+const commandData = (value: string) =>
+	value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+
+/**
+ * Append the outcome's job summary to `GITHUB_STEP_SUMMARY` when it is set,
+ * and return the lines to print. Under Actions they run between
+ * `::stop-commands::` and its random token, so no printed line is read as a
+ * workflow command, and the notice, when there is one, follows.
+ */
+export function githubReport(
+	outcome: CheckOutcome,
+	env: Record<string, string | undefined>,
+): string[] {
+	if (env.GITHUB_STEP_SUMMARY)
+		appendFileSync(env.GITHUB_STEP_SUMMARY, `${outcome.summary.join("\n")}\n`);
+	if (env.GITHUB_ACTIONS !== "true") return outcome.lines;
+	const token = randomBytes(16).toString("hex");
+	return [
+		`::stop-commands::${token}`,
+		...outcome.lines,
+		`::${token}::`,
+		...(outcome.notice
+			? [`::notice title=Shepherd evals::${commandData(outcome.notice)}`]
+			: []),
+	];
 }
 
 if (import.meta.main) {
@@ -906,6 +1251,6 @@ if (import.meta.main) {
 		process.exit(2);
 	}
 	const outcome = ciGate(resolve(import.meta.dir, "../.."), base, head);
-	for (const line of outcome.lines) console.log(line);
+	for (const line of githubReport(outcome, process.env)) console.log(line);
 	process.exit(outcome.code);
 }

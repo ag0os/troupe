@@ -316,4 +316,4 @@ The Claude child receives neither a framework-root variable nor an inherited pro
 
 ## Evals
 
-Changes to Shepherd's source, or to its evaluation harness and policy, need a passing behavioural eval result before they merge. `bun run evals:shepherd` builds the current tree into scratch, runs six synthetic trials and writes the result for the exact source hash, which you commit with its evidence; CI verifies it. See [SHEPHERD-EVALS.md](SHEPHERD-EVALS.md).
+Shepherd evals run on demand to show whether Shepherd's behaviour is heading the right way; no change needs a result before it merges. `bun run evals:shepherd` builds the current tree into scratch, runs six synthetic trials and writes the result for the exact source hash, which you commit with its evidence. An informational CI check reports a committed result for a pull request's source and fails only on a record that does not verify. See [SHEPHERD-EVALS.md](SHEPHERD-EVALS.md).

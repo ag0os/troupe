@@ -747,7 +747,7 @@ export function parseOptions(argv: string[]) {
 	}
 	if (values.trials !== undefined && !values.validation) {
 		throw new Error(
-			"--trials needs --validation; the gate always runs all six",
+			"--trials needs --validation; a full run always runs all six",
 		);
 	}
 	if (values.validation && values.check) {
@@ -765,12 +765,12 @@ export function parseOptions(argv: string[]) {
 			new Set(validation).size !== validation.length
 		) {
 			throw new Error(
-				`--trials takes distinct gate trials (${trials.join(", ")}), not "${values.trials}"`,
+				`--trials takes distinct suite trials (${trials.join(", ")}), not "${values.trials}"`,
 			);
 		}
 		if (validation.length === trials.length) {
 			throw new Error(
-				"--trials may not name all six: validation runs only the relevant trials, and the gate runs all six",
+				"--trials may not name all six: validation runs only the relevant trials, and a full run runs all six",
 			);
 		}
 	}

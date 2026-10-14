@@ -515,8 +515,10 @@ describe("regression validation options (8.5)", () => {
 		expect(parseOptions([]).validation).toBeUndefined();
 	});
 
-	test("the gate always runs all six: --trials needs --validation", () => {
-		expect(() => parseOptions(["--trials", "D"])).toThrow(/--validation/);
+	test("a full run always runs all six: --trials needs --validation", () => {
+		expect(() => parseOptions(["--trials", "D"])).toThrow(
+			"--trials needs --validation; a full run always runs all six",
+		);
 		expect(() => parseOptions(["--validation"])).toThrow(/--trials/);
 	});
 

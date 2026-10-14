@@ -35,11 +35,12 @@ jobs:
       - name: Tests
         run: bun test
 
-  # The Shepherd evals gate (docs/SHEPHERD-EVALS.md). It runs on every pull
-  # request so the required status always appears, and it runs no model and
-  # needs no credentials.
+  # The informational Shepherd evals check (docs/SHEPHERD-EVALS.md). Evals
+  # run on demand, so a missing or blocked result never fails a PR; only a
+  # committed result for the head's source hash that does not verify does.
+  # It runs no model and needs no credentials.
   shepherd-evals:
-    name: shepherd-evals
+    name: shepherd-evals (informational)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +68,7 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Verify Shepherd evals
+      - name: Check the Shepherd evals result
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

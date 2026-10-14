@@ -14,10 +14,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readWorktreeSource } from "../../scripts/shepherd-source";
+import {
+	createGitRunner,
+	readWorktreeSource,
+} from "../../scripts/shepherd-source";
 import {
 	git,
 	initShepherdRepo,
+	TEST_GIT_ENV,
 	testGit,
 	writeAt,
 } from "../../scripts/shepherd-source-fixture";
@@ -56,7 +60,9 @@ import {
 import {
 	ALWAYS_GATED,
 	changedPaths,
+	checkOutcome,
 	ciGate,
+	githubReport,
 	type VerifyOptions,
 	verifyResults,
 } from "./verify";
@@ -520,12 +526,13 @@ describe("CI gate (7.4, 7.5)", () => {
 		expect(text(outcome.lines)).toContain("Shepherd evals not required");
 	});
 
-	test("a gated change without a result fails", () => {
+	test("a gated change without a result succeeds with a notice naming the expected file", () => {
 		const base = head();
 		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 2;\n");
 		const tip = commitAll("source");
 		const outcome = ciGate(root, base, tip, options());
-		expect(outcome.code).toBe(1);
+		expect(outcome.code).toBe(0);
+		expect(text(outcome.lines)).toMatch(/no result/i);
 		const hex = readWorktreeSource(root, { git: testGit }).source.slice(7);
 		expect(text(outcome.lines)).toContain(`results/${hex}.json`);
 		expect(text(outcome.lines)).toContain("lib/shepherd/tool.ts");
@@ -545,7 +552,7 @@ describe("CI gate (7.4, 7.5)", () => {
 		expect(out).toMatch(/revision=[0-9a-f]{40} dirty=false sourceDirty=false/);
 	});
 
-	test("a stale result for an earlier source fails: only the exact source hash counts", () => {
+	test("a result for an earlier source is not this tree's: only the exact source hash counts", () => {
 		const base = head();
 		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 2;\n");
 		commitAll("source");
@@ -554,8 +561,9 @@ describe("CI gate (7.4, 7.5)", () => {
 		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 3;\n");
 		const tip = commitAll("source changed after evaluation");
 		const outcome = ciGate(root, base, tip, options());
-		expect(outcome.code).toBe(1);
+		expect(outcome.code).toBe(0);
 		expect(text(outcome.lines)).toMatch(/no result/i);
+		expect(text(outcome.lines)).not.toContain("result verified");
 	});
 
 	test("the checkout must be the PR head, not a merge checkout", () => {
@@ -579,10 +587,16 @@ describe("verification (7.4)", () => {
 	const verify = (extra: VerifyOptions = {}) =>
 		verifyResults(root, options(extra));
 
-	test("a missing result fails and names the exact file", () => {
+	test("a missing result is found missing, not a problem, and names the exact file", () => {
 		const outcome = verify();
-		expect(outcome.ok).toBe(false);
-		expect(text(outcome.problems)).toMatch(/no result/i);
+		expect([outcome.found, outcome.ok, outcome.problems]).toEqual([
+			false,
+			false,
+			[],
+		]);
+		const hex = readWorktreeSource(root, { git: testGit }).source.slice(7);
+		expect(text(outcome.notes)).toMatch(/no result/i);
+		expect(text(outcome.notes)).toContain(`results/${hex}.json`);
 	});
 
 	test("a matching result passes", () => {
@@ -614,27 +628,36 @@ describe("verification (7.4)", () => {
 		expect(outcome.problems).toEqual([]);
 	});
 
-	test("a rubric change makes the result stale", () => {
-		writeResult();
+	test("a rubric change makes the result stale: not verified, not a problem", () => {
+		const { value } = writeResult();
 		writeAt(
 			root,
 			"evals/shepherd/rubric.json",
 			`${readFileSync(join(root, "evals/shepherd/rubric.json"), "utf8")}\n`,
 		);
 		const outcome = verify();
-		expect(outcome.ok).toBe(false);
-		expect(text(outcome.problems)).toMatch(/evaluation identity/);
+		expect([outcome.ok, outcome.problems, outcome.outcome]).toEqual([
+			false,
+			[],
+			undefined,
+		]);
+		expect(outcome.stale).toMatchObject({
+			recorded: value.evaluation.hash,
+			current: evaluationIdentity(root, { git: testGit }).hash,
+		});
 	});
 
-	test("a policy change makes the result stale", () => {
+	test("a policy change makes the result stale: not verified, not a problem", () => {
 		writeResult();
 		const path = join(root, "evals/shepherd/policy.json");
 		const policy = JSON.parse(readFileSync(path, "utf8"));
 		policy.subjectTimeoutSeconds = 600;
 		writeFileSync(path, JSON.stringify(policy));
 		const outcome = verify();
-		expect(outcome.ok).toBe(false);
-		expect(text(outcome.problems)).toMatch(/evaluation identity/);
+		expect([outcome.ok, outcome.problems]).toEqual([false, []]);
+		expect(outcome.stale?.current).toBe(
+			evaluationIdentity(root, { git: testGit }).hash,
+		);
 	});
 
 	test("a recorded rubric hash, policy or scorer that differs from the tree fails", () => {
@@ -697,7 +720,7 @@ describe("verification (7.4)", () => {
 		expect(text(verify().problems)).toMatch(/recheck/);
 	});
 
-	test("a forged aggregate status fails, and so does an honest blocked one", () => {
+	test("a forged aggregate status fails; an honest blocked one verifies and reads blocked", () => {
 		writeResult(
 			(value) => {
 				value.outcome = "pass";
@@ -710,8 +733,10 @@ describe("verification (7.4)", () => {
 		).toMatch(/does not match/);
 		writeResult(() => {}, result({ "G-neg.M2": "fail" }));
 		const blocked = verify({ checks: truthChecks({ "G-neg.M2": "fail" }) });
-		expect(blocked.ok).toBe(false);
-		expect(text(blocked.problems)).toMatch(/blocked/);
+		expect(blocked.problems).toEqual([]);
+		expect(blocked.ok).toBe(true);
+		expect(blocked.outcome?.aggregate).toBe("blocked");
+		expect(text(blocked.notes)).toMatch(/Outcome blocked: .*G-neg pending/);
 	});
 
 	test("missing and duplicate Musts fail", () => {
@@ -803,8 +828,12 @@ describe("verification (7.4)", () => {
 		writeAt(root, `${dir}/result.json`, readFileSync(path, "utf8"));
 		rmSync(path);
 		const outcome = verify();
-		expect(outcome.ok).toBe(false);
-		expect(text(outcome.problems)).toMatch(/no result/i);
+		expect([outcome.found, outcome.ok, outcome.problems]).toEqual([
+			false,
+			false,
+			[],
+		]);
+		expect(text(outcome.notes)).toMatch(/no result/i);
 	});
 
 	test("dirty builds are reported, not rejected", () => {
@@ -927,8 +956,10 @@ describe("fix round 1 (review-c4)", () => {
 				tip,
 				options({ isGated: () => false }),
 			);
-			expect([path, outcome.code]).toEqual([path, 1]);
+			expect([path, outcome.code]).toEqual([path, 0]);
+			expect(text(outcome.lines)).toContain(path);
 			expect(text(outcome.lines)).toMatch(/no result/);
+			expect(text(outcome.lines)).not.toContain("not required");
 		}
 	});
 
@@ -2314,5 +2345,603 @@ describe("G4 fix round 2: a resolved session's unexpected markers", () => {
 		expect(sessionValidity(log, X, "claude-opus-5-5")).toEqual([
 			"session: a tool result names unexpected binary /other",
 		]);
+	});
+});
+
+describe("fix round 4, H1: the CI check is informational", () => {
+	const blockedChecks = () => truthChecks({ "G-neg.M2": "fail" });
+	const sourceHash = () => readWorktreeSource(root, { git: testGit }).source;
+	const gatedChange = (value = 2) => {
+		writeAt(root, "lib/shepherd/tool.ts", `export const tool = ${value};\n`);
+		return commitAll(`source ${value}`);
+	};
+
+	test("1: no gated path changed succeeds as not required, in the job summary too", () => {
+		const base = head();
+		writeAt(root, "README.md", "changed\n");
+		const tip = commitAll("docs");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		expect(text(outcome.lines)).toContain("Shepherd evals not required");
+		expect(text(outcome.summary)).toContain("not required");
+		expect(outcome.notice).toBeUndefined();
+	});
+
+	test("2: a gated change without a result succeeds, naming the hash, when no result is committed", () => {
+		const base = head();
+		const tip = gatedChange();
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		const out = text(outcome.lines);
+		expect(out).toContain(`No result for source ${sourceHash()}`);
+		expect(out).toContain("No result is committed.");
+		expect(out).not.toMatch(/fail/i);
+		expect(outcome.notice).toContain(sourceHash());
+		expect(text(outcome.summary)).toContain(sourceHash());
+	});
+
+	test("2: the notice names the newest committed result, by commit order, with its revision and outcome", () => {
+		const base = head();
+		const first = gatedChange(2);
+		const older = writeResult(() => {}, result({ "G-neg.M2": "fail" }));
+		commitAll("older result");
+		const second = gatedChange(3);
+		const newer = writeResult();
+		commitAll("newer result");
+		let tip = gatedChange(4);
+		let out = text(ciGate(root, base, tip, options()).lines);
+		expect(out).toContain(
+			`Newest committed result: evals/shepherd/results/${newer.hex}.json, revision ${second}, outcome pass`,
+		);
+		// Republishing the older file makes it the newest change to results/.
+		writeAt(
+			root,
+			`evals/shepherd/results/${older.hex}.json`,
+			JSON.stringify(older.value),
+		);
+		commitAll("republish the older result");
+		tip = gatedChange(5);
+		const outcome = ciGate(root, base, tip, options());
+		out = text(outcome.lines);
+		expect(outcome.code).toBe(0);
+		expect(out).toContain(
+			`Newest committed result: evals/shepherd/results/${older.hex}.json, revision ${first}, outcome blocked`,
+		);
+		expect(out).toContain("recorded, not verified against this tree");
+		expect(outcome.notice).toContain(`revision ${first}, outcome blocked`);
+	});
+
+	test("2: an unreadable newest committed result is named and still succeeds; a deleted one is skipped", () => {
+		const base = head();
+		const forged = result();
+		forged.outcome = "pass\n::error::injected" as Result["outcome"];
+		writeAt(
+			root,
+			`evals/shepherd/results/${"f".repeat(64)}.json`,
+			JSON.stringify(forged),
+		);
+		commitAll("an older result with a forged outcome");
+		writeAt(root, `evals/shepherd/results/${"e".repeat(64)}.json`, "{\n");
+		commitAll("a broken older result");
+		const tip = gatedChange();
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		expect(text(outcome.lines)).toContain(
+			`Newest committed result: evals/shepherd/results/${"e".repeat(64)}.json, which cannot be read as a result`,
+		);
+		git(root, "rm", "-q", `evals/shepherd/results/${"e".repeat(64)}.json`);
+		const later = gatedChange(3);
+		const next = ciGate(root, base, later, options());
+		expect(text(next.lines)).toContain(
+			`Newest committed result: evals/shepherd/results/${"f".repeat(64)}.json, which cannot be read as a result`,
+		);
+		expect(text(next.lines)).not.toContain("::error::");
+	});
+
+	test("3: a verifying blocked result succeeds and prints its outcome and each Must", () => {
+		const base = head();
+		gatedChange();
+		const failed = (n: number) =>
+			behavioral("G-neg", "pass", n, { "G-neg.M2": "fail" });
+		writeResult(() => {}, result({}, { "G-neg": [failed(1), failed(2)] }));
+		const tip = commitAll("results");
+		const outcome = ciGate(
+			root,
+			base,
+			tip,
+			options({ checks: blockedChecks() }),
+		);
+		expect(outcome.code).toBe(0);
+		const out = text(outcome.lines);
+		expect(out).toContain("Shepherd evals result verified: outcome blocked.");
+		expect(out).toMatch(/G-neg fail/);
+		expect(out).toMatch(
+			/G-neg attempt 1: G-neg\.M1 pass, G-neg\.M2 fail, G-neg\.M3 pass/,
+		);
+		expect(out).toMatch(
+			/G-neg attempt 2: G-neg\.M1 pass, G-neg\.M2 fail, G-neg\.M3 pass/,
+		);
+		expect(out).toMatch(/A attempt 1: A\.M1 pass, A\.M2 pass/);
+		const summary = text(outcome.summary);
+		expect(summary).toContain("blocked");
+		expect(summary).toContain("G-neg.M2 fail");
+		expect(outcome.notice).toBeUndefined();
+	});
+
+	test("3: a verifying flaky pass succeeds and keeps the first failure in view", () => {
+		const base = head();
+		gatedChange();
+		const first = behavioral("G-neg", "pass", 1, { "G-neg.M3": "fail" });
+		writeResult(
+			() => {},
+			result({}, { "G-neg": [first, behavioral("G-neg", "pass", 2)] }),
+		);
+		const tip = commitAll("results");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		const out = text(outcome.lines);
+		expect(out).toContain("outcome flaky-pass");
+		expect(out).toMatch(/G-neg attempt 1: .*G-neg\.M3 fail/);
+		expect(out).toMatch(/G-neg attempt 2: .*G-neg\.M3 pass/);
+	});
+
+	test("4: a result that does not verify fails the job: forged, hand-edited, symlinked, evidence mismatch", () => {
+		const base = head();
+		gatedChange();
+		// The symlinked case comes last: a later writeResult would write through it.
+		const broken: [string, () => void, RegExp][] = [
+			[
+				"forged",
+				() =>
+					writeResult(
+						(value) => {
+							value.outcome = "pass";
+							value.evaluation.outcome = "pass";
+						},
+						result({ "G-neg.M2": "fail" }),
+					),
+				/does not match/,
+			],
+			[
+				"hand-edited",
+				() => {
+					const { value, path } = writeResult();
+					const must = value.evaluation.trials[0]?.attempts[0]?.musts[1];
+					if (must) must.rationale = "edited by hand";
+					writeFileSync(path, JSON.stringify(value));
+				},
+				/A attempt 1/,
+			],
+			[
+				"evidence mismatch",
+				() => {
+					const { value } = writeResult();
+					const dir = value.evaluation.trials[0]?.attempts[0]?.artifactDir;
+					writeFileSync(
+						join(root, "evals/shepherd", dir ?? "", "claude.jsonl"),
+						"tampered\n",
+					);
+				},
+				/claude\.jsonl does not match/,
+			],
+			[
+				"symlinked",
+				() => {
+					const { path, hex } = writeResult();
+					const moved = `evals/shepherd/validation/${hex}/run/result.json`;
+					writeAt(root, moved, readFileSync(path, "utf8"));
+					rmSync(path);
+					symlinkSync(`../validation/${hex}/run/result.json`, path);
+				},
+				/not a regular file/,
+			],
+		];
+		for (const [name, breakIt, problem] of broken) {
+			breakIt();
+			const tip = commitAll(`${name} result`);
+			const outcome = ciGate(root, base, tip, options());
+			expect([name, outcome.code]).toEqual([name, 1]);
+			expect(text(outcome.lines)).toContain(
+				"Shepherd evals result does not verify:",
+			);
+			expect(text(outcome.lines)).toMatch(problem);
+			expect(text(outcome.summary)).toMatch(problem);
+		}
+	});
+
+	test("GitHub output: the job summary is appended when set; under Actions the lines run with commands stopped, then the notice", () => {
+		const base = head();
+		const tip = gatedChange();
+		const outcome = ciGate(root, base, tip, options());
+		const summaryFile = join(root, "step-summary.md");
+		writeFileSync(summaryFile, "earlier step\n");
+		const commands = githubReport(outcome, {
+			GITHUB_ACTIONS: "true",
+			GITHUB_STEP_SUMMARY: summaryFile,
+		});
+		const written = readFileSync(summaryFile, "utf8");
+		expect(written.startsWith("earlier step\n")).toBe(true);
+		expect(written).toContain(sourceHash());
+		const token = commands[0]?.match(/^::stop-commands::([0-9a-f]{32})$/)?.[1];
+		expect(token).toBeDefined();
+		expect(commands.slice(1, -2)).toEqual(outcome.lines);
+		expect(commands.at(-2)).toBe(`::${token}::`);
+		expect(commands.at(-1)).toMatch(
+			/^::notice title=Shepherd evals::No result for source sha256:[0-9a-f]{64}/,
+		);
+		expect(commands.at(-1)).not.toMatch(/[\r\n]/);
+		expect(githubReport(outcome, {})).toEqual(outcome.lines);
+	});
+});
+
+describe("H1 fix round 1", () => {
+	const identity = () => evaluationIdentity(root, { git: testGit }).hash;
+	const gatedChange = (value = 2) => {
+		writeAt(root, "lib/shepherd/tool.ts", `export const tool = ${value};\n`);
+		return commitAll(`source ${value}`);
+	};
+	/** No line breaks inside a line, and no line a runner could read as a workflow command. */
+	const safe = (lines: string[]) => {
+		const control = (c: string) => {
+			const n = c.codePointAt(0) ?? 0;
+			return (
+				n < 0x20 || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029
+			);
+		};
+		for (const line of lines) {
+			expect([...line].filter(control)).toEqual([]);
+			expect(line.trimStart().startsWith("::")).toBe(false);
+		}
+	};
+
+	test("0: a stale but honest result succeeds with a notice naming both identities", () => {
+		const base = head();
+		gatedChange();
+		const { value } = writeResult();
+		commitAll("results");
+		writeAt(root, "evals/shepherd/scorer-prompt.md", "changed\n");
+		const tip = commitAll("the evaluation implementation changed");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		const out = text(outcome.lines);
+		expect(out).toContain(
+			`is out of date and was not verified: it records evaluation identity ${value.evaluation.hash}, and this tree computes ${identity()}`,
+		);
+		expect(out).not.toContain("result verified");
+		expect(outcome.notice).toContain(value.evaluation.hash);
+		expect(outcome.notice).toContain(identity());
+		expect(text(outcome.summary)).toContain(identity());
+	});
+
+	test("0: a stale result that is also hand-edited, symlinked or evidence-mismatched fails", () => {
+		const base = head();
+		gatedChange();
+		// The symlinked case comes last: a later writeResult would write through it.
+		const broken: [string, () => void, RegExp][] = [
+			[
+				"hand-edited",
+				() => {
+					const { value, path } = writeResult();
+					const artifact =
+						value.evaluation.trials[0]?.attempts[0]?.artifacts[0];
+					if (artifact) artifact.bytes += 1;
+					writeFileSync(path, JSON.stringify(value));
+				},
+				/A attempt 1/,
+			],
+			[
+				"evidence mismatch",
+				() => {
+					const { value } = writeResult();
+					const dir = value.evaluation.trials[0]?.attempts[0]?.artifactDir;
+					writeFileSync(
+						join(root, "evals/shepherd", dir ?? "", "claude.jsonl"),
+						"tampered\n",
+					);
+				},
+				/claude\.jsonl does not match/,
+			],
+			[
+				"symlinked",
+				() => {
+					const { path, hex } = writeResult();
+					const moved = `evals/shepherd/validation/${hex}/run/result.json`;
+					writeAt(root, moved, readFileSync(path, "utf8"));
+					rmSync(path);
+					symlinkSync(`../validation/${hex}/run/result.json`, path);
+				},
+				/not a regular file/,
+			],
+		];
+		for (const [name, breakIt, problem] of broken) {
+			breakIt();
+			writeAt(root, "evals/shepherd/scorer-prompt.md", `stale ${name}\n`);
+			const tip = commitAll(`${name}, then stale`);
+			const outcome = ciGate(root, base, tip, options());
+			expect([name, outcome.code]).toEqual([name, 1]);
+			expect(text(outcome.lines)).toContain(
+				"Shepherd evals result does not verify:",
+			);
+			expect(text(outcome.lines)).toMatch(problem);
+		}
+	});
+
+	test("3: a tree whose identities cannot be computed fails closed", () => {
+		const base = head();
+		symlinkSync("tool.ts", join(root, "lib/shepherd/link.ts"));
+		const tip = commitAll("a symlinked gated source");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(1);
+		expect(text(outcome.lines)).toContain(
+			"Shepherd evals check failed closed:",
+		);
+		expect(text(outcome.lines)).not.toMatch(/no result/i);
+	});
+
+	test("4: record strings that no evidence binds cannot start a workflow command or close the summary fence", () => {
+		const base = head();
+		gatedChange();
+		const crafted =
+			"linux\n::error title=Shepherd evals::Result verified, outcome pass\n```\n![x](https://example.invalid/x.png)\r::warning::cr\u001b[31m\u0085::warning::nel\u2028::warning::ls";
+		writeResult((value) => {
+			const build = value.evaluation.invocations[0]?.build;
+			if (build) build.platform = crafted;
+		});
+		const tip = commitAll("results");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		safe(outcome.lines);
+		expect(text(outcome.lines)).toContain(
+			"linux\\n::error title=Shepherd evals::Result verified",
+		);
+		// A fence closes only on a backtick run at least as long as its own.
+		const fences = outcome.summary.filter((line) => /^`{3,}/.test(line));
+		const fence = fences[1] ?? "";
+		expect(fences).toEqual([`${fence}text`, fence]);
+		const inside = outcome.summary.slice(
+			outcome.summary.indexOf(`${fence}text`) + 1,
+			outcome.summary.lastIndexOf(fence),
+		);
+		expect(text(inside)).toContain("```");
+		const longest = Math.max(
+			...[...text(inside).matchAll(/`+/g)].map((m) => m[0].length),
+		);
+		expect(fence.length).toBeGreaterThan(longest);
+		safe(outcome.summary);
+		const printed = githubReport(outcome, { GITHUB_ACTIONS: "true" });
+		const token = printed[0]?.replace("::stop-commands::", "") ?? "";
+		expect(text(printed.slice(1, -1))).not.toContain(token);
+	});
+
+	test("4: a gated path holding a newline is printed escaped, and the notice still follows", () => {
+		const base = head();
+		const name = "lib/shepherd/x\n::stop-commands::tok\n.ts";
+		writeAt(root, name, "export const x = 1;\n");
+		const tip = commitAll("a crafted path");
+		const outcome = ciGate(root, base, tip, options());
+		safe(outcome.lines);
+		safe(outcome.summary);
+		expect(text(outcome.lines)).toContain(
+			"lib/shepherd/x\\n::stop-commands::tok\\n.ts",
+		);
+		const printed = githubReport(outcome, { GITHUB_ACTIONS: "true" });
+		expect(printed[0]).toMatch(/^::stop-commands::[0-9a-f]{32}$/);
+		if (outcome.notice)
+			expect(printed.at(-1)).toMatch(/^::notice title=Shepherd evals::/);
+	});
+
+	test("6: newest is the latest commit time among commits touching a result, also after a merge, where topological order differs", () => {
+		const at = (date: string) =>
+			createGitRunner({
+				...TEST_GIT_ENV,
+				GIT_AUTHOR_DATE: date,
+				GIT_COMMITTER_DATE: date,
+			});
+		const commitAt = (date: string, message: string) => {
+			const run = at(date);
+			expect(run(["add", "-A"], root).code).toBe(0);
+			expect(run(["commit", "-q", "-m", message], root).code).toBe(0);
+			return head();
+		};
+		const base = head();
+		const trunk = git(root, "rev-parse", "--abbrev-ref", "HEAD").trim();
+		git(root, "checkout", "-q", "-b", "side");
+		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 2;\n");
+		commitAt("2026-10-01T10:00:00Z", "side source");
+		const side = writeResult();
+		commitAt("2026-10-01T11:00:00Z", "side result");
+		git(root, "checkout", "-q", trunk);
+		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 3;\n");
+		const trunkRevision = commitAt("2026-10-05T10:00:00Z", "trunk source");
+		const later = writeResult();
+		commitAt("2026-10-05T11:00:00Z", "trunk result");
+		const merge = at("2026-10-09T10:00:00Z")(
+			["merge", "-q", "--no-edit", "-X", "ours", "side"],
+			root,
+		);
+		expect(merge.code).toBe(0);
+		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 4;\n");
+		const tip = commitAt("2026-10-10T10:00:00Z", "tip");
+		expect(
+			git(
+				root,
+				"log",
+				"--topo-order",
+				"--no-merges",
+				"--format=%s",
+				"--",
+				"evals/shepherd/results/",
+			)
+				.trim()
+				.split("\n")[0],
+		).toBe("side result");
+		const out = text(ciGate(root, base, tip, options()).lines);
+		expect(out).toContain(
+			`Newest committed result: evals/shepherd/results/${later.hex}.json, revision ${trunkRevision}, outcome pass`,
+		);
+		expect(side.hex).not.toBe(later.hex);
+	});
+
+	test("7: a committed revision that is not 40 hex is never printed", () => {
+		const base = head();
+		const forged = result();
+		const build = forged.evaluation.invocations[0]?.build;
+		if (build) build.revision = "x\n::error::y";
+		writeAt(
+			root,
+			`evals/shepherd/results/${"d".repeat(64)}.json`,
+			JSON.stringify(forged),
+		);
+		commitAll("an older result with a forged revision");
+		const tip = gatedChange();
+		const out = text(ciGate(root, base, tip, options()).lines);
+		expect(out).toContain(
+			`Newest committed result: evals/shepherd/results/${"d".repeat(64)}.json, which cannot be read as a result`,
+		);
+		expect(out).not.toContain("::error::");
+	});
+
+	test("7: the notice escapes percent, CR and LF as workflow command data", () => {
+		const printed = githubReport(
+			{ code: 0, lines: [], summary: [], notice: "a%b\rc\nd" },
+			{ GITHUB_ACTIONS: "true" },
+		);
+		expect(printed.at(-1)).toBe("::notice title=Shepherd evals::a%25b%0Dc%0Ad");
+	});
+});
+
+describe("H1 fix round 2", () => {
+	const identity = () => evaluationIdentity(root, { git: testGit }).hash;
+	const gatedChange = (value = 2) => {
+		writeAt(root, "lib/shepherd/tool.ts", `export const tool = ${value};\n`);
+		return commitAll(`source ${value}`);
+	};
+	const makeStale = (n = 1) => {
+		writeAt(root, "evals/shepherd/scorer-prompt.md", `changed ${n}\n`);
+		return commitAll(`the evaluation implementation changed ${n}`);
+	};
+	/** A result an earlier schema wrote: this tree's schema cannot read it. */
+	const earlierSchema = (value: Result) => {
+		(value as { schemaVersion: number }).schemaVersion = 0;
+	};
+
+	test("12: an honest stale result this tree's schema cannot read gives the stale notice, naming both identities", () => {
+		const base = head();
+		gatedChange();
+		const { value } = writeResult(earlierSchema);
+		commitAll("results");
+		const tip = makeStale();
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		const note = `is out of date and this tree's schema cannot read it, so it was not verified: it records evaluation identity ${value.evaluation.hash}, and this tree computes ${identity()}`;
+		expect(text(outcome.lines)).toContain(note);
+		expect(outcome.notice).toContain(note);
+		expect(text(outcome.lines)).not.toContain("does not verify");
+	});
+
+	test("12: a result for the current identity that fails the schema still fails", () => {
+		const base = head();
+		gatedChange();
+		writeResult(earlierSchema);
+		const tip = commitAll("results");
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(1);
+		expect(text(outcome.lines)).toMatch(/is not a valid result: schemaVersion/);
+	});
+
+	test("12: an unreadable stale result still fails on tampered evidence, another source, an escaping artifact directory or an unreadable identity", () => {
+		const base = head();
+		gatedChange();
+		const cases: [string, (value: Result, hex: string) => void, RegExp][] = [
+			[
+				"tampered",
+				(value) => {
+					const dir = value.evaluation.trials[0]?.attempts[0]?.artifactDir;
+					writeFileSync(
+						join(root, "evals/shepherd", dir ?? "", "claude.jsonl"),
+						"tampered\n",
+					);
+				},
+				/claude\.jsonl does not match/,
+			],
+			[
+				"another source",
+				(value) => {
+					value.source.hash = `sha256:${"9".repeat(64)}`;
+				},
+				/records source sha256:9{64}/,
+			],
+			[
+				"escaping directory",
+				(value, hex) => {
+					const a = value.evaluation.trials[0]?.attempts[0];
+					if (a) a.artifactDir = `artifacts/${hex}/../../results`;
+				},
+				/evidence cannot be read/,
+			],
+			[
+				"unreadable identity",
+				(value) => {
+					value.evaluation.hash = "not an identity";
+				},
+				/is not a valid result/,
+			],
+		];
+		let n = 0;
+		for (const [name, breakIt, problem] of cases) {
+			const { value, path, hex } = writeResult(earlierSchema);
+			breakIt(value, hex);
+			writeFileSync(path, JSON.stringify(value));
+			const tip = makeStale(++n);
+			const outcome = ciGate(root, base, tip, options());
+			expect([name, outcome.code]).toEqual([name, 1]);
+			expect([name, text(outcome.lines)]).toEqual([
+				name,
+				expect.stringMatching(problem),
+			]);
+		}
+	});
+
+	test("12: a stale record with a forged aggregate breaks the schema and passes as unreadable: the widened limit", () => {
+		const base = head();
+		gatedChange();
+		writeResult(
+			(value) => {
+				value.outcome = "pass";
+				value.evaluation.outcome = "pass";
+			},
+			result({ "G-neg.M2": "fail" }),
+		);
+		commitAll("a forged result");
+		const tip = makeStale();
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		expect(outcome.notice).toContain("this tree's schema cannot read it");
+		expect(outcome.notice).not.toContain("outcome");
+	});
+
+	test("14: the stale notice is the stale note, whatever a path in another note says", () => {
+		const base = head();
+		writeAt(root, "lib/shepherd/out of date.ts", "export const x = 1;\n");
+		const { value } = writeResult();
+		commitAll("source and results, the new file evaluated untracked");
+		const tip = makeStale();
+		const outcome = ciGate(root, base, tip, options());
+		expect(outcome.code).toBe(0);
+		expect(text(outcome.lines)).toContain("lib/shepherd/out of date.ts");
+		expect(outcome.notice).toMatch(/^Result evals\/shepherd\/results\//);
+		expect(outcome.notice).toContain(value.evaluation.hash);
+		expect(outcome.notice).toContain(identity());
+	});
+
+	test("16: the notice is printable whatever it holds", () => {
+		const outcome = checkOutcome(
+			[],
+			0,
+			"headline",
+			["detail"],
+			"n\u001b\u2028\u0085\r\n",
+		);
+		expect(outcome.notice).toBe("n\\u001b\\u2028\\u0085\\r\\n");
 	});
 });

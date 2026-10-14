@@ -23,7 +23,7 @@ import {
 	SESSION_ATTACHMENTS,
 	SLUG_MARKER,
 } from "./export";
-import { pythonChecks } from "./gate";
+import { pythonChecks, sessionFacts, sessionValidity } from "./gate";
 
 let scratch: string;
 const HOME = "/Users/someone";
@@ -919,4 +919,88 @@ describe("mechanical outcomes are invariant under export (R2)", () => {
 			}
 		});
 	}
+});
+
+describe("escaped slashes (fix round 4, H1)", () => {
+	const ROOT = "/var/folders/kq/abc/T/shepherd-evals-20261013T150000Z-abc123";
+	const BINARY = `${ROOT}/bin/shepherd`;
+	const context = { scratchRoot: ROOT, home: HOME, repoRoot: "/srv/repo" };
+	/** `path` with each slash JSON-escaped once (`\/`) or twice (`\\/`). */
+	const slashes = (path: string, depth: number) =>
+		path.replaceAll("/", `${"\\".repeat(depth)}/`);
+
+	test("a long run of backslashes redacts in linear time", () => {
+		const run = "\\".repeat(40_000);
+		const started = performance.now();
+		expect(redactText(`"${run}/Users/someone/x"`, context).text).toBe(
+			`"${REDACTED}"`,
+		);
+		expect(redactText(`"${run}"`, context).text).toBe(`"${run}"`);
+		expect(redactText(`"${run}x${ROOT}/bin"`, context).text).toBe(
+			`"${run}x${ROOT}/bin"`,
+		);
+		expect(performance.now() - started).toBeLessThan(1_000);
+	});
+
+	test("the scratch root is kept in its escaped-slash spellings, plain and /private, at any depth", () => {
+		for (const depth of [1, 2, 3, 4]) {
+			for (const binary of [BINARY, `/private${BINARY}`]) {
+				const line = `{"binary": "${slashes(binary, depth)}"}`;
+				expect(redactText(line, context)).toEqual({ text: line, count: 0 });
+			}
+		}
+	});
+
+	test("home, repository and other host paths with escaped slashes are redacted whole", () => {
+		for (const depth of [1, 2, 3, 4]) {
+			for (const path of [
+				`${HOME}/.claude/settings.json`,
+				"/srv/repo/evals/x",
+				"/opt/other/x",
+				"/Users/another/notes",
+			]) {
+				expect([
+					path,
+					redactText(`"${slashes(path, depth)}"`, context).text,
+				]).toEqual([path, `"${REDACTED}"`]);
+			}
+		}
+	});
+
+	test("a tool result printing the binary with escaped slashes survives export, and its call id still proves the binary", () => {
+		const log = [
+			{
+				type: "assistant",
+				message: {
+					model: "claude-opus-5-5",
+					content: [{ type: "tool_use", id: "toolu_esc", name: "Bash" }],
+				},
+			},
+			{
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "toolu_esc",
+							content: `{"binary": "${slashes(BINARY, 1)}"}`,
+						},
+					],
+				},
+			},
+		].map((e) => JSON.stringify(e));
+		// The native log escapes the tool's own escape once more.
+		expect(log[1]).toContain(slashes(BINARY, 2));
+		const from = join(scratch, "raw-escaped");
+		mkdirSync(from, { recursive: true });
+		writeFileSync(join(from, "claude.jsonl"), `${log.join("\n")}\n`);
+		const to = join(scratch, "exported-escaped");
+		exportAttempt({ from, to, scratchRoot: ROOT, home: HOME });
+		const archived = readFileSync(join(to, "claude.jsonl"), "utf8");
+		expect(archived).toBe(`${log.join("\n")}\n`);
+		expect(sessionValidity(archived, BINARY, "claude-opus-5-5")).toEqual([]);
+		expect(
+			sessionFacts(archived).results.map((r) => [r.callId, r.markers]),
+		).toEqual([["toolu_esc", [BINARY]]]);
+	});
 });

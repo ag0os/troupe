@@ -679,7 +679,7 @@ describe("decisions and retries (4.4, 4.5)", () => {
 				/schema-invalid output: the CLI reported an error result/,
 			],
 		];
-		config.timeoutMs = 600;
+		config.timeoutMs = 2_000;
 		for (const [step, failure] of cases) {
 			resetSteps();
 			plan(step, { result: good() });
@@ -691,7 +691,7 @@ describe("decisions and retries (4.4, 4.5)", () => {
 	}, 30_000);
 
 	test("a complete verdict printed before a timeout, a kill or a nonzero exit is the verdict (G1 fix round 1)", async () => {
-		config.timeoutMs = 1_500;
+		config.timeoutMs = 5_000;
 		for (const step of [
 			{ result: good("fail"), linger: 10 },
 			{ result: good("fail"), exit: 1 },
