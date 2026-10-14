@@ -22,16 +22,20 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type GitRunner,
 	readWorktreeSource,
 	runGit,
 	type SourceManifest,
 } from "../../scripts/shepherd-source";
+import { asciiEscaped } from "./export";
 import {
 	CHECKER_FAILED,
 	type ChecksOutput,
 	pythonChecks,
+	scorerOutputName,
+	sessionFacts,
 	sessionValidity,
 } from "./gate";
 import { ADOPTED_GATED_PATHS, isGatedPath } from "./gated-paths";
@@ -50,6 +54,13 @@ import {
 	type Rubric,
 	validateResult,
 } from "./schema";
+import {
+	archivedPacket,
+	archivedText,
+	type Decision,
+	PACKET_FILES,
+	readScorerOutput,
+} from "./scorer";
 
 /**
  * Files that decide what is gated and how results are identified and
@@ -224,6 +235,7 @@ function regularFile(dir: string, path: string): boolean {
  * The archived evidence of one attempt: under this source hash's artifact
  * directory, every listed artifact present with its recorded length and
  * SHA-256. Unlisted files and set-aside `.partial` exports are ignored.
+ * Evidence outside that directory is none at all.
  */
 function checkEvidence(
 	evalsDir: string,
@@ -231,14 +243,14 @@ function checkEvidence(
 	attempt: Attempt,
 	where: string,
 	report: (message: string) => void,
-): Map<string, Uint8Array> {
+): Map<string, Uint8Array> | undefined {
 	const verified = new Map<string, Uint8Array>();
 	const expected = `artifacts/${hex}/${attempt.runId}/${attempt.trial}/attempt-${attempt.ordinal}`;
 	if (attempt.artifactDir !== expected) {
 		report(
 			`${where}: artifact directory ${attempt.artifactDir} is not ${expected}`,
 		);
-		return verified;
+		return undefined;
 	}
 	for (const artifact of attempt.artifacts) {
 		const path = `${attempt.artifactDir}/${artifact.path}`;
@@ -357,6 +369,7 @@ function checkMechanical(
 }
 
 interface RunManifest {
+	argv?: string[];
 	validity?: { valid?: boolean; void_reasons?: string[] };
 	provenance?: {
 		expected_binary?: string;
@@ -396,14 +409,26 @@ function checkValidity(
 	if (!bytes) return;
 	let run: RunManifest;
 	try {
-		run = JSON.parse(new TextDecoder().decode(bytes));
+		run = JSON.parse(archivedText(bytes));
 	} catch {
 		report(`${where}: the archived claude-run.json is not JSON`);
 		return;
 	}
 	// A harness that never finished left its start placeholder; the gate then
 	// judged the session from its native log instead (pending resolution).
-	if (!run.ended_at) return;
+	if (!run.ended_at) {
+		if (attempt.interrupted === null)
+			report(
+				`${where}: its archived claude-run.json never finished, but the attempt was not interrupted`,
+			);
+		return;
+	}
+	// The record's argv is the manifest's, redacted alike; the policy checks
+	// read the record's.
+	if (JSON.stringify(run.argv) !== JSON.stringify(attempt.subject?.argv))
+		report(
+			`${where}: the argv of its archived claude-run.json is not the record's`,
+		);
 	const valid = run.validity?.valid === true;
 	const reasons = run.validity?.void_reasons ?? [];
 	if (attempt.valid && !valid)
@@ -438,6 +463,48 @@ function checkValidity(
 		);
 }
 
+/** One level of JSON string escaping, as JavaScript writes it. */
+const jsonEscaped = (text: string) => JSON.stringify(text).slice(1, -1);
+const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+
+/**
+ * Whether a tool result's text holds a binary marker for exactly `path`,
+ * where the harness's `binary_values` reads one: a `binary: <path>` line,
+ * the path bare or quoted, or a `"binary": "<path>"` field. The marker may
+ * sit inside JSON strings up to three levels deep, each level escaped as
+ * JavaScript or as Python's `ensure_ascii` writes it; a bare mention of the
+ * path, or a longer path holding it, is no marker.
+ */
+export function holdsBinary(text: string, path: string): boolean {
+	// spellings[k]: the path inside k levels of JSON strings.
+	const spellings = [[path]];
+	for (let k = 0; k < 4; k++) {
+		const escaped = (spellings[k] ?? []).map(jsonEscaped);
+		spellings.push([...new Set([...escaped, ...escaped.map(asciiEscaped)])]);
+	}
+	// A character of the marker's syntax as it reads inside k levels.
+	const at = (k: number, char: string) => {
+		let spelled = char;
+		for (let n = 0; n < k; n++) spelled = jsonEscaped(spelled);
+		return literal(spelled);
+	};
+	const either = (paths: string[]) => `(?:${paths.map(literal).join("|")})`;
+	for (let k = 0; k < 4; k++) {
+		const [bare, quoted] = [
+			either(spellings[k] ?? []),
+			either(spellings[k + 1] ?? []),
+		];
+		const [quote, newline, tab] = [at(k, '"'), at(k, "\n"), at(k, "\t")];
+		const blank = `(?: |${tab})`;
+		// A line starts and ends at a newline, or where its string does.
+		const string = k === 0 ? "" : `|${at(k - 1, '"')}`;
+		const line = `(?:^|${newline}${string})${blank}*binary:${blank}+(?:${quote}${quoted}${quote}|'${bare}'|${bare})${blank}*(?:$|${newline}${string})`;
+		const field = `${quote}binary${quote}(?: |${newline}|${tab})*:(?: |${newline}|${tab})*${quote}${quoted}${quote}`;
+		if (new RegExp(`${line}|${field}`).test(text)) return true;
+	}
+	return false;
+}
+
 /** The fixed subject and scorer policy (5.1, 4.1) on every attempt. */
 function checkPolicy(
 	attempt: Attempt,
@@ -468,6 +535,40 @@ function checkPolicy(
 				`${where}: subject observed model ${observed.join(", ") || "none"}, not ${policy.model}`,
 			);
 	}
+	if (subject && attempt.valid) {
+		const at = (flag: string, value: string) =>
+			subject.argv.some(
+				(arg, i) => arg === flag && subject.argv[i + 1] === value,
+			);
+		if (!at("--model", policy.model) || !at("--effort", policy.effort))
+			report(
+				`${where}: the subject argv does not request --model ${policy.model} --effort ${policy.effort}`,
+			);
+	}
+	const log = verified.get("claude.jsonl");
+	if (subject && attempt.valid && attempt.kind !== "void" && log) {
+		// The session facts the record restates, from the archived log itself.
+		const facts = sessionFacts(archivedText(log));
+		const expected = attempt.binaryEvidence.expected;
+		for (const callId of attempt.binaryEvidence.callIds) {
+			if (
+				!facts.results.some(
+					(r) => r.callId === callId && holdsBinary(r.text, expected),
+				)
+			)
+				report(
+					`${where}: call ${callId} returns no binary marker for ${expected} in its archived claude.jsonl`,
+				);
+		}
+		const logged = [...facts.models].sort();
+		const recorded = [
+			...new Set(subject.observedModels.filter((m) => m !== SYNTHETIC_MODEL)),
+		].sort();
+		if (logged.join(", ") !== recorded.join(", "))
+			report(
+				`${where}: its archived claude.jsonl observed ${logged.join(", ") || "no model"}, but the record says ${recorded.join(", ") || "none"}`,
+			);
+	}
 	if (attempt.kind === "behavioral" && attempt.valid) {
 		const evidence = attempt.binaryEvidence;
 		// A session resolved from its log after an interrupted invocation was
@@ -477,14 +578,13 @@ function checkPolicy(
 			attempt.interrupted !== null &&
 			attempt.musts.every((m) => m.checkerVersion === "gate:interrupted");
 		if (resolved) {
-			const log = verified.get("claude.jsonl");
 			if (!log)
 				report(
 					`${where}: a session resolved from its log archives no verified claude.jsonl`,
 				);
 			else
 				for (const problem of sessionValidity(
-					new TextDecoder().decode(log),
+					archivedText(log),
 					evidence.expected,
 					policy.model,
 				))
@@ -514,6 +614,106 @@ function checkPolicy(
 				`${where}: scorer invocation ${index} observed ${invocation.observedModels.join(", ") || "no model"}`,
 			);
 	});
+}
+
+/**
+ * The scorer's verdicts re-derived from its archived outputs (4.4, 4.5, 6.3):
+ * every invocation's output archived and hash-matching, read as the gate
+ * read it against the archived packet, and agreeing with its record on
+ * failure or verdict, models, cost and session; and every scored Must
+ * exactly the decision its cited verdict gives.
+ */
+function checkScorer(
+	attempt: Attempt,
+	verified: Map<string, Uint8Array>,
+	policy: PolicyFile,
+	where: string,
+	report: (message: string) => void,
+): void {
+	const scoring = attempt.scoring;
+	if (!scoring) return;
+	const text = (name: string) => {
+		const bytes = verified.get(name);
+		return bytes && archivedText(bytes);
+	};
+	const missing = [
+		scoring.packet,
+		...PACKET_FILES.map(([name]) => name),
+	].filter((name) => text(name) === undefined);
+	if (missing.length > 0)
+		report(
+			`${where}: the scored packet's files are not all archived: ${missing.join(", ")}`,
+		);
+	const packet =
+		missing.length === 0
+			? archivedPacket((name) => text(name) ?? "", scoring.packet)
+			: undefined;
+	const verdicts = new Map<number, Decision[]>();
+	scoring.invocations.forEach((invocation, index) => {
+		const name = scorerOutputName(index, invocation.round);
+		const output = text(name);
+		const at = `${where}: scorer invocation ${index}`;
+		if (output === undefined) {
+			report(`${at} has no verified archived output ${name}`);
+			return;
+		}
+		// Read whatever the record says ended the process: the gate takes a
+		// complete verdict printed before a timeout, kill or exit as the verdict.
+		if (!packet) return;
+		const read = readScorerOutput(
+			output,
+			policy.scorer.model,
+			scoring.requested,
+			packet,
+		);
+		if ((read.failure === null) !== (invocation.failure === null))
+			report(
+				`${at} is recorded ${invocation.failure === null ? "a verdict" : "a failure"}, but its archived output reads ${read.failure ?? "a verdict"}`,
+			);
+		if (read.observedModels.join(", ") !== invocation.observedModels.join(", "))
+			report(
+				`${at} is recorded as observing ${invocation.observedModels.join(", ") || "no model"}, but its archived output names ${read.observedModels.join(", ") || "none"}`,
+			);
+		if (read.usd !== invocation.cost.usd)
+			report(
+				`${at} is recorded at ${invocation.cost.usd === null ? "an unknown cost" : `$${invocation.cost.usd}`}, but its archived output reports ${read.usd ?? "none"}`,
+			);
+		if (read.sessionId !== undefined && read.sessionId !== invocation.sessionId)
+			report(
+				`${at} is recorded as session ${invocation.sessionId}, but its archived output names ${read.sessionId}`,
+			);
+		if (read.decisions && invocation.failure === null)
+			verdicts.set(index, read.decisions);
+	});
+	for (const must of attempt.musts) {
+		if (!must.scorer) continue;
+		const cited = scoring.invocations[must.scorer.invocation];
+		const decision = verdicts
+			.get(must.scorer.invocation)
+			?.find((d) => d.id === must.id);
+		if (!decision || cited?.sessionId !== must.scorer.sessionId) {
+			report(
+				`${where}: ${must.id} is recorded ${must.outcome} by the scorer, but no archived verdict decides it`,
+			);
+			continue;
+		}
+		const recorded = {
+			outcome: must.outcome,
+			rationale: must.rationale,
+			evidence: must.evidence,
+		};
+		const derived = JSON.parse(
+			JSON.stringify({
+				outcome: decision.outcome,
+				rationale: decision.rationale,
+				evidence: decision.evidence,
+			}),
+		);
+		if (!isDeepStrictEqual(recorded, derived))
+			report(
+				`${where}: ${must.id} is recorded ${must.outcome}, but its archived scorer output decides ${decision.outcome}${decision.outcome === must.outcome ? " with another rationale or evidence" : ""}`,
+			);
+	}
 }
 
 interface PolicyFile {
@@ -648,8 +848,10 @@ export function verifyResults(
 				report(`${where}: shares artifact directory ${attempt.artifactDir}`);
 			dirs.add(attempt.artifactDir);
 			const verified = checkEvidence(evalsDir, hex, attempt, where, report);
+			checkPolicy(attempt, verified ?? new Map(), policy, where, report);
+			if (!verified) continue;
 			checkValidity(attempt, verified, rechecked, checks, where, report);
-			checkPolicy(attempt, verified, policy, where, report);
+			checkScorer(attempt, verified, policy, where, report);
 			checkMechanical(attempt, verified, rechecked, checks, where, report);
 		}
 	}

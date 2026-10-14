@@ -21,7 +21,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
 	exportAttempt,
 	homeSlugs,
@@ -52,10 +52,12 @@ import {
 	validateResult,
 } from "./schema";
 import {
+	archivedText,
 	buildPacket,
 	type Decision,
 	loadPacket,
 	type Packet,
+	readScorerOutput,
 	scoreAll,
 } from "./scorer";
 
@@ -406,42 +408,67 @@ function mustFromCheck(
 	};
 }
 
-/** Apply a scoring round's outcome to an attempt (4.4, 4.5, R1). */
+/** The archived output of an attempt's scorer invocation at `index`. */
+export const scorerOutputName = (index: number, round: number) =>
+	`scorer-${index + 1}-r${round}.json`;
+
+/**
+ * Apply a scoring round's outcome to an attempt (4.4, 4.5, R1). The verdict
+ * recorded is what its archived, redacted output reads against the archived
+ * packet, so CI derives the same decisions from the same bytes.
+ */
 function applyScoring(
 	pending: Pending,
 	scored: Scored,
+	packet: Packet,
 	context: RedactionContext,
 ): void {
 	const { attempt, dir } = pending;
 	const scoring = attempt.scoring;
 	if (!scoring) throw new Error("scoring without a packet");
 	const offset = scoring.invocations.length;
-	scored.invocations.forEach((invocation, index) => {
-		const name = `scorer-${offset + index + 1}-r${invocation.round}.json`;
+	const outputs = scored.invocations.map((invocation, index) => {
+		const name = scorerOutputName(offset + index, invocation.round);
 		attempt.artifacts.push(
 			writeArtifact(dir, name, scored.outputs[index] ?? "", context),
 		);
+		return archivedText(readFileSync(join(dir, name)));
 	});
+	const verdict = scored.invocations.at(-1);
+	let decisions: Decision[] | undefined;
+	if (scored.decisions && verdict) {
+		const archived = readScorerOutput(
+			outputs.at(-1) ?? "",
+			verdict.requestedModel,
+			pending.requested,
+			packet,
+		);
+		decisions = archived.decisions;
+		if (!decisions)
+			verdict.failure = `the archived output reads no verdict: ${archived.failure ?? "no decisions"}`;
+	}
 	scoring.invocations.push(
 		...scored.invocations.map((invocation) =>
 			redactStrings(invocation, context),
 		),
 	);
 	attempt.cost.scorer.push(...scored.invocations.map((i) => i.cost));
-	if (!scored.decisions) {
+	if (!decisions) {
 		attempt.kind = "unscored";
 		attempt.behavioralOrdinal = null;
 		return;
 	}
 	const last = offset + scored.invocations.length - 1;
-	const verdict = scored.invocations.at(-1);
-	for (const decision of scored.decisions) {
+	for (const decision of decisions) {
 		attempt.musts.push({
 			id: decision.id,
 			class: "judged",
 			outcome: decision.outcome,
 			checkerVersion: null,
-			scorer: { sessionId: verdict?.sessionId ?? null, invocation: last },
+			scorer: {
+				sessionId: scoring.invocations[last]?.sessionId ?? null,
+				invocation: last,
+			},
 			rationale: decision.rationale,
 			evidence: decision.evidence,
 		});
@@ -541,8 +568,16 @@ export async function runGate(
 					round: scoringRounds(pending.attempt) + 1,
 					deadline: options.deadline,
 				});
-				applyScoring(pending, scored, {
+				// The output is redacted as its packet was: with the scratch root
+				// of the run that exported the attempt, so a quote of a kept path
+				// still reads as the packet shows it.
+				const own =
+					pending.attempt.runId === options.runId
+						? context.scratchRoot
+						: runScratchRoot(pending.attempt);
+				applyScoring(pending, scored, packet, {
 					...context,
+					scratchRoot: own ?? context.scratchRoot,
 					emails: pending.emails ?? new Map(),
 				});
 			}),
@@ -910,14 +945,26 @@ function pendingAttempt(
 	};
 }
 
-/** In-session provenance and model problems in a recovered native log (5.4). */
-export function sessionValidity(
-	log: string,
-	expected: string,
-	model: string,
-): string[] {
-	const markers: string[] = [];
+/**
+ * The scratch root of the run that exported an attempt: the directory its
+ * subject binary was built in, `<root>/bin/shepherd`.
+ */
+function runScratchRoot(attempt: Attempt): string | undefined {
+	const bin = dirname(attempt.binaryEvidence.expected);
+	return basename(bin) === "bin" ? dirname(bin) : undefined;
+}
+
+/**
+ * What a native log shows: the models of its user and assistant messages,
+ * as the harness reads them, without Claude's `<synthetic>` notices, and
+ * each tool result's text and the binary markers it returns.
+ */
+export function sessionFacts(log: string): {
+	models: Set<string>;
+	results: { callId: string; text: string; markers: string[] }[];
+} {
 	const models = new Set<string>();
+	const results: { callId: string; text: string; markers: string[] }[] = [];
 	const text = (value: unknown): string =>
 		typeof value === "string"
 			? value
@@ -929,24 +976,44 @@ export function sessionValidity(
 						.join("\n")
 				: JSON.stringify(value ?? "");
 	for (const line of log.split("\n")) {
-		let event: { message?: { model?: unknown; content?: unknown } } | undefined;
+		let event:
+			| { type?: unknown; message?: { model?: unknown; content?: unknown } }
+			| undefined;
 		try {
 			event = JSON.parse(line);
 		} catch {
 			continue;
 		}
-		const message = event?.message;
+		if (event?.type !== "user" && event?.type !== "assistant") continue;
+		const message = event.message;
 		if (typeof message?.model === "string" && message.model !== "<synthetic>")
 			models.add(message.model);
 		for (const part of Array.isArray(message?.content) ? message.content : []) {
 			if (part?.type !== "tool_result") continue;
 			const output = text(part.content);
+			const markers: string[] = [];
 			for (const found of output.matchAll(/^[ \t]*binary:[ \t]+(.+?)[ \t]*$/gm))
 				markers.push((found[1] ?? "").replace(/^["']|["']$/g, ""));
 			for (const found of output.matchAll(/"binary"\s*:\s*"([^"]+)"/g))
 				markers.push(found[1] ?? "");
+			results.push({
+				callId: String(part.tool_use_id ?? ""),
+				text: output,
+				markers,
+			});
 		}
 	}
+	return { models, results };
+}
+
+/** In-session provenance and model problems in a recovered native log (5.4). */
+export function sessionValidity(
+	log: string,
+	expected: string,
+	model: string,
+): string[] {
+	const { models, results } = sessionFacts(log);
+	const markers = results.flatMap((result) => result.markers);
 	const problems: string[] = [];
 	if (!markers.includes(expected))
 		problems.push(`session: no tool-result binary evidence proves ${expected}`);

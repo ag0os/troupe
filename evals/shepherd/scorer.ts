@@ -296,11 +296,25 @@ function render(name: string, content: string): { body: string; note: string } {
 	return { body: kept.join("\n"), note };
 }
 
-function packetFiles(dir: string): Packet["files"] {
-	return PACKET_FILES.map(([name]) => ({
-		name,
-		content: readFileSync(join(dir, name), "utf8"),
-	}));
+function packetFiles(read: (name: string) => string): Packet["files"] {
+	return PACKET_FILES.map(([name]) => ({ name, content: read(name) }));
+}
+
+/**
+ * Archived text as the gate and CI both read it: UTF-8, a byte order mark
+ * kept, invalid sequences replaced.
+ */
+export function archivedText(bytes: Uint8Array): string {
+	return Buffer.from(bytes).toString("utf8");
+}
+
+/** A packet as archived: its text and the files it shows, read by name. */
+export function archivedPacket(
+	read: (name: string) => string,
+	packet: string,
+): Packet {
+	const text = read(packet);
+	return { text, sha256: sha256(text), files: packetFiles(read) };
 }
 
 /**
@@ -308,8 +322,10 @@ function packetFiles(dir: string): Packet["files"] {
  * differ: the redaction of a later invocation keeps a different scratch root.
  */
 export function loadPacket(options: { dir: string; packet: string }): Packet {
-	const text = readFileSync(join(options.dir, options.packet), "utf8");
-	return { text, sha256: sha256(text), files: packetFiles(options.dir) };
+	return archivedPacket(
+		(name) => archivedText(readFileSync(join(options.dir, name))),
+		options.packet,
+	);
 }
 
 /** The blind packet from an exported attempt: only the files 4.2 names. */
@@ -326,7 +342,9 @@ export function buildPacket(options: {
 	redact?: (text: string) => string;
 }): Packet {
 	const redact = options.redact ?? ((text: string) => text);
-	const files = packetFiles(options.dir);
+	const files = packetFiles((name) =>
+		readFileSync(join(options.dir, name), "utf8"),
+	);
 	const musts = options.rubric.musts.filter((must) =>
 		options.requested.includes(must.id),
 	);
@@ -542,6 +560,73 @@ export function validateDecisions(
 	};
 }
 
+/** What a completed scorer process's output says, as the gate and CI read it. */
+export interface ScorerReading {
+	failure: string | null;
+	observedModels: string[];
+	usage: Record<string, unknown> | null;
+	usd: number | null;
+	/** The session the CLI reports, when it reports one. */
+	sessionId?: string;
+	decisions?: Decision[];
+}
+
+/**
+ * Read the CLI's JSON output of a scorer that exited 0 in time: its models,
+ * cost and session, and its decisions validated against `packet`. A fallback
+ * or missing model and an error result are invalid output (4.3, 4.5).
+ */
+export function readScorerOutput(
+	stdout: string,
+	model: string,
+	requested: string[],
+	packet: Packet,
+): ScorerReading {
+	let out: Record<string, unknown> | undefined;
+	try {
+		out = JSON.parse(stdout);
+	} catch {
+		return {
+			failure: "unparsable CLI output",
+			observedModels: [],
+			usage: null,
+			usd: null,
+		};
+	}
+	const usage =
+		out && typeof out.modelUsage === "object" && out.modelUsage !== null
+			? (out.modelUsage as Record<string, unknown>)
+			: null;
+	const observedModels = usage ? Object.keys(usage) : [];
+	const reading: ScorerReading = {
+		failure: null,
+		observedModels,
+		usage,
+		usd: typeof out?.total_cost_usd === "number" ? out.total_cost_usd : null,
+		sessionId: typeof out?.session_id === "string" ? out.session_id : undefined,
+	};
+	if (!out) return reading;
+	if (out.is_error === true)
+		reading.failure = `schema-invalid output: the CLI reported an error result (${String(out.subtype)})`;
+	else if (
+		observedModels.length === 0 ||
+		observedModels.some((observed) => observed !== model)
+	) {
+		// A fallback or missing model is an error (4.3). It is retried only as
+		// invalid output, 4.5's schema-invalid case, like an error result.
+		reading.failure = `schema-invalid output: observed model ${observedModels.join(", ") || "none"} differs from requested ${model}`;
+	} else {
+		const checked = validateDecisions(
+			String(out.result ?? ""),
+			requested,
+			packet,
+		);
+		if ("failure" in checked) reading.failure = checked.failure;
+		else reading.decisions = checked.decisions;
+	}
+	return reading;
+}
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
 	if (child.pid === undefined) return false;
 	try {
@@ -643,8 +728,6 @@ async function invoke(options: {
 
 	let failure: string | null = null;
 	let retryable = true;
-	let out: Record<string, unknown> | undefined;
-	let decisions: Decision[] | undefined;
 	const cause = stderr.trim().split("\n").at(-1)?.slice(0, 200);
 	if (cancelled) {
 		failure = "cancelled";
@@ -654,41 +737,21 @@ async function invoke(options: {
 		failure =
 			(code === null ? `killed by ${signal}` : `nonzero exit ${code}`) +
 			(cause ? `: ${cause}` : "");
-	else {
-		try {
-			out = JSON.parse(stdout);
-		} catch {
-			failure = "unparsable CLI output";
-		}
-	}
-	const usage =
-		out && typeof out.modelUsage === "object" && out.modelUsage !== null
-			? (out.modelUsage as Record<string, unknown>)
-			: null;
-	const observedModels = usage ? Object.keys(usage) : [];
-	if (out && failure === null) {
-		if (out.is_error === true)
-			failure = `schema-invalid output: the CLI reported an error result (${String(out.subtype)})`;
-		else if (
-			observedModels.length === 0 ||
-			observedModels.some((model) => model !== config.model)
-		) {
-			// A fallback or missing model is an error (4.3). It is retried only as
-			// invalid output, 4.5's schema-invalid case, like an error result.
-			failure = `schema-invalid output: observed model ${observedModels.join(", ") || "none"} differs from requested ${config.model}`;
-		} else {
-			const checked = validateDecisions(
-				String(out.result ?? ""),
-				options.requested,
-				packet,
-			);
-			if ("failure" in checked) failure = checked.failure;
-			else decisions = checked.decisions;
-		}
-	}
-	const usd = out?.total_cost_usd;
+	// Whatever ended the process, what it printed is read as CI reads the
+	// archived output: a complete verdict printed before a timeout, a kill or
+	// a nonzero exit is the verdict.
+	const read = readScorerOutput(
+		stdout,
+		config.model,
+		options.requested,
+		packet,
+	);
+	if (failure === null) failure = read.failure;
+	else if (read.decisions) failure = null;
+	const usage = read.usage;
+	const usd = read.usd;
 	const cost: Cost =
-		typeof usd === "number"
+		usd !== null
 			? { usd, reason: null, usage, source: "scorer output total_cost_usd" }
 			: {
 					usd: null,
@@ -703,15 +766,14 @@ async function invoke(options: {
 			round: options.round,
 			family: "claude",
 			requestedModel: config.model,
-			observedModels,
+			observedModels: read.observedModels,
 			effort: config.effort,
 			cliVersion: options.cliVersion,
 			promptSha256: sha256(config.prompt),
 			packetSha256: packet.sha256,
 			argv,
 			settings: effectiveSettings(),
-			sessionId:
-				typeof out?.session_id === "string" ? out.session_id : sessionId,
+			sessionId: read.sessionId ?? sessionId,
 			exitStatus: code,
 			signal,
 			timedOut,
@@ -722,7 +784,7 @@ async function invoke(options: {
 			endedAt,
 			cost,
 		},
-		decisions,
+		decisions: failure === null ? read.decisions : undefined,
 		stdout,
 		retryable,
 	};

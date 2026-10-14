@@ -20,6 +20,7 @@ import {
 	testGit,
 	writeAt,
 } from "../../scripts/shepherd-source-fixture";
+import { artifactType } from "./export";
 import { type ChecksOutput, pythonChecks } from "./gate";
 import {
 	ADOPTED_GATED_PATHS,
@@ -29,11 +30,21 @@ import {
 import { evaluationIdentity } from "./identity";
 import {
 	type Attempt,
+	loadRubric,
 	type MustOutcome,
 	policyHash,
 	type Result,
+	type ScorerInvocation,
 } from "./schema";
-import { attempt, behavioral, RUN_ID, result } from "./testing";
+import { buildPacket, PACKET_FILES, validateDecisions } from "./scorer";
+import {
+	attempt,
+	behavioral,
+	invocation,
+	RUN_ID,
+	result,
+	scorerOutput,
+} from "./testing";
 import {
 	ALWAYS_GATED,
 	changedPaths,
@@ -157,7 +168,12 @@ function writeResult(
 					["claude-baseline.json", "snapshot"],
 					["must-check.json", "mechanical-checks"],
 				);
+			// A scored attempt archives every file its packet shows.
+			if (attempt.scoring)
+				for (const [name] of PACKET_FILES)
+					extra.push([name, artifactType(name)]);
 			for (const [path, type] of extra) {
+				if (attempt.artifacts.some((a) => a.path === path)) continue;
 				attempt.artifacts.push({
 					path,
 					sha256: "",
@@ -166,22 +182,9 @@ function writeResult(
 					redactions: 0,
 				});
 			}
-			for (const artifact of attempt.artifacts) {
-				const text =
-					artifact.path === "claude-run.json"
-						? `${JSON.stringify(runManifest(attempt))}\n`
-						: `${trial.trial} ${attempt.ordinal} ${artifact.path}\n`;
-				writeAt(evals, `${attempt.artifactDir}/${artifact.path}`, text);
-				artifact.sha256 = sha256(text);
-				artifact.bytes = Buffer.byteLength(text);
-			}
-			// The scored packet is the archived one.
-			const packet = attempt.artifacts.find((a) => a.path === "packet.md");
-			if (attempt.scoring && packet) {
-				attempt.scoring.packetSha256 = `sha256:${packet.sha256}`;
-				for (const invocation of attempt.scoring.invocations)
-					invocation.packetSha256 = `sha256:${packet.sha256}`;
-			}
+			for (const artifact of attempt.artifacts)
+				putArtifact(attempt, artifact.path, evidence(attempt, artifact.path));
+			if (attempt.scoring) archiveScoring(attempt);
 		}
 	}
 	edit(value);
@@ -196,9 +199,114 @@ function writeResult(
 
 const text = (lines: string[]) => lines.join("\n");
 
+const STDOUT = "Done the NEXT first.";
+
+/** Write an archived artifact, listing it if it is not, with its hash and length. */
+function putArtifact(a: Attempt, name: string, content: string) {
+	writeAt(join(root, "evals/shepherd"), `${a.artifactDir}/${name}`, content);
+	let artifact = a.artifacts.find((x) => x.path === name);
+	if (!artifact) {
+		artifact = {
+			path: name,
+			sha256: "",
+			bytes: 0,
+			type: artifactType(name),
+			redactions: 0,
+		};
+		a.artifacts.push(artifact);
+	}
+	artifact.sha256 = sha256(content);
+	artifact.bytes = Buffer.byteLength(content);
+}
+
+/** Real-shaped evidence of one archived file of `attempt`. */
+function evidence(attempt: Attempt, name: string): string {
+	const snapshot = () =>
+		`${JSON.stringify({
+			snapshotVersion: 1,
+			files: {
+				".shepherd/CURRENT.md": {
+					type: "file",
+					encoding: "utf-8",
+					content: "Updated: 2026-10-13\nFirst move: held\n",
+				},
+			},
+		})}\n`;
+	switch (name) {
+		case "claude-run.json":
+			return `${JSON.stringify(runManifest(attempt))}\n`;
+		case "claude.jsonl":
+			return sessionLog(
+				attempt.binaryEvidence.expected,
+				attempt.binaryEvidence.callIds,
+			);
+		case "claude-baseline.json":
+		case "claude-final.json":
+			return snapshot();
+		case "claude-stdout.txt":
+			return `${STDOUT}\n`;
+		default:
+			return `${attempt.trial} ${attempt.ordinal} ${name}\n`;
+	}
+}
+
+/**
+ * The archived packet and one scorer output per invocation, as the gate
+ * writes them: a verdict's output decides the requested Musts as recorded,
+ * citing the final answer, and the recorded Musts are its validated decisions.
+ */
+function archiveScoring(attempt: Attempt) {
+	const scoring = attempt.scoring;
+	if (!scoring) return;
+	const packet = buildPacket({
+		trial: attempt.trial,
+		dir: join(root, "evals/shepherd", attempt.artifactDir),
+		requested: scoring.requested,
+		rubric: loadRubric(),
+	});
+	putArtifact(attempt, scoring.packet, packet.text);
+	scoring.packetSha256 = packet.sha256;
+	scoring.invocations.forEach((invocation, index) => {
+		invocation.packetSha256 = packet.sha256;
+		let output: string;
+		if (invocation.failure === null) {
+			const reply = JSON.stringify({
+				decisions: scoring.requested.map((id) => {
+					const must = attempt.musts.find((m) => m.id === id);
+					return {
+						id,
+						outcome: must?.outcome ?? "inconclusive",
+						rationale: must?.rationale ?? "handmade",
+						evidence: [
+							{ artifact: "claude-stdout.txt", line: 1, quote: STDOUT },
+						],
+					};
+				}),
+			});
+			const checked = validateDecisions(reply, scoring.requested, packet);
+			if ("failure" in checked) throw new Error(checked.failure);
+			for (const decision of checked.decisions) {
+				const must = attempt.musts.find((m) => m.id === decision.id);
+				if (must) {
+					must.outcome = decision.outcome;
+					must.rationale = decision.rationale;
+					must.evidence = decision.evidence;
+				}
+			}
+			output = scorerOutput(reply, invocation);
+		} else output = scorerOutput("not a reply", invocation);
+		putArtifact(
+			attempt,
+			`scorer-${index + 1}-r${invocation.round}.json`,
+			output,
+		);
+	});
+}
+
 /** The harness's `claude-run.json` as the gate would have read it for `attempt`. */
 function runManifest(attempt: Attempt) {
 	return {
+		argv: attempt.subject?.argv,
 		validity: { valid: attempt.valid, void_reasons: attempt.voidReasons },
 		provenance: [
 			{
@@ -992,7 +1100,11 @@ describe("fix round 1 (review-c4)", () => {
 					run.sha256 = sha256(placeholder);
 					run.bytes = Buffer.byteLength(placeholder);
 				}
-				setArtifact(a, "claude.jsonl", sessionLog(a.binaryEvidence.expected));
+				setArtifact(
+					a,
+					"claude.jsonl",
+					sessionLog(a.binaryEvidence.expected, a.binaryEvidence.callIds),
+				);
 			},
 			result({}, { D: [interrupted, pass] }),
 		);
@@ -1104,29 +1216,37 @@ function setArtifact(a: Attempt, name: string, content: string) {
 	}
 }
 
-/** A native log whose one tool result proves `binary`, under the policy model. */
-function sessionLog(binary: string): string {
-	return `${[
-		{
-			type: "assistant",
-			message: {
-				model: "claude-opus-5-5",
-				content: [{ type: "tool_use", id: "toolu_s", name: "Bash" }],
+/**
+ * A native log whose tool results, one per call id, prove `binary`, under
+ * `model`; one call `toolu_s` when no call id is given.
+ */
+function sessionLog(
+	binary: string,
+	callIds: string[] = [],
+	model = "claude-opus-5-5",
+): string {
+	return `${(callIds.length > 0 ? callIds : ["toolu_s"])
+		.flatMap((id) => [
+			{
+				type: "assistant",
+				message: {
+					model,
+					content: [{ type: "tool_use", id, name: "Bash" }],
+				},
 			},
-		},
-		{
-			type: "user",
-			message: {
-				content: [
-					{
-						type: "tool_result",
-						tool_use_id: "toolu_s",
-						content: `binary: ${binary}\n`,
-					},
-				],
+			{
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: id,
+							content: `binary: ${binary}\n`,
+						},
+					],
+				},
 			},
-		},
-	]
+		])
 		.map((e) => JSON.stringify(e))
 		.join("\n")}\n`;
 }
@@ -1229,7 +1349,18 @@ describe("fix round 2 (review-c4 verification round 1)", () => {
 			return a;
 		};
 		// No marker in the archived log.
-		writeResult(forge, result({}, { A: [first, forged, pass] }));
+		writeResult(
+			(v) => {
+				const a = forge(v);
+				if (a)
+					setArtifact(
+						a,
+						"claude.jsonl",
+						`${JSON.stringify({ type: "assistant", message: { model: "claude-opus-5-5", content: [] } })}\n`,
+					);
+			},
+			result({}, { A: [first, forged, pass] }),
+		);
 		expect(text(verify().problems)).toMatch(
 			/A attempt 2: session: no tool-result binary evidence proves/,
 		);
@@ -1285,5 +1416,514 @@ describe("fix round 2 (review-c4 verification round 1)", () => {
 		expect(text(verify().problems)).toMatch(
 			/E attempt 1: recorded valid, but its archived claude-run\.json is not/,
 		);
+	});
+});
+
+describe("fix round 3 (S1, S6): judged verdicts and session facts re-derived", () => {
+	const verify = (extra: VerifyOptions = {}) =>
+		verifyResults(root, options(extra));
+	const at = (v: Result, trial: string) =>
+		v.evaluation.trials.find((t) => t.trial === trial)?.attempts[0] as Attempt;
+	const reply = (outcome: MustOutcome) =>
+		JSON.stringify({
+			decisions: [
+				{
+					id: "E.M1",
+					outcome,
+					rationale: "no warning persisted",
+					evidence: [{ artifact: "claude-stdout.txt", line: 1, quote: STDOUT }],
+				},
+			],
+		});
+
+	test("S1 (SYNTH fable-1/astra-4): an archived scorer output saying fail, from another model, beside a recorded pass fails", () => {
+		writeResult((v) => {
+			const e = at(v, "E");
+			putArtifact(
+				e,
+				"scorer-1-r1.json",
+				`${JSON.stringify({ result: reply("fail"), modelUsage: { "claude-haiku-5-5": {} }, total_cost_usd: 9 })}\n`,
+			);
+		});
+		const outcome = verify();
+		expect(outcome.ok).toBe(false);
+		const problems = text(outcome.problems);
+		expect(problems).toMatch(
+			/E attempt 1: scorer invocation 0 is recorded a verdict, but its archived output reads schema-invalid output: observed model claude-haiku-5-5/,
+		);
+		expect(problems).toMatch(
+			/E attempt 1: E\.M1 is recorded pass by the scorer, but no archived verdict decides it/,
+		);
+	});
+
+	test("S1: a judged outcome, rationale or evidence that differs from the archived verdict fails", () => {
+		writeResult((v) => {
+			const e = at(v, "E");
+			const verdict = e.scoring?.invocations[0];
+			if (verdict)
+				putArtifact(
+					e,
+					"scorer-1-r1.json",
+					scorerOutput(reply("fail"), verdict),
+				);
+		});
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: E\.M1 is recorded pass, but its archived scorer output decides fail/,
+		);
+		writeResult((v) => {
+			const must = at(v, "D").musts.find((m) => m.id === "D.M1");
+			if (must) must.rationale = "edited";
+		});
+		expect(text(verify().problems)).toMatch(
+			/D attempt 1: D\.M1 is recorded pass, but its archived scorer output decides pass/,
+		);
+	});
+
+	test("S1: a scorer cost, session id or observed model that differs from the archived output fails", () => {
+		writeResult((v) => {
+			const e = at(v, "E");
+			const verdict = e.scoring?.invocations[0];
+			if (!verdict) return;
+			const archived = { ...verdict, cost: { ...verdict.cost, usd: 9 } };
+			archived.sessionId = "00000000-0000-4000-8000-0000000000ff";
+			putArtifact(e, "scorer-1-r1.json", scorerOutput(reply("pass"), archived));
+		});
+		const problems = text(verify().problems);
+		expect(problems).toMatch(
+			/E attempt 1: scorer invocation 0 is recorded at \$0\.2, but its archived output reports 9/,
+		);
+		expect(problems).toMatch(
+			/E attempt 1: scorer invocation 0 is recorded as session .*0001, but its archived output names .*00ff/,
+		);
+	});
+
+	test("S1: every scorer invocation must archive its output", () => {
+		writeResult((v) => {
+			const d = at(v, "D");
+			d.artifacts = d.artifacts.filter((x) => x.path !== "scorer-1-r1.json");
+		});
+		expect(text(verify().problems)).toMatch(
+			/D attempt 1: scorer invocation 0 has no verified archived output scorer-1-r1\.json/,
+		);
+	});
+
+	test("S1: a scored attempt must archive every packet file", () => {
+		writeResult((v) => {
+			const g = at(v, "G");
+			g.artifacts = g.artifacts.filter((x) => x.path !== "claude-diff.patch");
+		});
+		expect(text(verify().problems)).toMatch(
+			/G attempt 1: the scored packet's files are not all archived: claude-diff\.patch/,
+		);
+	});
+
+	test("S1: a recorded binary call id the archived log does not prove fails", () => {
+		writeResult((v) => {
+			const g = at(v, "G");
+			g.binaryEvidence.callIds = ["toolu_other"];
+			putArtifact(g, "claude-run.json", `${JSON.stringify(runManifest(g))}\n`);
+		});
+		expect(text(verify().problems)).toMatch(
+			/G attempt 1: call toolu_other returns no binary marker for .* in its archived claude\.jsonl/,
+		);
+	});
+
+	test("S1: a session log model other than the recorded observed models fails", () => {
+		writeResult((v) => {
+			const a = at(v, "A");
+			putArtifact(
+				a,
+				"claude.jsonl",
+				sessionLog(
+					a.binaryEvidence.expected,
+					a.binaryEvidence.callIds,
+					"claude-sonnet-5-5",
+				),
+			);
+		});
+		expect(text(verify().problems)).toMatch(
+			/A attempt 1: its archived claude\.jsonl observed claude-sonnet-5-5, but the record says claude-opus-5-5/,
+		);
+	});
+
+	test("S1: a subject launched without the policy model and effort fails", () => {
+		writeResult((v) => {
+			const subject = at(v, "E-neg").subject;
+			if (subject)
+				subject.argv = subject.argv.map((arg) =>
+					arg === "high" ? "low" : arg,
+				);
+		});
+		expect(text(verify().problems)).toMatch(
+			/E-neg attempt 1: the subject argv does not request --model claude-opus-5-5 --effort high/,
+		);
+	});
+
+	test("S6 (SYNTH fable-3): a never-finished claude-run.json on an attempt that was not interrupted fails", () => {
+		const placeholder = `${JSON.stringify({ validity: { valid: false, void_reasons: [] }, provenance: [], ended_at: null })}\n`;
+		writeResult((v) => putArtifact(at(v, "E"), "claude-run.json", placeholder));
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: its archived claude-run\.json never finished, but the attempt was not interrupted/,
+		);
+	});
+});
+
+describe("G1 fix round 1 (review-g1)", () => {
+	const verify = (extra: VerifyOptions = {}) =>
+		verifyResults(root, options(extra));
+	const at = (v: Result, trial: string) =>
+		v.evaluation.trials.find((t) => t.trial === trial)?.attempts[0] as Attempt;
+	const failReply = JSON.stringify({
+		decisions: [
+			{
+				id: "E.M1",
+				outcome: "fail",
+				rationale: "the warning was never persisted",
+				evidence: [{ artifact: "claude-stdout.txt", line: 1, quote: STDOUT }],
+			},
+		],
+	});
+	/** E scored twice: invocation 0 recorded as `relabel` says, invocation 1 the pass verdict. */
+	const twice = (relabel: Partial<ScorerInvocation>) => {
+		const e = behavioral("E", "pass");
+		const first = invocation({
+			sessionId: "00000000-0000-4000-8000-0000000000aa",
+			...relabel,
+		});
+		const second = invocation({
+			retryReason:
+				relabel.failure === "cancelled" ? null : (relabel.failure ?? null),
+		});
+		if (e.scoring) e.scoring.invocations = [first, second];
+		e.cost.scorer = [first.cost, second.cost];
+		for (const m of e.musts) if (m.scorer) m.scorer.invocation = 1;
+		return result({}, { E: [e] });
+	};
+	/** Invocation 0's archived output is a genuine fail verdict. */
+	const genuineFail = (v: Result) => {
+		const e = at(v, "E");
+		const first = e.scoring?.invocations[0];
+		if (first)
+			putArtifact(e, "scorer-1-r1.json", scorerOutput(failReply, first));
+	};
+	const relabelled =
+		/E attempt 1: scorer invocation 0 is recorded a failure, but its archived output reads a verdict/;
+
+	test("1: a fail verdict relabelled cancelled, timed out, killed or schema-invalid fails (P1a, P1b, M3b)", () => {
+		for (const relabel of [
+			{ failure: "cancelled", exitStatus: null, signal: "SIGKILL" },
+			{
+				failure: "timeout after 300 s",
+				timedOut: true,
+				exitStatus: null,
+				signal: "SIGKILL",
+			},
+			{ failure: "nonzero exit 1: boom", exitStatus: 1 },
+			{ failure: "schema-invalid output: missing decision for E.M1" },
+		]) {
+			writeResult(genuineFail, twice(relabel));
+			expect([relabel.failure, text(verify().problems)]).toEqual([
+				relabel.failure,
+				expect.stringMatching(relabelled),
+			]);
+		}
+	});
+
+	test("1: an honest verdict printed before a timeout, recorded as a verdict, verifies", () => {
+		writeResult(
+			() => {},
+			result(
+				{},
+				{
+					E: [
+						(() => {
+							const e = behavioral("E", "pass");
+							if (e.scoring)
+								e.scoring.invocations = [
+									invocation({
+										timedOut: true,
+										exitStatus: null,
+										signal: "SIGKILL",
+									}),
+								];
+							return e;
+						})(),
+					],
+				},
+			),
+		);
+		expect(verify().problems).toEqual([]);
+	});
+
+	test("2: a marker the harness reads from a JSON-wrapped tool result verifies (P3); another path still fails", () => {
+		const wrapped = (binary: (expected: string) => string) => (v: Result) => {
+			const e = at(v, "E");
+			e.binaryEvidence.callIds = ["toolu_w"];
+			const log = [
+				{
+					type: "assistant",
+					message: {
+						model: "claude-opus-5-5",
+						content: [
+							{
+								type: "tool_use",
+								id: "toolu_w",
+								name: "mcp__x__run",
+								input: {},
+							},
+						],
+					},
+				},
+				{
+					type: "user",
+					message: {
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: "toolu_w",
+								content: JSON.stringify({
+									exit: 0,
+									stdout: JSON.stringify({
+										text: `# Shepherd start: /w\n2026-10-14\nbinary: ${binary(e.binaryEvidence.expected)}\n`,
+									}),
+								}),
+							},
+						],
+					},
+				},
+			];
+			putArtifact(
+				e,
+				"claude.jsonl",
+				`${log.map((l) => JSON.stringify(l)).join("\n")}\n`,
+			);
+			putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
+		};
+		writeResult(wrapped((expected) => expected));
+		expect(verify().problems).toEqual([]);
+		writeResult(wrapped(() => "/tmp/shepherd-evals-y/bin/shepherd"));
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: call toolu_w returns no binary marker for/,
+		);
+	});
+
+	test("3: the archived claude-run.json argv must be the record's (P2)", () => {
+		writeResult((v) => {
+			const e = at(v, "E");
+			const manifest = {
+				...runManifest(e),
+				argv: (e.subject?.argv ?? []).map((a) => (a === "high" ? "low" : a)),
+			};
+			putArtifact(e, "claude-run.json", `${JSON.stringify(manifest)}\n`);
+		});
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: the argv of its archived claude-run\.json is not the record's/,
+		);
+	});
+
+	test("4: an edited judged evidence pointer fails (Mev)", () => {
+		writeResult((v) => {
+			const must = at(v, "E").musts.find((m) => m.id === "E.M1");
+			const pointer = must?.evidence[0];
+			if (pointer) pointer.quote = "Done";
+		});
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: E\.M1 is recorded pass, but its archived scorer output decides pass with another rationale or evidence/,
+		);
+	});
+
+	test("4: a judged Must citing another session fails (M1)", () => {
+		writeResult((v) => {
+			const must = at(v, "E").musts.find((m) => m.id === "E.M1");
+			if (must?.scorer)
+				must.scorer.sessionId = "00000000-0000-4000-8000-0000000000bb";
+		});
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: E\.M1 is recorded pass by the scorer, but no archived verdict decides it/,
+		);
+	});
+
+	test("5: archived text is decoded as the gate decodes it, a byte order mark included", () => {
+		const unreported = {
+			observedModels: [],
+			cost: {
+				usd: null,
+				reason: "the scorer output reports no cost",
+				usage: null,
+				source: "scorer output",
+			},
+		};
+		// The CLI's reply after a byte order mark: the gate cannot parse it.
+		writeResult(
+			(v) => {
+				const e = at(v, "E");
+				putArtifact(
+					e,
+					"scorer-1-r1.json",
+					`\uFEFF${scorerOutput(failReply, invocation({ sessionId: "00000000-0000-4000-8000-0000000000aa" }))}`,
+				);
+			},
+			twice({ failure: "unparsable CLI output", ...unreported }),
+		);
+		expect(verify().problems).toEqual([]);
+	});
+});
+
+describe("G1 fix round 1, verification round 1 (V1)", () => {
+	const verify = () => verifyResults(root, options());
+	/** E's one marker call returns `output`, wrapped `depth` times in JSON as a tool might. */
+	const marked =
+		(output: (expected: string) => string, depth: number) => (v: Result) => {
+			const e = v.evaluation.trials.find((t) => t.trial === "E")
+				?.attempts[0] as Attempt;
+			e.binaryEvidence.callIds = ["toolu_w"];
+			let content = output(e.binaryEvidence.expected);
+			for (let n = 0; n < depth; n++)
+				content = JSON.stringify({ exit: 0, stdout: content });
+			const log = [
+				{
+					type: "assistant",
+					message: {
+						model: "claude-opus-5-5",
+						content: [
+							{ type: "tool_use", id: "toolu_w", name: "Bash", input: {} },
+						],
+					},
+				},
+				{
+					type: "user",
+					message: {
+						content: [{ type: "tool_result", tool_use_id: "toolu_w", content }],
+					},
+				},
+			];
+			putArtifact(
+				e,
+				"claude.jsonl",
+				`${log.map((l) => JSON.stringify(l)).join("\n")}\n`,
+			);
+			putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
+		};
+
+	test("a path that only contains the expected one is no marker for it, at every escape level", () => {
+		for (const depth of [0, 1, 2, 3]) {
+			writeResult(
+				marked((x) => `# Shepherd start: /w\nbinary:\t${x}\n`, depth),
+			);
+			expect([depth, verify().problems]).toEqual([depth, []]);
+			for (const near of [
+				(x: string) => `${x}-old`,
+				(x: string) => `${x}/../x`,
+				(x: string) => `/mnt${x}`,
+			]) {
+				writeResult(
+					marked((x) => `# Shepherd start: /w\nbinary: ${near(x)}\n`, depth),
+				);
+				expect([depth, near("X"), text(verify().problems)]).toEqual([
+					depth,
+					near("X"),
+					expect.stringMatching(
+						/E attempt 1: call toolu_w returns no binary marker for/,
+					),
+				]);
+			}
+		}
+	});
+});
+
+describe("G1 fix round 1, verification round 1 (V1 additions)", () => {
+	const verify = () => verifyResults(root, options());
+	const NON_ASCII = "/tmp/shepherd-évals-ü/bin/shepherd";
+	/** Python's `json.dumps` with `ensure_ascii`, for an ASCII-only reading. */
+	const pyDumps = (value: unknown) =>
+		JSON.stringify(value).replace(
+			/[^\p{ASCII}]/gu,
+			(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+		);
+	/** E's one marker call returns `content(expected)`, with `expected` set first. */
+	const marked =
+		(content: (x: string) => string, expected?: string) => (v: Result) => {
+			const e = v.evaluation.trials.find((t) => t.trial === "E")
+				?.attempts[0] as Attempt;
+			if (expected) e.binaryEvidence.expected = expected;
+			e.binaryEvidence.callIds = ["toolu_w"];
+			const log = [
+				{
+					type: "assistant",
+					message: {
+						model: "claude-opus-5-5",
+						content: [
+							{ type: "tool_use", id: "toolu_w", name: "Bash", input: {} },
+						],
+					},
+				},
+				{
+					type: "user",
+					message: {
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: "toolu_w",
+								content: content(e.binaryEvidence.expected),
+							},
+						],
+					},
+				},
+			];
+			putArtifact(
+				e,
+				"claude.jsonl",
+				`${log.map((l) => JSON.stringify(l)).join("\n")}\n`,
+			);
+			putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
+		};
+	const noMarker = /E attempt 1: call toolu_w returns no binary marker for/;
+
+	test("a bare mention of the path, without a marker, is no marker", () => {
+		for (const content of [
+			(x: string) => `${x}\n`,
+			(x: string) => `which shepherd\n${x}\n`,
+			(x: string) => JSON.stringify({ path: x }),
+			(x: string) => `not binary: ${x}\n`,
+			(x: string) => `binary: ${x} and more\n`,
+		]) {
+			writeResult(marked(content));
+			expect([content("X"), text(verify().problems)]).toEqual([
+				content("X"),
+				expect.stringMatching(noMarker),
+			]);
+		}
+	});
+
+	test("a non-ASCII path is found in JavaScript and Python ensure_ascii spellings, as a line or a field", () => {
+		const line = (x: string) => `# Shepherd start: /w\nbinary: ${x}\n`;
+		for (const content of [
+			line,
+			(x: string) => `binary: "${x}"\n`,
+			(x: string) => JSON.stringify({ stdout: line(x) }),
+			(x: string) => pyDumps({ stdout: line(x) }),
+			(x: string) => pyDumps({ result: pyDumps({ stdout: line(x) }) }),
+			(x: string) => JSON.stringify({ result: pyDumps({ stdout: line(x) }) }),
+			(x: string) => pyDumps({ binary: x }),
+			(x: string) => `prose then ${JSON.stringify({ binary: x })}`,
+			(x: string) => JSON.stringify({ wrapped: pyDumps({ binary: x }) }),
+		]) {
+			writeResult(marked(content, NON_ASCII));
+			expect([content(NON_ASCII), verify().problems]).toEqual([
+				content(NON_ASCII),
+				[],
+			]);
+		}
+		for (const content of [
+			(x: string) => pyDumps({ stdout: line(`${x}-old`) }),
+			(x: string) => pyDumps({ binary: `/mnt${x}` }),
+			(x: string) => pyDumps({ path: x }),
+		]) {
+			writeResult(marked(content, NON_ASCII));
+			expect([content(NON_ASCII), text(verify().problems)]).toEqual([
+				content(NON_ASCII),
+				expect.stringMatching(noMarker),
+			]);
+		}
 	});
 });

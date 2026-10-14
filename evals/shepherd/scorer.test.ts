@@ -74,6 +74,8 @@ else:
                       'result': step['result'] if isinstance(step['result'], str) else json.dumps(step['result']),
                       'session_id': session, 'total_cost_usd': 0.25,
                       'modelUsage': {step.get('model', 'claude-opus-5-5'): {'costUSD': 0.25}}}))
+sys.stdout.flush()
+time.sleep(step.get('linger', 0))
 raise SystemExit(step.get('exit', 0))
 `;
 
@@ -669,7 +671,7 @@ describe("decisions and retries (4.4, 4.5)", () => {
 	test("timeouts, nonzero exits, unparsable output and other models are infrastructure failures", async () => {
 		const cases: [Record<string, unknown>, RegExp][] = [
 			[{ result: good(), sleep: 3 }, /timeout/],
-			[{ result: good(), exit: 1 }, /nonzero exit 1: boom: quota exceeded/],
+			[{ raw: "", exit: 1 }, /nonzero exit 1: boom: quota exceeded/],
 			[{ raw: "not json" }, /unparsable/],
 			[{ result: "Here you go: {}" }, /unparsable JSON/],
 			[
@@ -688,6 +690,25 @@ describe("decisions and retries (4.4, 4.5)", () => {
 		}
 	}, 30_000);
 
+	test("a complete verdict printed before a timeout, a kill or a nonzero exit is the verdict (G1 fix round 1)", async () => {
+		config.timeoutMs = 1_500;
+		for (const step of [
+			{ result: good("fail"), linger: 10 },
+			{ result: good("fail"), exit: 1 },
+		]) {
+			resetSteps();
+			plan(step, { result: good("pass") });
+			const { scored } = await score();
+			expect(scored.invocations).toHaveLength(1);
+			expect(scored.invocations[0]?.failure).toBeNull();
+			expect(scored.invocations[0]?.observedModels).toEqual([
+				"claude-opus-5-5",
+			]);
+			expect(scored.decisions?.[0]?.outcome).toBe("fail");
+		}
+		expect(calls().filter((c) => "packet" in c)).toHaveLength(2);
+	}, 30_000);
+
 	test("another or missing observed model is invalid output, retried once (addendum C)", async () => {
 		plan({ result: good(), model: "claude-sonnet-5-5" }, { result: good() });
 		const { scored } = await score();
@@ -699,7 +720,7 @@ describe("decisions and retries (4.4, 4.5)", () => {
 	});
 
 	test("the invocation record keeps the scorer's stderr, bounded", async () => {
-		plan({ result: good(), exit: 1 }, { result: good() });
+		plan({ raw: "", exit: 1 }, { result: good() });
 		const { scored } = await score();
 		expect(scored.invocations[0]?.stderr).toBe(
 			"warming up\nboom: quota exceeded",
@@ -708,7 +729,7 @@ describe("decisions and retries (4.4, 4.5)", () => {
 	});
 
 	test("exhausted retries leave the attempt unscored, and a later round scores again", async () => {
-		plan({ result: good(), exit: 2 });
+		plan({ raw: "", exit: 2 });
 		const { scored } = await score();
 		expect(scored.invocations).toHaveLength(2);
 		expect(scored.decisions).toBeUndefined();

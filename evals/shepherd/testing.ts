@@ -61,6 +61,27 @@ export function invocation(
 	};
 }
 
+/**
+ * The Claude CLI's `--output-format json` reply as `of` read it: `reply` is
+ * the scorer's text, its models, session id and cost are the invocation's.
+ */
+export function scorerOutput(
+	reply: string,
+	of: ScorerInvocation = invocation(),
+): string {
+	return `${JSON.stringify({
+		type: "result",
+		subtype: "success",
+		is_error: false,
+		result: reply,
+		session_id: of.sessionId,
+		total_cost_usd: of.cost.usd,
+		modelUsage: Object.fromEntries(
+			of.observedModels.map((model) => [model, { costUSD: of.cost.usd }]),
+		),
+	})}\n`;
+}
+
 export function attempt(trial: string, kind: AttemptKind, rounds = 1): Attempt {
 	const artifactDir = `artifacts/${HEX}/${RUN_ID}/${trial}/attempt-1`;
 	const base: Attempt = {
@@ -88,7 +109,20 @@ export function attempt(trial: string, kind: AttemptKind, rounds = 1): Attempt {
 			effort: "high",
 			cliVersion: "2.1.296 (Claude Code)",
 			settingsFingerprint: HASH("4"),
-			argv: ["/tmp/shepherd-evals-x/bin/shepherd", "--backend", "claude"],
+			argv: [
+				"/tmp/shepherd-evals-x/bin/shepherd",
+				"--backend",
+				"claude",
+				"--model",
+				"claude-opus-5-5",
+				"--print",
+				"You are taking over this workspace. Do the next thing.",
+				"--",
+				"--effort",
+				"high",
+				"--session-id",
+				"00000000-0000-4000-8000-000000000002",
+			],
 		},
 		startedAt: T0,
 		endedAt: T1,

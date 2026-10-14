@@ -29,9 +29,16 @@ import {
 	summary,
 } from "./gate";
 import { evaluationIdentity } from "./identity";
-import { loadRubric, policyHash, type Result, validateResult } from "./schema";
+import {
+	deriveAggregate,
+	deriveTrial,
+	loadRubric,
+	policyHash,
+	type Result,
+	validateResult,
+} from "./schema";
 import { validateDecisions } from "./scorer";
-import { invocation, projectDirName } from "./testing";
+import { invocation, projectDirName, scorerOutput } from "./testing";
 import { verifyResults } from "./verify";
 
 const rubric = loadRubric();
@@ -205,13 +212,7 @@ function writeAttempt(
 	const manifest = {
 		trial,
 		workspace,
-		argv: [
-			binary,
-			"--backend",
-			"claude",
-			"--session-id",
-			`00000000-0000-4000-8000-00000000000${ordinal}`,
-		],
+		argv: subjectArgv(binary, `00000000-0000-4000-8000-00000000000${ordinal}`),
 		PATH: `${run}/bin:${HOME}/.local/bin:/usr/bin`,
 		HOME,
 		cli_version: "2.1.296 (Claude Code)",
@@ -263,6 +264,22 @@ function writeAttempt(
 		`# Trial ${trial} fixture facts\n`,
 	);
 }
+
+/** The subject argv as the harness builds it for a Claude gate attempt. */
+const subjectArgv = (binary: string, session: string) => [
+	binary,
+	"--backend",
+	"claude",
+	"--model",
+	"claude-opus-5-5",
+	"--print",
+	"You are taking over this workspace. Do the next thing.",
+	"--",
+	"--effort",
+	"high",
+	"--session-id",
+	session,
+];
 
 function options(
 	plan: Record<string, Behaviour[]>,
@@ -331,28 +348,102 @@ function options(
 					exitStatus: null,
 					timedOut: true,
 					retryReason: first.failure,
+					// Killed before printing: no model, cost or session reported.
+					observedModels: [],
+					cost: {
+						usd: null,
+						reason: "the scorer timed out before reporting its cost",
+						usage: null,
+						source: "scorer output",
+					},
 				};
-				return { invocations: [first, second], outputs: ["{}", ""] };
+				// A reply deciding nothing: invalid output, from the requested model.
+				const empty = scorerOutput(JSON.stringify({ decisions: [] }), first);
+				return { invocations: [first, second], outputs: [empty, ""] };
 			}
+			const decisions = requested.map((id) => ({
+				id,
+				outcome: verdict,
+				rationale: "fake scorer",
+				evidence: [
+					{
+						artifact: "claude-stdout.txt",
+						line: 1,
+						quote: "Done the NEXT first.",
+					},
+				],
+			}));
 			return {
 				invocations: [base],
-				outputs: ['{"decisions":[]}'],
-				decisions: requested.map((id) => ({
-					id,
-					outcome: verdict,
-					rationale: "fake scorer",
-					evidence: [
-						{
-							artifact: "claude-stdout.txt",
-							line: 1,
-							quote: "Done the NEXT first.",
-						},
-					],
-				})),
+				outputs: [scorerOutput(JSON.stringify({ decisions }), base)],
+				decisions,
 			};
 		},
 		...changes,
 	};
+}
+
+/**
+ * Each invocation's final snapshots note the run's own scratch root, so a
+ * packet built in an invocation keeps that root as provenance. Returns the
+ * runs in order.
+ */
+function noteRuns(): string[] {
+	const runs: string[] = [];
+	finalSnapshot = (json, run) => {
+		if (!runs.includes(run)) runs.push(run);
+		return json.replace(
+			/\}\}$/,
+			`,"notes/where.md":{"type":"file","encoding":"utf-8","content":"worked in ${run}/shepherd-eval-E-x/workspace\\n"}}}`,
+		);
+	};
+	return runs;
+}
+
+/**
+ * E's scorer validates a reply quoting the note, as the real scorer does,
+ * saying each of `says` in turn, then pass.
+ */
+function quoting(
+	base: GateOptions,
+	quote: () => string,
+	outcomes: string[] = [],
+	says: Verdict[] = [],
+): GateOptions {
+	const fallback = base.score;
+	base.score = async (args) => {
+		if (args.trial !== "E") return fallback(args);
+		scored.push({ trial: args.trial, round: args.round });
+		const outcome = says.shift() ?? "pass";
+		const reply = JSON.stringify({
+			decisions: args.requested.map((id) => ({
+				id,
+				outcome,
+				rationale: "quoted the note",
+				evidence: [
+					{
+						artifact: "claude-final.json",
+						path: "notes/where.md",
+						lines: [1, 1],
+						quote: quote(),
+					},
+				],
+			})),
+		});
+		const checked = validateDecisions(reply, args.requested, args.packet);
+		if ("failure" in checked) throw new Error(checked.failure);
+		outcomes.push(...checked.decisions.map((d) => d.outcome));
+		const verdict = invocation({
+			round: args.round,
+			packetSha256: args.packet.sha256,
+		});
+		return {
+			invocations: [verdict],
+			outputs: [scorerOutput(reply, verdict)],
+			decisions: checked.decisions,
+		};
+	};
+	return base;
 }
 
 const read = () =>
@@ -824,7 +915,7 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 						JSON.stringify({
 							trial,
 							workspace,
-							argv: [`${run}/bin/shepherd`, "--session-id", session],
+							argv: subjectArgv(`${run}/bin/shepherd`, session),
 							HOME: home,
 							cli_version: "2.1.296",
 							validity: { valid: false, void_reasons: [] },
@@ -950,7 +1041,7 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 					JSON.stringify({
 						trial: t,
 						workspace,
-						argv: [`${run}/bin/shepherd`, "--session-id", session],
+						argv: subjectArgv(`${run}/bin/shepherd`, session),
 						validity: { valid: false, void_reasons: [] },
 						provenance: [],
 						started_at: "2026-10-13T15:11:10.000Z",
@@ -1095,58 +1186,10 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 });
 
 describe("archived packets scored in a later invocation (R1, pending)", () => {
-	// Each invocation's final snapshots note the run's own scratch root; the
-	// packet built in the first invocation keeps that root as provenance.
 	let runs: string[];
 	beforeEach(() => {
-		runs = [];
-		finalSnapshot = (json, run) => {
-			if (!runs.includes(run)) runs.push(run);
-			return json.replace(
-				/\}\}$/,
-				`,"notes/where.md":{"type":"file","encoding":"utf-8","content":"worked in ${run}/shepherd-eval-E-x/workspace\\n"}}}`,
-			);
-		};
+		runs = noteRuns();
 	});
-
-	/** E's scorer validates a reply quoting the note, as the real scorer does. */
-	function quoting(
-		base: GateOptions,
-		quote: () => string,
-		outcomes: string[],
-	): GateOptions {
-		const fallback = base.score;
-		base.score = async (args) => {
-			if (args.trial !== "E") return fallback(args);
-			scored.push({ trial: args.trial, round: args.round });
-			const reply = JSON.stringify({
-				decisions: args.requested.map((id) => ({
-					id,
-					outcome: "pass",
-					rationale: "quoted the note",
-					evidence: [
-						{
-							artifact: "claude-final.json",
-							path: "notes/where.md",
-							lines: [1, 1],
-							quote: quote(),
-						},
-					],
-				})),
-			});
-			const checked = validateDecisions(reply, args.requested, args.packet);
-			if ("failure" in checked) throw new Error(checked.failure);
-			outcomes.push(...checked.decisions.map((d) => d.outcome));
-			return {
-				invocations: [
-					invocation({ round: args.round, packetSha256: args.packet.sha256 }),
-				],
-				outputs: [reply],
-				decisions: checked.decisions,
-			};
-		};
-		return base;
-	}
 
 	/** The outcomes of an attempt's scored Musts. */
 	const judged = (
@@ -1494,6 +1537,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 	function real(
 		plan: Record<string, Behaviour[]>,
 		changes: Partial<GateOptions> = {},
+		verdicts: Record<string, Verdict[]> = {},
 	): GateOptions {
 		const source = readWorktreeSource(repo, { git: testGit });
 		const identity = evaluationIdentity(repo, { git: testGit });
@@ -1501,7 +1545,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 			readFileSync(join(evalsDir, "policy.json"), "utf8"),
 		);
 		const revision = fixtureGit(repo, "rev-parse", "HEAD").trim();
-		const base = options(plan, {}, changes);
+		const base = options(plan, verdicts, changes);
 		return {
 			...base,
 			sourceHash: source.source,
@@ -1529,6 +1573,115 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 	}
 
 	const verified = () => verifyResults(repo, { git: testGit }).problems;
+
+	describe("G1 fix round 1 (review-g1)", () => {
+		test("1 (P1e2e): a fail verdict relabelled cancelled and rescored fails verification", async () => {
+			const { result: before } = await runGate(
+				real({}, {}, { E: ["fail", "fail"] }),
+			);
+			const e2 = trial(before, "E")?.attempts[1];
+			const first = e2?.scoring?.invocations[0];
+			if (!e2 || !first) throw new Error("no second scored E attempt");
+			first.failure = "cancelled";
+			e2.musts = e2.musts.filter((m) => m.class !== "judged");
+			e2.kind = "unscored";
+			e2.behavioralOrdinal = null;
+			for (const t of before.evaluation.trials)
+				t.outcome = deriveTrial(t.attempts);
+			before.evaluation.outcome = deriveAggregate(
+				before.evaluation.trials.map((t) => t.outcome),
+			);
+			before.outcome = before.evaluation.outcome;
+			expect(validateResult(before)).toEqual([]);
+			const hex = before.source.hash.replace("sha256:", "");
+			writeFileSync(
+				join(evalsDir, `results/${hex}.json`),
+				`${JSON.stringify(before, null, "\t")}\n`,
+			);
+			const { result } = await runGate(real({}));
+			expect(result.outcome).toBe("flaky-pass");
+			expect(verified()).toContainEqual(
+				"E attempt 2: scorer invocation 0 is recorded a failure, but its archived output reads a verdict",
+			);
+		});
+
+		test("1: an honest verdict printed before a timeout is the verdict and verifies", async () => {
+			const late = real({});
+			const fallback = late.score;
+			late.score = async (job) => {
+				const scored = await fallback(job);
+				return {
+					...scored,
+					invocations: scored.invocations.map((i) => ({
+						...i,
+						timedOut: true,
+						exitStatus: null,
+						signal: "SIGKILL",
+					})),
+				};
+			};
+			const { result } = await runGate(late);
+			expect(result.outcome).toBe("pass");
+			expect(verified()).toEqual([]);
+		});
+	});
+
+	describe("verdicts quoting a scratch path (fix round 3, S1)", () => {
+		let runs: string[];
+		beforeEach(() => {
+			runs = noteRuns();
+		});
+		const quote = (n: number) => () =>
+			`worked in ${runs[n]}/shepherd-eval-E-x/workspace`;
+		const judged = (r: Result) =>
+			trial(r, "E")
+				?.attempts.at(-1)
+				?.musts.filter((m) => m.class === "judged")
+				.map((m) => m.outcome);
+
+		test("a first-round pass verifies", async () => {
+			const { result } = await runGate(quoting(real({}), quote(0)));
+			expect(result.outcome).toBe("pass");
+			expect(judged(result)).toEqual(["pass"]);
+			expect(verified()).toEqual([]);
+		});
+
+		test("a flaky pass verifies", async () => {
+			const { result } = await runGate(
+				quoting(real({}), quote(0), [], ["fail"]),
+			);
+			expect(trial(result, "E")?.outcome).toBe("flaky-pass");
+			expect(verified()).toEqual([]);
+		});
+
+		test("an R1 rescore of the earlier run's packet verifies", async () => {
+			await runGate(real({}, {}, { E: ["infra"] }));
+			const { result } = await runGate(quoting(real({}), quote(0)));
+			const e = trial(result, "E")?.attempts[0];
+			expect(e?.scoring?.invocations.map((i) => i.round)).toEqual([1, 1, 2]);
+			expect(judged(result)).toEqual(["pass"]);
+			expect(verified()).toEqual([]);
+		});
+
+		test("a finished pending attempt scored by the next invocation verifies", async () => {
+			const failing = real(
+				{},
+				{
+					checks: (t, dir) => {
+						if (t === "E") throw new Error("checker printed garbage");
+						return pythonChecks(t, dir);
+					},
+				},
+			);
+			await expect(runGate(failing)).rejects.toThrow(/garbage/);
+			launches = [];
+			const { result } = await runGate(quoting(real({}), quote(0)));
+			expect(launches).not.toContainEqual({ trial: "E", ordinal: 1 });
+			expect(judged(result)).toEqual(["pass"]);
+			expect(result.outcome).toBe("pass");
+			expect(verified()).toEqual([]);
+		});
+	});
 
 	test("a passing suite, a flaky pass and an exempt void verify", async () => {
 		const { result } = await runGate(
@@ -1579,7 +1732,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 					JSON.stringify({
 						trial: t,
 						workspace,
-						argv: [`${run}/bin/shepherd`, "--session-id", session],
+						argv: subjectArgv(`${run}/bin/shepherd`, session),
 						validity: { valid: false, void_reasons: [] },
 						provenance: [],
 						started_at: "2026-10-13T15:11:10.000Z",
@@ -1661,5 +1814,61 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 			true,
 		);
 		expect(verified()).toEqual([]);
+	});
+});
+
+describe("verdicts recorded from the archived output (fix round 3, S1)", () => {
+	/** A scorer whose output says `says` while its in-memory decisions say pass. */
+	const archivedSays = (
+		base: GateOptions,
+		output: (requested: string[]) => string,
+	) => {
+		const fallback = base.score;
+		base.score = async (args) => {
+			const scored = await fallback(args);
+			return { ...scored, outputs: [output(args.requested)] };
+		};
+		return base;
+	};
+	const reply = (requested: string[], outcome: string) =>
+		JSON.stringify({
+			decisions: requested.map((id) => ({
+				id,
+				outcome,
+				rationale: "archived",
+				evidence: [
+					{
+						artifact: "claude-stdout.txt",
+						line: 1,
+						quote: "Done the NEXT first.",
+					},
+				],
+			})),
+		});
+
+	test("the archived decisions are the recorded ones", async () => {
+		const { result } = await runGate(
+			archivedSays(options({}), (requested) =>
+				scorerOutput(reply(requested, "fail"), invocation()),
+			),
+		);
+		const e = trial(result, "E")?.attempts[0];
+		expect(
+			e?.musts
+				.filter((m) => m.class === "judged")
+				.map((m) => [m.outcome, m.rationale]),
+		).toEqual([["fail", "archived"]]);
+	});
+
+	test("an archived output that reads no verdict leaves the attempt unscored", async () => {
+		const { result } = await runGate(
+			archivedSays(options({}), () => "not the reply\n"),
+		);
+		const e = trial(result, "E")?.attempts[0];
+		expect(e?.kind).toBe("unscored");
+		expect(e?.scoring?.invocations.at(-1)?.failure).toBe(
+			"the archived output reads no verdict: unparsable CLI output",
+		);
+		expect(validateResult(result)).toEqual([]);
 	});
 });
