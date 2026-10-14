@@ -573,8 +573,9 @@ export interface ScorerReading {
 
 /**
  * Read the CLI's JSON output of a scorer that exited 0 in time: its models,
- * cost and session, and its decisions validated against `packet`. A fallback
- * or missing model and an error result are invalid output (4.3, 4.5).
+ * cost and session, and its decisions validated against `packet`. Output
+ * that is not a JSON object, a fallback or missing model and an error result
+ * are invalid output (4.3, 4.5).
  */
 export function readScorerOutput(
 	stdout: string,
@@ -582,9 +583,9 @@ export function readScorerOutput(
 	requested: string[],
 	packet: Packet,
 ): ScorerReading {
-	let out: Record<string, unknown> | undefined;
+	let parsed: unknown;
 	try {
-		out = JSON.parse(stdout);
+		parsed = JSON.parse(stdout);
 	} catch {
 		return {
 			failure: "unparsable CLI output",
@@ -593,8 +594,16 @@ export function readScorerOutput(
 			usd: null,
 		};
 	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+		return {
+			failure: "schema-invalid output: the CLI output is not a JSON object",
+			observedModels: [],
+			usage: null,
+			usd: null,
+		};
+	const out = parsed as Record<string, unknown>;
 	const usage =
-		out && typeof out.modelUsage === "object" && out.modelUsage !== null
+		typeof out.modelUsage === "object" && out.modelUsage !== null
 			? (out.modelUsage as Record<string, unknown>)
 			: null;
 	const observedModels = usage ? Object.keys(usage) : [];
@@ -602,10 +611,9 @@ export function readScorerOutput(
 		failure: null,
 		observedModels,
 		usage,
-		usd: typeof out?.total_cost_usd === "number" ? out.total_cost_usd : null,
-		sessionId: typeof out?.session_id === "string" ? out.session_id : undefined,
+		usd: typeof out.total_cost_usd === "number" ? out.total_cost_usd : null,
+		sessionId: typeof out.session_id === "string" ? out.session_id : undefined,
 	};
-	if (!out) return reading;
 	if (out.is_error === true)
 		reading.failure = `schema-invalid output: the CLI reported an error result (${String(out.subtype)})`;
 	else if (

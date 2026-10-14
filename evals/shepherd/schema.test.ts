@@ -178,10 +178,7 @@ describe("schema (6.3)", () => {
 
 describe("attempt policy (5.4 to 5.6, R1)", () => {
 	const of = (...attempts: Attempt[]) =>
-		deriveTrial(
-			attempts.map((a, index) => ({ ...a, ordinal: index + 1 })),
-			rubric,
-		);
+		deriveTrial(attempts.map((a, index) => ({ ...a, ordinal: index + 1 })));
 
 	test("a first behavioural pass is pass", () => {
 		expect(of(behavioral("A", "pass"))).toBe("pass");

@@ -252,7 +252,7 @@ export function result(
 		const list = (
 			attempts[trial] ?? [behavioral(trial, "pass", 1, overrides)]
 		).map((a, index) => ({ ...a, ordinal: index + 1 }));
-		return { trial, outcome: deriveTrial(list, rubric), attempts: list };
+		return { trial, outcome: deriveTrial(list), attempts: list };
 	});
 	const evaluation: Evaluation = {
 		harnessVersion: 1,

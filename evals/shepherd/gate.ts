@@ -22,7 +22,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
 	exportAttempt,
 	homeSlugs,
@@ -327,14 +327,11 @@ function open(
 }
 
 function finalize(result: Result, now: string): Result {
-	for (const evaluation of [result.evaluation]) {
-		for (const trial of evaluation.trials)
-			trial.outcome = deriveTrial(trial.attempts);
-		evaluation.outcome = deriveAggregate(
-			evaluation.trials.map((t) => t.outcome),
-		);
-		evaluation.endedAt = now;
-	}
+	const evaluation = result.evaluation;
+	for (const trial of evaluation.trials)
+		trial.outcome = deriveTrial(trial.attempts);
+	evaluation.outcome = deriveAggregate(evaluation.trials.map((t) => t.outcome));
+	evaluation.endedAt = now;
 	result.outcome = result.evaluation.outcome;
 	result.endedAt = now;
 	result.cost = totalCost(result);
@@ -364,7 +361,10 @@ export function publishResult(
 	const json = `${paths.json}.tmp-${process.pid}`;
 	const md = `${paths.md}.tmp-${process.pid}`;
 	writeFileSync(json, `${JSON.stringify(result, null, "\t")}\n`);
-	writeFileSync(md, summary(result, rubric));
+	writeFileSync(
+		md,
+		summary(result, relative(evalsDir, dirname(paths.md)), rubric),
+	);
 	renameSync(md, paths.md);
 	renameSync(json, paths.json);
 }
@@ -982,8 +982,14 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 			try {
 				publishStanding(recheck);
 			} catch (fallback) {
+				const standing = published?.evaluation.invocations.find(
+					(i) => i.runId === options.runId,
+				);
+				const lost = recheck.valid
+					? ""
+					: `\nThe frozen-input recheck failed (${reasons.join("; ")})${standing?.recheck.valid ? ", but the last published result still reads it valid: do not trust that result." : "."}`;
 				throw new Error(
-					`${(first as Error).message}\nThe recheck could not be recorded on the last published result either: ${(fallback as Error).message}`,
+					`${(first as Error).message}\nThe recheck could not be recorded on the last published result either: ${(fallback as Error).message}${lost}`,
 					{ cause: first },
 				);
 			}
@@ -1450,8 +1456,16 @@ function redactStrings<T>(value: T, context: RedactionContext): T {
 
 const money = (usd: number) => `$${usd.toFixed(2)}`;
 
-/** The Markdown summary (6.5), every count derived from the JSON. */
-export function summary(result: Result, rubric = loadRubric()): string {
+/**
+ * The Markdown summary (6.5), every count derived from the JSON. `dir` is
+ * the summary's own directory relative to the evals directory, which its
+ * evidence links resolve from.
+ */
+export function summary(
+	result: Result,
+	dir: string,
+	rubric = loadRubric(),
+): string {
 	const evaluation = result.evaluation;
 	const attempts = evaluation.trials.flatMap((t) => t.attempts);
 	const invocations = attempts.flatMap((a) => a.scoring?.invocations ?? []);
@@ -1504,7 +1518,7 @@ export function summary(result: Result, rubric = loadRubric()): string {
 					.map(({ a, m }) => `${a.ordinal}: ${m.outcome}`)
 					.join(", ");
 				const links = decided
-					.map(({ a }) => `[${a.ordinal}](${a.artifactDir}/)`)
+					.map(({ a }) => `[${a.ordinal}](${relative(dir, a.artifactDir)}/)`)
 					.join(" ");
 				const none = t.attempts.length === 0 ? "not run" : "none yet";
 				return `| ${id} | ${kind} | ${outcomes || none} | ${links} |`;

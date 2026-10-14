@@ -393,10 +393,7 @@ export function exemptVoids(attempts: Attempt[]): number {
 	).length;
 }
 
-export function deriveTrial(
-	attempts: Attempt[],
-	_rubric?: Rubric,
-): TrialOutcome {
+export function deriveTrial(attempts: Attempt[]): TrialOutcome {
 	const behavioral = attempts.filter((a) => a.kind === "behavioral");
 	const passed = behavioral.findIndex(attemptPassed);
 	if (passed === 0) return "pass";
@@ -633,7 +630,7 @@ function checkEvaluation(
 			const before = trial.attempts
 				.slice(0, index)
 				.filter((a) => !(frozenVoid(a) && a.runId === attempt.runId));
-			const state = deriveTrial(before, rubric);
+			const state = deriveTrial(before);
 			if (index > 0 && state !== "pending")
 				report(
 					`${at}: attempt ${index + 1} recorded after the trial was ${state}`,
@@ -671,7 +668,7 @@ function checkEvaluation(
 		const passed = trial.attempts.findIndex(attemptPassed);
 		if (passed >= 0 && passed < trial.attempts.length - 1)
 			report(`${at}: attempts recorded after a pass`);
-		const derived = deriveTrial(trial.attempts, rubric);
+		const derived = deriveTrial(trial.attempts);
 		if (derived !== trial.outcome)
 			report(
 				`${at}: outcome ${trial.outcome} does not match the attempts (${derived})`,

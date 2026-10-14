@@ -39,6 +39,8 @@ export const emailMarker = (n: number) => `[redacted-email-${n}]`;
 export const ACCOUNT_MARKER = "[redacted-account]";
 export const ENVIRONMENT_MARKER = "[redacted-environment]";
 export const ENV_MARKER = "[redacted-env-value]";
+/** What stands for every `PATH` entry outside the scratch root. */
+export const PATH_MARKER = "[redacted-path]";
 
 /** Top-level directories whose absolute paths describe the host. */
 const HOST = [
@@ -404,13 +406,39 @@ function redactLogLine(line: string): { text: string; count: number } {
 }
 
 /**
- * The run manifest's settings copies (already without string values, from
- * the harness): env values, and plugin and marketplace names, which are keys.
+ * The run manifest's `PATH` copies, which keep only their scratch entries,
+ * and its settings copies (already without string values, from the
+ * harness): env values, and plugin and marketplace names, which are keys.
  */
-function redactRunManifest(text: string): { text: string; count: number } {
+function redactRunManifest(
+	text: string,
+	context: RedactionContext,
+): { text: string; count: number } {
+	// Both sides are compared slug-redacted, as text redaction compares them:
+	// a recovered attempt's scratch root was recorded with the slug redacted.
+	const base = unslugged(context.scratchRoot, context.home).text.replace(
+		/\/$/,
+		"",
+	);
+	const spellings = [base, plain(base), `/private${plain(base)}`];
+	const scratch = (entry: string) => {
+		const spelled = unslugged(entry, context.home).text;
+		return spellings.some((s) => spelled === s || spelled.startsWith(`${s}/`));
+	};
 	const numbered = new Map<string, number>();
-	return replaceStrings(text, ({ key, path }) => {
+	return replaceStrings(text, ({ key, path, value }) => {
 		const [root, file, settings, field] = path;
+		if (
+			!key &&
+			path.length === 1 &&
+			(root === "PATH" || root === "resume_PATH")
+		) {
+			const entries = value.split(":");
+			const kept = entries.filter(scratch);
+			return kept.length === entries.length
+				? undefined
+				: [...kept, PATH_MARKER].join(":");
+		}
 		if (root !== "backend_settings" || settings !== "settings")
 			return undefined;
 		if (path.length !== 5) return undefined;
@@ -433,6 +461,7 @@ function redactRunManifest(text: string): { text: string; count: number } {
 function redactStructure(
 	name: string,
 	text: string,
+	context: RedactionContext,
 ): { text: string; count: number } {
 	if (name.endsWith(".jsonl")) {
 		const lines = text.split("\n").map(redactLogLine);
@@ -441,7 +470,7 @@ function redactStructure(
 			count: lines.reduce((sum, line) => sum + line.count, 0),
 		};
 	}
-	if (name.endsWith("-run.json")) return redactRunManifest(text);
+	if (name.endsWith("-run.json")) return redactRunManifest(text, context);
 	return { text, count: 0 };
 }
 
@@ -483,7 +512,7 @@ export function writeArtifact(
 		typeof content === "string" ? new TextEncoder().encode(content) : content;
 	const text = decode(bytes);
 	const structured =
-		text === undefined ? undefined : redactStructure(name, text);
+		text === undefined ? undefined : redactStructure(name, text, context);
 	const paths = structured && redactText(structured.text, context);
 	const redacted = structured &&
 		paths && { text: paths.text, count: structured.count + paths.count };

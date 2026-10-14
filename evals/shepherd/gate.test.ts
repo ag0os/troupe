@@ -14,13 +14,14 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { readWorktreeSource } from "../../scripts/shepherd-source";
 import {
 	git as fixtureGit,
 	initShepherdRepo,
 	testGit,
 } from "../../scripts/shepherd-source-fixture";
+import { PATH_MARKER, REDACTED } from "./export";
 import {
 	findNativeLog,
 	type GateOptions,
@@ -467,7 +468,7 @@ describe("a gate invocation (sections 3 to 6)", () => {
 		expect(musts.sort()).toEqual(rubric.musts.map((m) => m.id).sort());
 		expect(read()).toEqual(result);
 		expect(readFileSync(join(evalsDir, `results/${HEX}.md`), "utf8")).toBe(
-			summary(result),
+			summary(result, "results"),
 		);
 	});
 
@@ -919,6 +920,13 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 							workspace,
 							argv: subjectArgv(`${run}/bin/shepherd`, session),
 							HOME: home,
+							PATH: [
+								`${run}/bin`,
+								`${run}-sibling/bin`,
+								"/nix/store/q/bin",
+								`${home}/.local/bin`,
+								"/usr/bin",
+							].join(":"),
 							cli_version: "2.1.296",
 							validity: { valid: false, void_reasons: [] },
 							provenance: [{ expected_binary: `${run}/bin/shepherd` }],
@@ -1007,6 +1015,21 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 				"utf8",
 			);
 			expect(log).not.toContain(home);
+			// PATH keeps the scratch bin, spelled as the kept workspace is (S10).
+			const manifest = JSON.parse(
+				readFileSync(
+					join(
+						evalsDir,
+						gneg?.attempts[0]?.artifactDir ?? "?",
+						"claude-run.json",
+					),
+					"utf8",
+				),
+			);
+			expect(manifest.workspace).not.toStartWith(REDACTED);
+			expect(manifest.PATH).toBe(
+				`${manifest.workspace.replace(/\/shepherd-eval-G-neg-x\/workspace$/, "/bin")}:${PATH_MARKER}`,
+			);
 			// The native log is written apart from the export, under one numbering.
 			expect(log).toContain(" cc [redacted-email-2]");
 			const e = trial(later.result, "E")?.attempts[0];
@@ -1374,6 +1397,44 @@ describe("cancelled scoring (V6)", () => {
 });
 
 describe("history and publication (6.4, 6.5)", () => {
+	test("every evidence link in a summary resolves to its attempt's directory (fix round 3, S8)", async () => {
+		// Each `[ordinal](link)` in a Must's row, resolved from the summary's
+		// directory, against the directory of that trial's attempt.
+		const links = (md: string, result: Result) => {
+			const rows = readFileSync(md, "utf8")
+				.split("\n")
+				.filter((line) => /\]\(/.test(line));
+			expect(rows.length).toBeGreaterThan(0);
+			return rows.flatMap((row) => {
+				const id = row.split("|")[1]?.trim() ?? "";
+				const attempts = trial(result, id.replace(/\.M\d+$/, ""))?.attempts;
+				return [...row.matchAll(/\[(\d+)\]\(([^)]+)\)/g)].map((m) => [
+					resolve(dirname(md), m[2] ?? ""),
+					resolve(
+						evalsDir,
+						attempts?.find((a) => a.ordinal === Number(m[1]))?.artifactDir ??
+							"?",
+					),
+				]);
+			});
+		};
+		const main = await runGate(options({}));
+		for (const [link, attempt] of links(
+			join(evalsDir, `results/${HEX}.md`),
+			main.result,
+		)) {
+			expect(link).toBe(attempt ?? "?");
+			expect(existsSync(link ?? "?")).toBe(true);
+		}
+		const opts = options({}, {}, { validation: { trials: ["D"] } });
+		const validation = await runGate(opts);
+		for (const [link, attempt] of links(
+			join(evalsDir, `validation/${HEX}/${opts.runId}/result.md`),
+			validation.result,
+		))
+			expect(link).toBe(attempt ?? "?");
+	});
+
 	test("a new evaluation identity keeps the earlier evaluation, and returning restores it", async () => {
 		const first = await runGate(options({ "G-neg": ["bad", "bad"] }));
 		const changed = options({});
@@ -1419,7 +1480,7 @@ describe("history and publication (6.4, 6.5)", () => {
 		const { result } = await runGate(
 			options({ D: ["void", "good"], G: ["refuse"] }, { E: ["infra"] }),
 		);
-		const text = summary(result);
+		const text = summary(result, "results");
 		expect(text).toMatch(/\| G\.M1 \| judged \| not run \|/);
 		expect(text).toContain(`revision ${"b".repeat(40)}`);
 		expect(text).toMatch(/\| D \| pass \|/);
@@ -1448,7 +1509,7 @@ describe("regression validation (8.5)", () => {
 			JSON.parse(readFileSync(join(evalsDir, dir, "result.json"), "utf8")),
 		).toEqual(result);
 		expect(readFileSync(join(evalsDir, dir, "result.md"), "utf8")).toBe(
-			summary(result),
+			summary(result, dir),
 		);
 		expect(existsSync(join(evalsDir, "results"))).toBe(false);
 		expect(existsSync(join(evalsDir, "artifacts"))).toBe(false);
@@ -1926,6 +1987,83 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 		expect(verified()).toContain(
 			`A attempt 1: voided for changed frozen inputs, but run ${result.evaluation.invocations[0]?.runId} passed its recheck`,
 		);
+	});
+
+	describe("a failed recheck nothing can record (fix round 3, W1)", () => {
+		const results = () => join(evalsDir, "results");
+		const LOST =
+			"The frozen-input recheck failed (subject binary bytes changed after execution), but the last published result still reads it valid: do not trust that result.";
+		const failure = async (options: GateOptions) => {
+			try {
+				await runGate(options);
+			} catch (error) {
+				return error as Error;
+			} finally {
+				chmodSync(results(), 0o755);
+			}
+			throw new Error("the gate resolved");
+		};
+
+		test("on the crash path, the error names the failed recheck, its reasons and the original cause", async () => {
+			const first = real({}, { recheck: () => CHANGED });
+			const score = first.score;
+			first.score = async (job) => {
+				if (job.trial !== "E") return score(job);
+				chmodSync(results(), 0o555);
+				throw new Error("scorer host lost");
+			};
+			const error = await failure(first);
+			const lines = error.message.split("\n");
+			expect(lines[0]).toBe("scorer host lost");
+			expect(lines[1]).toStartWith(
+				"The recheck could not be recorded on the last published result either: EACCES",
+			);
+			expect(lines.at(-1)).toBe(LOST);
+			expect((error.cause as Error).message).toBe("scorer host lost");
+		});
+
+		test("on the normal path, the error names the failed recheck and its reasons", async () => {
+			const first = real({});
+			first.recheck = () => {
+				chmodSync(results(), 0o555);
+				return CHANGED;
+			};
+			const error = await failure(first);
+			expect(error.message.split("\n").at(-1)).toBe(LOST);
+			expect((error.cause as Error).message).toStartWith("EACCES");
+		});
+
+		test("when the failed recheck was already published, the error names it without claiming the result reads it valid", async () => {
+			// The failed recheck is published with the attempts as they were; then
+			// the clock fails, so neither the relabel nor any fallback publishes.
+			let armed = false;
+			let calls = 0;
+			const first = real({});
+			const clock = first.now;
+			first.now = () => {
+				if (armed && ++calls >= 2) throw new Error("clock lost");
+				return clock?.() ?? new Date();
+			};
+			first.recheck = () => {
+				armed = true;
+				return CHANGED;
+			};
+			const error = await failure(first);
+			const lines = error.message.split("\n");
+			expect(lines[0]).toBe("clock lost");
+			expect(lines.at(-1)).toBe(
+				"The frozen-input recheck failed (subject binary bytes changed after execution).",
+			);
+			expect(error.message).not.toContain("still reads it valid");
+			const hex = first.sourceHash.replace("sha256:", "");
+			const disk = JSON.parse(
+				readFileSync(join(evalsDir, `results/${hex}.json`), "utf8"),
+			) as Result;
+			const run = disk.evaluation.invocations.find(
+				(i) => i.runId === first.runId,
+			);
+			expect(run?.recheck).toEqual({ valid: false, reasons: CHANGED });
+		});
 	});
 });
 

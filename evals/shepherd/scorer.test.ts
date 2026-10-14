@@ -719,6 +719,19 @@ describe("decisions and retries (4.4, 4.5)", () => {
 		expect(scored.decisions?.[0]?.outcome).toBe("pass");
 	});
 
+	test("CLI output that is not a JSON object is invalid output, retried once (fix round 3, S7)", async () => {
+		for (const raw of ["null", "false", "0", '""', "[]"]) {
+			resetSteps();
+			plan({ raw }, { result: good() });
+			const { scored } = await score();
+			expect(scored.invocations.map((i) => i.failure)).toEqual([
+				expect.stringMatching(/^schema-invalid output: .*not a JSON object/),
+				null,
+			]);
+			expect(scored.decisions?.[0]?.outcome).toBe("pass");
+		}
+	});
+
 	test("the invocation record keeps the scorer's stderr, bounded", async () => {
 		plan({ raw: "", exit: 1 }, { result: good() });
 		const { scored } = await score();

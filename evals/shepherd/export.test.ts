@@ -17,6 +17,7 @@ import {
 	ENVIRONMENT_MARKER,
 	emailMarker,
 	exportAttempt,
+	PATH_MARKER,
 	REDACTED,
 	redactText,
 	SESSION_ATTACHMENTS,
@@ -208,6 +209,17 @@ describe("personal data and environment (F2)", () => {
 	const run = {
 		trial: "A",
 		HOME,
+		PATH: [
+			`${RUN}/bin`,
+			`${RUN}-sibling/bin`,
+			`${HOME}/.local/bin`,
+			"/usr/local/bin",
+			"/nix/store/abc-tools/bin",
+			"/Library/Apple/usr/bin",
+			"/usr/bin",
+			"/bin",
+		].join(":"),
+		resume_PATH: `${RUN.replace("/private", "")}/bin:/opt/homebrew/bin:/usr/bin`,
 		backend_settings: {
 			user: {
 				path: `${HOME}/.claude/settings.json`,
@@ -347,6 +359,17 @@ describe("personal data and environment (F2)", () => {
 		expect(settings.model).toBe("opus");
 		expect(text).not.toContain("secret");
 		expect(text).not.toContain("ENV-VALUE");
+	});
+
+	test("PATH keeps only its scratch entries, then one marker (fix round 3, S10)", () => {
+		const dir = exported();
+		const manifest = JSON.parse(
+			readFileSync(join(dir, "claude-run.json"), "utf8"),
+		);
+		expect(manifest.PATH).toBe(`${RUN}/bin:${PATH_MARKER}`);
+		expect(manifest.resume_PATH).toBe(
+			`${RUN.replace("/private", "")}/bin:${PATH_MARKER}`,
+		);
 	});
 
 	test("redaction never adds or removes lines", () => {

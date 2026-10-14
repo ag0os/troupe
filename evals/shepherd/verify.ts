@@ -863,7 +863,7 @@ export function verifyResults(
 
 	const outcomes = evaluation.trials.map((t) => ({
 		trial: t.trial,
-		outcome: deriveTrial(t.attempts, rubric),
+		outcome: deriveTrial(t.attempts),
 	}));
 	const aggregate = deriveAggregate(outcomes.map((o) => o.outcome));
 	notes.push(
