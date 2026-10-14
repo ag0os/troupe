@@ -29,7 +29,6 @@ import {
 	runGit,
 	type SourceManifest,
 } from "../../scripts/shepherd-source";
-import { asciiEscaped } from "./export";
 import {
 	CHECKER_FAILED,
 	type ChecksOutput,
@@ -464,48 +463,6 @@ function checkValidity(
 		);
 }
 
-/** One level of JSON string escaping, as JavaScript writes it. */
-const jsonEscaped = (text: string) => JSON.stringify(text).slice(1, -1);
-const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-
-/**
- * Whether a tool result's text holds a binary marker for exactly `path`,
- * where the harness's `binary_values` reads one: a `binary: <path>` line,
- * the path bare or quoted, or a `"binary": "<path>"` field. The marker may
- * sit inside JSON strings up to three levels deep, each level escaped as
- * JavaScript or as Python's `ensure_ascii` writes it; a bare mention of the
- * path, or a longer path holding it, is no marker.
- */
-export function holdsBinary(text: string, path: string): boolean {
-	// spellings[k]: the path inside k levels of JSON strings.
-	const spellings = [[path]];
-	for (let k = 0; k < 4; k++) {
-		const escaped = (spellings[k] ?? []).map(jsonEscaped);
-		spellings.push([...new Set([...escaped, ...escaped.map(asciiEscaped)])]);
-	}
-	// A character of the marker's syntax as it reads inside k levels.
-	const at = (k: number, char: string) => {
-		let spelled = char;
-		for (let n = 0; n < k; n++) spelled = jsonEscaped(spelled);
-		return literal(spelled);
-	};
-	const either = (paths: string[]) => `(?:${paths.map(literal).join("|")})`;
-	for (let k = 0; k < 4; k++) {
-		const [bare, quoted] = [
-			either(spellings[k] ?? []),
-			either(spellings[k + 1] ?? []),
-		];
-		const [quote, newline, tab] = [at(k, '"'), at(k, "\n"), at(k, "\t")];
-		const blank = `(?: |${tab})`;
-		// A line starts and ends at a newline, or where its string does.
-		const string = k === 0 ? "" : `|${at(k - 1, '"')}`;
-		const line = `(?:^|${newline}${string})${blank}*binary:${blank}+(?:${quote}${quoted}${quote}|'${bare}'|${bare})${blank}*(?:$|${newline}${string})`;
-		const field = `${quote}binary${quote}(?: |${newline}|${tab})*:(?: |${newline}|${tab})*${quote}${quoted}${quote}`;
-		if (new RegExp(`${line}|${field}`).test(text)) return true;
-	}
-	return false;
-}
-
 /** The fixed subject and scorer policy (5.1, 4.1) on every attempt. */
 function checkPolicy(
 	attempt: Attempt,
@@ -554,7 +511,7 @@ function checkPolicy(
 		for (const callId of attempt.binaryEvidence.callIds) {
 			if (
 				!facts.results.some(
-					(r) => r.callId === callId && holdsBinary(r.text, expected),
+					(r) => r.callId === callId && r.markers.includes(expected),
 				)
 			)
 				report(

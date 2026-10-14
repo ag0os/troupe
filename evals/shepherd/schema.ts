@@ -500,6 +500,11 @@ function checkScoring(
 	}
 	if (attempt.cost.scorer.length !== scoring.invocations.length)
 		report(`${where}: one scorer cost per invocation`);
+	attempt.cost.scorer.forEach((cost, index) => {
+		const invocation = scoring.invocations[index];
+		if (invocation && cost.usd !== invocation.cost.usd)
+			report(`${where}: scorer cost ${index} differs from its invocation's`);
+	});
 }
 
 function checkAttempt(

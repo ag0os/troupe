@@ -1208,10 +1208,225 @@ function runScratchRoot(attempt: Attempt): string | undefined {
 	return basename(bin) === "bin" ? dirname(bin) : undefined;
 }
 
+/** A value as Python's `json` decodes it; a `Map` keeps an object's key order. */
+type PyValue = string | number | boolean | null | PyValue[] | PyObject;
+interface PyObject extends Map<string, PyValue> {}
+
+class JSONDecodeError extends Error {}
+
+/** `fn`'s value, or undefined where Python's `json` raises `JSONDecodeError`. */
+function decodes<T>(fn: () => T): T | undefined {
+	try {
+		return fn();
+	} catch (error) {
+		if (error instanceof JSONDecodeError) return undefined;
+		throw error;
+	}
+}
+
+const PY_ESCAPES = new Map(
+	Object.entries({
+		'"': '"',
+		"\\": "\\",
+		"/": "/",
+		b: "\b",
+		f: "\f",
+		n: "\n",
+		r: "\r",
+		t: "\t",
+	}),
+);
+const PY_CONSTANTS: [string, PyValue][] = [
+	["null", null],
+	["true", true],
+	["false", false],
+	["NaN", Number.NaN],
+	["Infinity", Number.POSITIVE_INFINITY],
+	["-Infinity", Number.NEGATIVE_INFINITY],
+];
+const PY_NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/y;
+
+function skipWhitespace(s: string, at: number): number {
+	while (/[ \t\n\r]/.test(s.charAt(at))) at++;
+	return at;
+}
+
+/** CPython's `scanstring` (strict): the string after the quote at `at - 1`. */
+function scanString(s: string, at: number): [string, number] {
+	let chunks = "";
+	for (;;) {
+		const c = s[at++];
+		if (c === undefined) throw new JSONDecodeError("Unterminated string");
+		if (c === '"') return [chunks, at];
+		if (c < " ") throw new JSONDecodeError("Invalid control character");
+		if (c !== "\\") {
+			chunks += c;
+			continue;
+		}
+		const escaped = s[at] ?? "";
+		if (escaped === "u") {
+			const hex = s.slice(at + 1, at + 5);
+			if (!/^[0-9a-fA-F]{4}$/.test(hex))
+				throw new JSONDecodeError("Invalid \\uXXXX escape");
+			chunks += String.fromCharCode(Number.parseInt(hex, 16));
+			at += 5;
+		} else {
+			const decoded = PY_ESCAPES.get(escaped);
+			if (decoded === undefined) throw new JSONDecodeError("Invalid \\escape");
+			chunks += decoded;
+			at++;
+		}
+	}
+}
+
+/** CPython's `scan_once`: the value starting exactly at `at`, and its end. */
+function scanOnce(s: string, at: number): [PyValue, number] {
+	const c = s[at];
+	if (c === '"') return scanString(s, at + 1);
+	if (c === "{") return parseObject(s, at + 1);
+	if (c === "[") return parseArray(s, at + 1);
+	for (const [word, value] of PY_CONSTANTS)
+		if (s.startsWith(word, at)) return [value, at + word.length];
+	PY_NUMBER.lastIndex = at;
+	const number = PY_NUMBER.exec(s);
+	if (!number) throw new JSONDecodeError("Expecting value");
+	return [Number(number[0]), PY_NUMBER.lastIndex];
+}
+
+function parseObject(s: string, at: number): [PyObject, number] {
+	const pairs: PyObject = new Map();
+	at = skipWhitespace(s, at);
+	if (s[at] === "}") return [pairs, at + 1];
+	for (;;) {
+		if (s[at] !== '"')
+			throw new JSONDecodeError(
+				"Expecting property name enclosed in double quotes",
+			);
+		const [key, afterKey] = scanString(s, at + 1);
+		at = skipWhitespace(s, afterKey);
+		if (s[at] !== ":") throw new JSONDecodeError("Expecting ':' delimiter");
+		const [value, afterValue] = scanOnce(s, skipWhitespace(s, at + 1));
+		// A repeated key keeps its first place and takes its last value, as a dict does.
+		pairs.set(key, value);
+		at = skipWhitespace(s, afterValue);
+		if (s[at] === "}") return [pairs, at + 1];
+		if (s[at] !== ",") throw new JSONDecodeError("Expecting ',' delimiter");
+		at = skipWhitespace(s, at + 1);
+	}
+}
+
+function parseArray(s: string, at: number): [PyValue[], number] {
+	const values: PyValue[] = [];
+	at = skipWhitespace(s, at);
+	if (s[at] === "]") return [values, at + 1];
+	for (;;) {
+		const [value, end] = scanOnce(s, at);
+		values.push(value);
+		at = skipWhitespace(s, end);
+		if (s[at] === "]") return [values, at + 1];
+		if (s[at] !== ",") throw new JSONDecodeError("Expecting ',' delimiter");
+		at = skipWhitespace(s, at + 1);
+	}
+}
+
+/** Python's `json.loads` for a string. */
+function jsonLoads(s: string): PyValue {
+	const [value, end] = scanOnce(s, skipWhitespace(s, 0));
+	if (skipWhitespace(s, end) !== s.length)
+		throw new JSONDecodeError("Extra data");
+	return value;
+}
+
+/** Python's `(?m)^[ \t]*binary:[ \t]+(.+?)[ \t]*$`: lines end at `\n` alone. */
+const MARKER_LINE = /(?:^|(?<=\n))[ \t]*binary:[ \t]+([^\n]+?)[ \t]*(?=\n|$)/g;
+
+/**
+ * A port of the harness's `binary_values` (harness.py): every binary marker
+ * a tool result holds, in its order. Its JSON decoding follows CPython's
+ * `json` (the C scanner), `NaN`, `Infinity`, repeated keys and lone
+ * surrogates included. The differences that remain:
+ * - Deep nesting: this port throws a `RangeError` past about 10,000 levels
+ *   (Bun 1.2), so the verifier, or the gate resolving an interrupted
+ *   session, fails closed. Python's scanner decodes far deeper, while
+ *   `binary_values` itself raises `RecursionError` past about 1,000 decoded
+ *   levels, which voids the attempt in the harness.
+ * - An integer of more than 4,300 digits: Python raises `ValueError` and the
+ *   harness voids the attempt, so it cites no call id to verify; this port
+ *   reads it as a number and goes on.
+ * - Surrogates: strings here are UTF-16, so surrogate halves that Python
+ *   keeps as two code points (one raw, one escaped) join into one character,
+ *   in values and in object keys alike, where a joined key can then merge
+ *   with another.
+ */
+export function binaryValues(result: PyValue): string[] {
+	if (result instanceof Map) {
+		const binary = result.get("binary");
+		const paths = typeof binary === "string" ? [binary] : [];
+		for (const value of result.values()) paths.push(...binaryValues(value));
+		return paths;
+	}
+	if (Array.isArray(result))
+		return result.flatMap((value) => binaryValues(value));
+	if (typeof result !== "string") return [];
+	const decoded = decodes(() => jsonLoads(result));
+	if (decoded !== undefined && decoded !== null && decoded !== result)
+		return binaryValues(decoded);
+	const occurrences: [number, string[]][] = [];
+	for (const match of result.matchAll(MARKER_LINE)) {
+		let path: PyValue | undefined = match[1] ?? "";
+		if (path.startsWith('"')) {
+			const quoted = path;
+			path = decodes(() => jsonLoads(quoted));
+			if (typeof path !== "string") continue;
+		} else if (path.startsWith("'")) {
+			if (!path.endsWith("'") || path.length < 2) continue;
+			path = path.slice(1, -1);
+		}
+		occurrences.push([match.index, [path]]);
+	}
+	// Output may mix prose, headers and several JSON objects: decode each
+	// complete fragment, as the harness does.
+	const fragment = /[[{]/g;
+	let position = 0;
+	while (position < result.length) {
+		fragment.lastIndex = position;
+		const match = fragment.exec(result);
+		if (!match) break;
+		position = match.index;
+		const decoded = decodes(() => scanOnce(result, position));
+		if (!decoded) position += 1;
+		else {
+			occurrences.push([position, binaryValues(decoded[0])]);
+			position = decoded[1];
+		}
+	}
+	return occurrences
+		.sort((a, b) => a[0] - b[0])
+		.flatMap(([, values]) => values);
+}
+
+/**
+ * A port of `content_text` (transcript.py): a tool result's text as the
+ * harness reads it. Where `json.dumps` and `JSON.stringify` spell a value
+ * differently (a float such as `1.0`, integer-like keys put first, a lone
+ * surrogate escaped), the JSON fragment `binaryValues` decodes from it holds
+ * the same strings, so the markers read are the same.
+ */
+export function contentText(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) return value.map(contentText).join("\n");
+	if (typeof value === "object" && value !== null)
+		for (const key of ["text", "content"])
+			if (key in value)
+				return contentText((value as Record<string, unknown>)[key]);
+	return JSON.stringify(value, null, 2);
+}
+
 /**
  * What a native log shows: the models of its user and assistant messages,
  * as the harness reads them, without Claude's `<synthetic>` notices, and
- * each tool result's text and the binary markers it returns.
+ * each tool result's text and the binary markers it returns, read by the
+ * ports of the harness's `content_text` and `binary_values`.
  */
 export function sessionFacts(log: string): {
 	models: Set<string>;
@@ -1219,16 +1434,6 @@ export function sessionFacts(log: string): {
 } {
 	const models = new Set<string>();
 	const results: { callId: string; text: string; markers: string[] }[] = [];
-	const text = (value: unknown): string =>
-		typeof value === "string"
-			? value
-			: Array.isArray(value)
-				? value
-						.map((part) =>
-							typeof part?.text === "string" ? part.text : JSON.stringify(part),
-						)
-						.join("\n")
-				: JSON.stringify(value ?? "");
 	for (const line of log.split("\n")) {
 		let event:
 			| { type?: unknown; message?: { model?: unknown; content?: unknown } }
@@ -1244,12 +1449,8 @@ export function sessionFacts(log: string): {
 			models.add(message.model);
 		for (const part of Array.isArray(message?.content) ? message.content : []) {
 			if (part?.type !== "tool_result") continue;
-			const output = text(part.content);
-			const markers: string[] = [];
-			for (const found of output.matchAll(/^[ \t]*binary:[ \t]+(.+?)[ \t]*$/gm))
-				markers.push((found[1] ?? "").replace(/^["']|["']$/g, ""));
-			for (const found of output.matchAll(/"binary"\s*:\s*"([^"]+)"/g))
-				markers.push(found[1] ?? "");
+			const output = contentText("content" in part ? part.content : "");
+			const markers = binaryValues(output);
 			results.push({
 				callId: String(part.tool_use_id ?? ""),
 				text: output,

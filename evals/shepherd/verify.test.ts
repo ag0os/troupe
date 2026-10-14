@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -21,7 +22,13 @@ import {
 	writeAt,
 } from "../../scripts/shepherd-source-fixture";
 import { artifactType } from "./export";
-import { type ChecksOutput, pythonChecks } from "./gate";
+import {
+	binaryValues,
+	type ChecksOutput,
+	contentText,
+	pythonChecks,
+	sessionValidity,
+} from "./gate";
 import {
 	ADOPTED_GATED_PATHS,
 	type GatedPathPolicy,
@@ -35,6 +42,7 @@ import {
 	policyHash,
 	type Result,
 	type ScorerInvocation,
+	totalCost,
 } from "./schema";
 import { buildPacket, PACKET_FILES, validateDecisions } from "./scorer";
 import {
@@ -1925,5 +1933,386 @@ describe("G1 fix round 1, verification round 1 (V1 additions)", () => {
 				expect.stringMatching(noMarker),
 			]);
 		}
+	});
+});
+
+describe("fix round 3, G4: markers read as binary_values reads them; scorer cost duplicates", () => {
+	const verify = () => verifyResults(root, options());
+	/** E's one marker call returns `content(expected)`. */
+	const marked = (content: (x: string) => string) => (v: Result) => {
+		const e = v.evaluation.trials.find((t) => t.trial === "E")
+			?.attempts[0] as Attempt;
+		e.binaryEvidence.callIds = ["toolu_w"];
+		const log = [
+			{
+				type: "assistant",
+				message: {
+					model: "claude-opus-5-5",
+					content: [
+						{ type: "tool_use", id: "toolu_w", name: "Bash", input: {} },
+					],
+				},
+			},
+			{
+				type: "user",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "toolu_w",
+							content: content(e.binaryEvidence.expected),
+						},
+					],
+				},
+			},
+		];
+		putArtifact(
+			e,
+			"claude.jsonl",
+			`${log.map((l) => JSON.stringify(l)).join("\n")}\n`,
+		);
+		putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
+	};
+	const wrapped = (depth: number, line: string) => {
+		let content = line;
+		for (let n = 0; n < depth; n++)
+			content = JSON.stringify({ stdout: content });
+		return content;
+	};
+	const noMarker = /E attempt 1: call toolu_w returns no binary marker for/;
+
+	test("a marker wrapped four or more times in JSON verifies; a near miss so wrapped still fails", () => {
+		for (const depth of [4, 5, 8]) {
+			writeResult(marked((x) => wrapped(depth, `binary: ${x}\n`)));
+			expect([depth, verify().problems]).toEqual([depth, []]);
+			writeResult(marked((x) => wrapped(depth, `binary: ${x}-old\n`)));
+			expect([depth, text(verify().problems)]).toEqual([
+				depth,
+				expect.stringMatching(noMarker),
+			]);
+		}
+	});
+
+	test("an escaped binary key verifies", () => {
+		for (const content of [
+			(x: string) => `{"\\u0062inary":"${x}"}`,
+			(x: string) => JSON.stringify({ stdout: `{"bin\\u0061ry": "${x}"}` }),
+		]) {
+			writeResult(marked(content));
+			expect([content("X"), verify().problems]).toEqual([content("X"), []]);
+		}
+	});
+
+	test("an attempt's scorer cost that differs from its invocation's fails, unknown cost included", () => {
+		for (const changed of [
+			{ usd: 0, reason: null },
+			{ usd: null, reason: "the scorer output reports no cost" },
+		]) {
+			writeResult((v) => {
+				const e = v.evaluation.trials.find((t) => t.trial === "E")
+					?.attempts[0] as Attempt;
+				const cost = e.cost.scorer[0];
+				if (cost) e.cost.scorer[0] = { ...cost, ...changed };
+				v.cost = totalCost(v);
+			});
+			expect([changed.usd, text(verify().problems)]).toEqual([
+				changed.usd,
+				expect.stringMatching(
+					/E attempt 1: scorer cost 0 differs from its invocation's/,
+				),
+			]);
+		}
+	});
+});
+
+describe("fix round 3, G4: binaryValues matches the harness's binary_values", () => {
+	const Q = "/w/bin/shepherd";
+	const P = "/tmp/shepherd-évals-ü/bin/shepherd";
+	/** Python's `json.dumps` with `ensure_ascii`: every non-ASCII UTF-16 unit escaped. */
+	const pyDumps = (value: unknown) =>
+		JSON.stringify(value).replace(
+			/[\u0080-\uffff]/g,
+			(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+		);
+	const wrapped = (depth: number, line: string) => {
+		let content = line;
+		for (let n = 0; n < depth; n++)
+			content = JSON.stringify({ stdout: content });
+		return content;
+	};
+	const vectors: string[] = [
+		// Line markers: bare, quoted, JSON-quoted, and lines that are none.
+		`binary: ${Q}`,
+		`  \tbinary:\t ${Q} \t\nnext`,
+		`head\nbinary: "${Q}"\nbinary: '${Q}'\nbinary: ${P}\n`,
+		`binary: "${Q}" trailing\nbinary: "unterminated\n`,
+		`binary: '\nbinary: '${Q}\nbinary: ''\n`,
+		`binary: "\\u00e9\\ud800"\n`,
+		"binary:   \n",
+		`binary:${Q}\nnot binary: ${Q}\nbinary: ${Q} and more\n`,
+		`binary: ${Q}\r\nbinary: ${Q}\r`,
+		`\rbinary: ${Q}\u2028binary: /x\u2029y\n\u2028binary: /z`,
+		// The whole string as JSON.
+		JSON.stringify({ binary: Q }),
+		`  ${JSON.stringify({ binary: Q, nested: [{ binary: P }, { binary: 7 }, "binary: /in-string"] })}  \n`,
+		JSON.stringify(`binary: ${Q}\n`),
+		JSON.stringify([
+			1,
+			true,
+			null,
+			{ binary: null },
+			{ binary: { binary: Q } },
+		]),
+		"null",
+		"null\nbinary: /after-null",
+		"42",
+		"NaN",
+		"-Infinity",
+		`"just text"`,
+		`{"a": NaN, "b": Infinity, "c": -Infinity, "binary": "${Q}"}`,
+		`{"binary": "/first", "binary": "/second"}`,
+		`{"x": {"binary": "/1"}, "binary": "/2", "x": 5}`,
+		`{"b": {"binary": "/b"}, "1": {"binary": "/1"}, "__proto__": {"binary": "/proto"}}`,
+		`{"binary": "/lone\\ud800", "pair": {"binary": "/\\ud83d\\ude00"}, "low": {"binary": "\\udc00x"}}`,
+		`{"binary": "/high-then-other\\ud800\\u0041"}`,
+		`{"\\u0062inary": "${Q}"}`,
+		`\uFEFF{"binary": "/bom"}`,
+		// Prose mixed with several fragments, malformed ones among them.
+		`start {"binary": "/1"} middle [{"binary": "/2"}] then\nbinary: /3\n {broken {"binary": "/4"} [1, 2,] {"a": 1,} [01] [1.] [-] [1e5, 1.5E-3, -0, {"binary": "/5"}]`,
+		`prose [NaN, {"binary": "/nan"}] and [-Inf, {"binary": "/bad"}]`,
+		`{{"binary": "/inner"}`,
+		`{"binary": "/unterminated"`,
+		`{"binary": "/tab\there"} {"binary": "/esc\\x"} {"binary": "/hex\\u12G4"} {"binary": "/ok\\/slash\\b\\f\\n\\r\\t\\"\\\\"}`,
+		`{ "binary" :\n\t"/spaced" }`,
+		`{"stdout": "{\\"binary\\": \\"/inner-wrapped\\"}"} tail`,
+		`{"a": 1,\nbinary: /line-in-broken\n}`,
+		`[] {} [[]] {"": {"binary": ""}}`,
+		// Deep wrapping.
+		wrapped(10, `binary: ${Q}\n`),
+		wrapped(
+			6,
+			`prose ${JSON.stringify({ binary: P })} binary: no\nbinary: ${P}\n`,
+		),
+		// Non-ASCII paths, written as JavaScript and as ensure_ascii writes them.
+		pyDumps({ stdout: `binary: ${P}\n` }),
+		pyDumps({ result: pyDumps({ binary: P }) }),
+		JSON.stringify({ result: pyDumps({ stdout: `binary: ${P}\n` }) }),
+		`binary: ${P}\n${pyDumps({ binary: `${P}-old` })}`,
+		pyDumps({ binary: "/emoji/\u{1F600}/bin" }),
+		"binary: /emoji/\u{1F600}\n",
+		// Numbers and blanks JSON refuses (review-g4 mutants C and D).
+		'[01, "binary: /x"]',
+		'[1., "binary: /y"]',
+		'{\f"binary": "/x"}',
+		'{"binary":\v"/z"}',
+	];
+
+	test("the TypeScript port and harness.py agree on every vector", () => {
+		const python = spawnSync(
+			"python3",
+			[
+				"-I",
+				"-B",
+				"-c",
+				"import importlib.util, json, sys\n" +
+					"spec = importlib.util.spec_from_file_location('harness', sys.argv[1])\n" +
+					"harness = importlib.util.module_from_spec(spec); spec.loader.exec_module(harness)\n" +
+					"vectors = json.loads(sys.stdin.buffer.read().decode('utf-8'))\n" +
+					"sys.stdout.write(json.dumps([harness.binary_values(v) for v in vectors]))\n",
+				join(CODE_DIR, "harness.py"),
+			],
+			{ input: JSON.stringify(vectors), encoding: "utf8" },
+		);
+		expect([python.status, python.stderr]).toEqual([0, ""]);
+		const expected: string[][] = JSON.parse(python.stdout);
+		// The vectors reach the branches they are meant to.
+		const of = (vector: string) => expected[vectors.indexOf(vector)];
+		expect(of(`{"binary": "/first", "binary": "/second"}`)).toEqual([
+			"/second",
+		]);
+		expect(
+			of(
+				`{"b": {"binary": "/b"}, "1": {"binary": "/1"}, "__proto__": {"binary": "/proto"}}`,
+			),
+		).toEqual(["/b", "/1", "/proto"]);
+		expect(
+			of(`{"a": NaN, "b": Infinity, "c": -Infinity, "binary": "${Q}"}`),
+		).toEqual([Q]);
+		const ported = vectors.map((v) => binaryValues(v));
+		vectors.forEach((vector, i) => {
+			expect([vector, ported[i]]).toEqual([vector, expected[i] ?? []]);
+		});
+	});
+});
+
+describe("G4 fix round 1: tool-result text, resolved sessions, and the review's mutants", () => {
+	const verify = () => verifyResults(root, options());
+	const noMarker = /E attempt 1: call toolu_w returns no binary marker for/;
+	/** A native log whose one tool result, call `toolu_w`, has `content`. */
+	const nativeLog = (content: unknown) =>
+		`${[
+			{
+				type: "assistant",
+				message: {
+					model: "claude-opus-5-5",
+					content: [
+						{ type: "tool_use", id: "toolu_w", name: "Bash", input: {} },
+					],
+				},
+			},
+			{
+				type: "user",
+				message: {
+					content: [{ type: "tool_result", tool_use_id: "toolu_w", content }],
+				},
+			},
+		]
+			.map((l) => JSON.stringify(l))
+			.join("\n")}\n`;
+	/** E's one marker call returns `content(expected)`. */
+	const marked = (content: (x: string) => unknown) => (v: Result) => {
+		const e = v.evaluation.trials.find((t) => t.trial === "E")
+			?.attempts[0] as Attempt;
+		e.binaryEvidence.callIds = ["toolu_w"];
+		putArtifact(
+			e,
+			"claude.jsonl",
+			nativeLog(content(e.binaryEvidence.expected)),
+		);
+		putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
+	};
+
+	test("tool-result text is read as transcript.content_text reads it", () => {
+		writeResult(marked((x) => [`binary: ${x}`, "more"]));
+		expect(verify().problems).toEqual([]);
+		writeResult(
+			marked((x) => [`which shepherd`, { type: "text", text: `binary: ${x}` }]),
+		);
+		expect(verify().problems).toEqual([]);
+		// The harness reads a part's `content`, never its other keys.
+		writeResult(
+			marked((x) => [
+				{
+					type: "search_result",
+					content: [{ type: "text", text: "ok" }],
+					title: JSON.stringify({ binary: x }),
+				},
+			]),
+		);
+		expect(text(verify().problems)).toMatch(noMarker);
+	});
+
+	test("contentText matches transcript.content_text", () => {
+		const X = "/w/bin/shepherd";
+		const values: unknown[] = [
+			"plain",
+			"",
+			[],
+			[`binary: ${X}`, "more"],
+			["a", ["b", ["c"]], { text: "d" }],
+			{ text: `binary: ${X}`, content: "never" },
+			{ content: [{ type: "text", text: "inner" }, "tail"], title: "kept out" },
+			{ type: "image", source: { data: "abc", media: "image/png" } },
+			{ type: "search_result", title: JSON.stringify({ binary: X }) },
+			{ text: null },
+			{ content: { nested: [1, true, null, "s"] } },
+			null,
+			42,
+			true,
+			{},
+			[{}, [], { a: [] }],
+			{ type: "x", note: 'é ü \u{1F600} "quoted" \\ \n\t\u0001' },
+		];
+		const python = spawnSync(
+			"python3",
+			[
+				"-I",
+				"-B",
+				"-c",
+				"import importlib.util, json, sys\n" +
+					"spec = importlib.util.spec_from_file_location('transcript', sys.argv[1])\n" +
+					"transcript = importlib.util.module_from_spec(spec); spec.loader.exec_module(transcript)\n" +
+					"values = json.loads(sys.stdin.buffer.read().decode('utf-8'))\n" +
+					"sys.stdout.write(json.dumps([transcript.content_text(v) for v in values]))\n",
+				join(CODE_DIR, "transcript.py"),
+			],
+			{ input: JSON.stringify(values), encoding: "utf8" },
+		);
+		expect([python.status, python.stderr]).toEqual([0, ""]);
+		const expected: string[] = JSON.parse(python.stdout);
+		values.forEach((value, i) => {
+			expect([value, contentText(value)]).toEqual([value, expected[i]]);
+		});
+	});
+
+	test("a session resolved from its log reads markers as binary_values reads them", () => {
+		const X = "/w/bin/shepherd";
+		let deep = `binary: ${X}\n`;
+		for (let n = 0; n < 4; n++) deep = JSON.stringify({ stdout: deep });
+		const problems = (content: unknown) =>
+			sessionValidity(nativeLog(content), X, "claude-opus-5-5");
+		expect(problems(deep)).toEqual([]);
+		expect(problems(`{"\\u0062inary": "${X}"}`)).toEqual([]);
+		// An unclosed quote is no marker to the harness.
+		expect(problems(`binary: '${X}\n`)).toEqual([
+			`session: no tool-result binary evidence proves ${X}`,
+		]);
+	});
+
+	test("a quoted path with inner blanks is another path", () => {
+		writeResult(marked((x) => `binary: ' ${x} '\n`));
+		expect(text(verify().problems)).toMatch(noMarker);
+		writeResult(marked((x) => `binary: " ${x}"\n`));
+		expect(text(verify().problems)).toMatch(noMarker);
+	});
+
+	test("a retried scoring's second scorer cost must match its invocation's", () => {
+		const retried = () => {
+			const e = behavioral("E", "pass");
+			const first = invocation({
+				sessionId: "00000000-0000-4000-8000-0000000000aa",
+				failure: "nonzero exit 1: boom",
+				exitStatus: 1,
+			});
+			const second = invocation({ retryReason: "nonzero exit 1: boom" });
+			if (e.scoring) e.scoring.invocations = [first, second];
+			e.cost.scorer = [first.cost, second.cost];
+			for (const m of e.musts) if (m.scorer) m.scorer.invocation = 1;
+			return result({}, { E: [e] });
+		};
+		writeResult(() => {}, retried());
+		expect(verify().problems).toEqual([]);
+		writeResult((v) => {
+			const e = v.evaluation.trials.find((t) => t.trial === "E")
+				?.attempts[0] as Attempt;
+			const cost = e.cost.scorer[1];
+			if (cost) e.cost.scorer[1] = { ...cost, usd: 0 };
+			v.cost = totalCost(v);
+		}, retried());
+		expect(text(verify().problems)).toMatch(
+			/E attempt 1: scorer cost 1 differs from its invocation's/,
+		);
+	});
+});
+
+describe("G4 fix round 2: a resolved session's unexpected markers", () => {
+	test("a second tool result naming another binary is reported", () => {
+		const X = "/w/bin/shepherd";
+		const result = (id: string, content: string) => ({
+			type: "user",
+			message: {
+				content: [{ type: "tool_result", tool_use_id: id, content }],
+			},
+		});
+		const log = [
+			{ type: "assistant", message: { model: "claude-opus-5-5", content: [] } },
+			result("toolu_a", `binary: ${X}\n`),
+			result("toolu_b", JSON.stringify({ binary: "/other" })),
+		]
+			.map((l) => JSON.stringify(l))
+			.join("\n");
+		expect(sessionValidity(log, X, "claude-opus-5-5")).toEqual([
+			"session: a tool result names unexpected binary /other",
+		]);
 	});
 });
