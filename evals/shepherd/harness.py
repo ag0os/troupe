@@ -617,6 +617,30 @@ def void_reasons(provenance_legs):
     return reasons
 
 
+def native_logs(home, session_id):
+    """Every native log of a Claude session, found by its id in every projects directory: Claude Code names the
+    directory after the working directory, cut and hashed past 200 characters, so it is never derived here. A file
+    reached through a symlinked directory counts once; an unlistable projects directory raises OSError."""
+    projects = home / '.claude/projects'
+    if not projects.exists():
+        return []
+    name = session_id + '.jsonl'
+    found = {}
+    for path in sorted(d / name for d in projects.iterdir()):
+        if path.is_file():
+            found.setdefault(path.resolve(), path)
+    return list(found.values())
+
+
+def native_log(home, session_id):
+    found = native_logs(home, session_id)
+    if len(found) > 1:
+        raise RuntimeError(f'more than one native log for session {session_id}: ' + ', '.join(map(str, found)))
+    if not found:
+        raise FileNotFoundError(f'no native log for session {session_id} under {home / ".claude/projects"}')
+    return found[0]
+
+
 def run(config, trial, backend, rerun=False, before=False, attempt=None):
     if (before and backend != 'claude') or (trial == 'I' and (backend != 'claude' or before)):
         refuse('--before requires Claude; I requires Claude without --before')
@@ -654,10 +678,12 @@ def run(config, trial, backend, rerun=False, before=False, attempt=None):
     if backend == 'claude':
         argv = base + ['--effort', policy['effort'], '--session-id', session_id, '--permission-mode', policy['permissionMode'],
                        '--disallowedTools', *policy['disallowedTools']]
-        key = re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
-        log = HOME / '.claude/projects' / key / (session_id + '.jsonl')
-        if log.exists():
-            refuse('Chosen Claude session id already exists')
+        try:
+            existing = native_logs(HOME, session_id)
+        except OSError as error:
+            refuse(f'Cannot list the projects directory {HOME / ".claude/projects"}: {error.strerror or error}')
+        if existing:
+            refuse('Chosen Claude session id already exists: ' + ', '.join(map(str, existing)))
         seen = set()
     else:
         argv = base + ['-c', 'model_reasoning_effort=high', '-c', 'features.shell_snapshot=false', '-s', 'workspace-write',
@@ -673,7 +699,7 @@ def run(config, trial, backend, rerun=False, before=False, attempt=None):
     manifest = {'trial': trial, 'backend': backend, 'scratch_root': str(root), 'workspace': str(workspace),
                 'argv': argv, 'PATH': env['PATH'], 'HOME': env['HOME'], 'XDG_CONFIG_HOME': env['XDG_CONFIG_HOME'],
                 'ZDOTDIR': env['ZDOTDIR'], 'SHELL': env['SHELL'], 'session_shepherd': found, 'interrupted': None,
-                'CODEX_HOME': str(codex_home) if codex_home else None, 'policy': policy,
+                'CODEX_HOME': str(codex_home) if codex_home else None, 'native_log_dir': None, 'policy': policy,
                 'cli_version': cli_version(env, policy['toolTimeoutSeconds']) if backend == 'claude' else None,
                 'backend_settings': backend_settings(HOME) if backend == 'claude' else None,
                 'exit_codes': [], 'timed_out': False, 'observed_models': [], 'binary_evidence_call_ids': [],
@@ -720,6 +746,9 @@ def run(config, trial, backend, rerun=False, before=False, attempt=None):
     try:
         if backend == 'codex':
             log = codex_log(codex_home, seen, workspace, started)
+        else:
+            log = native_log(HOME, session_id)
+            manifest['native_log_dir'] = log.parent.name
         shutil.copyfile(log, dest / (name + '.jsonl'))
         events = module.read_log(log)
         meta, steps = module.decode(events, backend)

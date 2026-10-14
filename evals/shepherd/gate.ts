@@ -13,7 +13,9 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	writeFileSync,
@@ -182,6 +184,43 @@ export function pythonCost(log: string): Cost {
 		};
 	}
 	return JSON.parse(child.stdout);
+}
+
+/**
+ * A session's native log, found by its id in every projects directory:
+ * Claude Code names the directory after the working directory, cut and
+ * hashed past 200 characters, so the gate never derives the name. Two
+ * distinct files refuse, naming both; one reached through a symlink counts
+ * once. An unlistable projects directory refuses too.
+ */
+export function findNativeLog(
+	home: string,
+	session: string,
+): string | undefined {
+	const projects = join(home, ".claude/projects");
+	if (!existsSync(projects)) return undefined;
+	let names: string[];
+	try {
+		names = readdirSync(projects);
+	} catch (error) {
+		const { code, message } = error as NodeJS.ErrnoException;
+		throw new Error(
+			`Refusing: cannot list the projects directory ${projects}: ${code ?? message}`,
+		);
+	}
+	const byFile = new Map<string, string>();
+	for (const name of names.sort()) {
+		const path = join(projects, name, `${session}.jsonl`);
+		if (!existsSync(path)) continue;
+		const real = realpathSync(path);
+		if (!byFile.has(real)) byFile.set(real, path);
+	}
+	const found = [...byFile.values()];
+	if (found.length > 1)
+		throw new Error(
+			`Refusing: session ${session} has more than one native log: ${found.join(", ")}`,
+		);
+	return found[0];
 }
 
 const iso = (date: Date) => date.toISOString();
@@ -592,30 +631,21 @@ export async function runGate(
 			);
 			return { ...attempt, runId: pending.runId };
 		}
-		let artifacts: Artifact[] = [];
-		if (scratch) artifacts = exportAttempt({ from: scratch, to: dir, ...at });
-		else mkdirSync(dir, { recursive: true });
 		const argv = run.argv ?? [];
 		const sessionAt = argv.indexOf("--session-id");
 		const session = sessionAt >= 0 ? argv[sessionAt + 1] : undefined;
+		// Found before anything is written, so a refusal leaves no export.
 		const native =
-			run.workspace && session
-				? join(
-						options.home,
-						".claude/projects",
-						run.workspace.replace(/[^A-Za-z0-9]/g, "-"),
-						`${session}.jsonl`,
-					)
+			session && !(scratch && existsSync(join(scratch, "claude.jsonl")))
+				? findNativeLog(options.home, session)
 				: undefined;
-		if (
-			!artifacts.some((a) => a.path === "claude.jsonl") &&
-			native &&
-			existsSync(native)
-		) {
+		let artifacts: Artifact[] = [];
+		if (scratch) artifacts = exportAttempt({ from: scratch, to: dir, ...at });
+		else mkdirSync(dir, { recursive: true });
+		if (native)
 			artifacts.push(
 				writeArtifact(dir, "claude.jsonl", readFileSync(native), at),
 			);
-		}
 		const interrupted =
 			"interrupted: the invocation ended before the attempt was recorded";
 		const { launch: _launch, ...rest } = pending;

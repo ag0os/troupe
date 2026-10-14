@@ -8,6 +8,7 @@ also run, using that configuration's scratch-compiled subject binary.
 """
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -46,6 +47,27 @@ SUBJECT = Path('/synthetic/run/bin/shepherd')
 COMPARISON = Path('/synthetic/comparison/bin/shepherd')
 POLICY = json.loads((HERE / 'policy.json').read_text())
 needs_subject = unittest.skipUnless(CONFIG, 'needs --config with a scratch-compiled subject')
+
+
+def project_dir_name(cwd):
+    """The projects directory Claude Code 2.1.299 names after a working directory (`p0`): every UTF-16 code unit
+    outside ASCII letters and digits as a dash, and a slug past 200 units cut to 200 with a base 36 hash of the
+    original path. Only fakes that write a native log use it; the harness finds the log by session id."""
+    raw = cwd.encode('utf-16-le')
+    units = [int.from_bytes(raw[i:i + 2], 'little') for i in range(0, len(raw), 2)]
+    slug = ''.join(chr(u) if chr(u).isascii() and chr(u).isalnum() else '-' for u in units)
+    if len(slug) <= 200:
+        return slug
+    value = 0
+    for unit in units:
+        value = (value * 31 + unit) & 0xFFFFFFFF
+    value = abs(value - (1 << 32) if value >= 1 << 31 else value)
+    digits = ''
+    while True:
+        value, rest = divmod(value, 36)
+        digits = '0123456789abcdefghijklmnopqrstuvwxyz'[rest] + digits
+        if not value:
+            return f'{slug[:200]}-{digits}'
 
 
 def synthetic_config(root, **changes):
@@ -439,8 +461,7 @@ class HarnessChecks(unittest.TestCase):
                     session = argv[argv.index('--resume') + 1]
                 else:
                     session = argv[argv.index('--session-id') + 1]
-                key = h.re.sub(r'[^A-Za-z0-9]', '-', str(workspace))
-                log = home / '.claude/projects' / key / (session + '.jsonl')
+                log = home / '.claude/projects' / project_dir_name(str(workspace)) / (session + '.jsonl')
                 log.parent.mkdir(parents=True, exist_ok=True)
                 # Make B VOID: assistant prose alone must not count.
                 events = [{'type': 'user', 'timestamp': '2026-10-09T01:00:00Z', 'cwd': str(workspace), 'sessionId': session,
@@ -653,8 +674,10 @@ class PortableChecks(unittest.TestCase):
         for entry in captured.values():
             self.assertRegex(entry['sha256'], r'^[0-9a-f]{64}$')
 
-    def fake_run(self, config, trial='A', model=None, marker=None, write_log=True, rc=0, attempt=None, **patches):
-        """Run one trial with fake fixture tools and a fake session."""
+    def fake_run(self, config, trial='A', model=None, marker=None, write_log=True, rc=0, attempt=None, copies=(),
+                 **patches):
+        """Run one trial with fake fixture tools and a fake session; `copies` names more projects directories
+        that get the same native log."""
         launched = []
         def prepare(config, trial, workspace):
             (workspace / '.shepherd').mkdir()
@@ -668,13 +691,17 @@ class PortableChecks(unittest.TestCase):
             stdout.write_text('fake stdout\n'); stderr.write_text('fake stderr\n')
             if write_log:
                 session = argv[argv.index('--session-id') + 1]
-                log = self.home / '.claude/projects' / h.re.sub(r'[^A-Za-z0-9]', '-', str(workspace)) / (session + '.jsonl')
+                log = self.home / '.claude/projects' / project_dir_name(str(workspace)) / (session + '.jsonl')
                 log.parent.mkdir(parents=True, exist_ok=True)
                 events = [{'type': 'assistant', 'timestamp': '2026-10-13T15:00:01Z', 'message': {'role': 'assistant', 'model': model or config.policy['model'],
                            'content': [{'type': 'tool_use', 'id': 'start', 'name': 'Bash', 'input': {'command': 'shepherd tool start'}}]}},
                           {'type': 'user', 'timestamp': '2026-10-13T15:00:02Z', 'message': {'role': 'user', 'content': [
                            {'type': 'tool_result', 'tool_use_id': 'start', 'content': f'binary: {marker or argv[0]}\n'}]}}]
                 log.write_text(''.join(json.dumps(event) + '\n' for event in events))
+                for name in copies:
+                    copy = self.home / '.claude/projects' / name / log.name
+                    copy.parent.mkdir(parents=True, exist_ok=True)
+                    copy.write_text(log.read_text())
             (workspace / 'ledger/settings.txt').write_text('page_size=24\n')
             return rc
         values = {'prepare': prepare, 'tool': tool, 'launch': launch, 'cli_version': lambda env, timeout: 'fake 2.0.0',
@@ -881,11 +908,11 @@ class PortableChecks(unittest.TestCase):
     def sleeping_subject(self):
         """A subject that writes a valid native log, edits the workspace, then hangs."""
         self.subject.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, re, sys, time
+import json, os, pathlib, sys, time
+''' + inspect.getsource(project_dir_name) + '''
 argv = sys.argv
 session = argv[argv.index('--session-id') + 1]
-key = re.sub(r'[^A-Za-z0-9]', '-', os.getcwd())
-log = pathlib.Path(os.environ['HOME']) / '.claude/projects' / key / (session + '.jsonl')
+log = pathlib.Path(os.environ['HOME']) / '.claude/projects' / project_dir_name(os.getcwd()) / (session + '.jsonl')
 log.parent.mkdir(parents=True, exist_ok=True)
 events = [{'type': 'assistant', 'timestamp': '2026-10-13T15:00:01Z', 'message': {'role': 'assistant',
            'model': argv[argv.index('--model') + 1], 'content': [{'type': 'tool_use', 'id': 'start', 'name': 'Bash',
@@ -1010,10 +1037,10 @@ time.sleep(30)
         prepare.assert_not_called()
 
     def test_a_session_id_collision_refuses_before_any_fixture_work(self):
+        # The id is found in any projects directory, not only the one this workspace would get.
         session = '00000000-0000-4000-8000-000000000000'
         known = self.root / 'known-root'; known.mkdir()
-        key = h.re.sub(r'[^A-Za-z0-9]', '-', str(known / 'workspace'))
-        log = self.home / '.claude/projects' / key / (session + '.jsonl')
+        log = self.home / '.claude/projects' / '-elsewhere' / (session + '.jsonl')
         log.parent.mkdir(parents=True)
         log.write_text('')
         config = self.case('collision-first')
@@ -1021,9 +1048,73 @@ time.sleep(30)
              patch.object(h.tempfile, 'mkdtemp', return_value=str(known)), patch.object(h, 'prepare') as prepare, \
              patch.object(h, 'cli_version', return_value='fake'), \
              patch.object(h, 'session_shepherd', return_value=[str(self.subject)] * 2):
-            self.assertIn('session id', self.refused(h.run, config, 'A', 'claude'))
+            message = self.refused(h.run, config, 'A', 'claude')
+        self.assertIn('session id', message)
+        self.assertIn(str(log), message)
         prepare.assert_not_called()
         self.assertEqual(list((config.artifact_root / 'A').glob('*')), [])
+
+    def test_a_projects_directory_reached_twice_through_a_symlink_holds_one_native_log(self):
+        session = '00000000-0000-4000-8000-0000000000aa'
+        log = self.home / '.claude/projects/-a' / (session + '.jsonl')
+        log.parent.mkdir(parents=True); log.write_text('{}\n')
+        (self.home / '.claude/projects/-alias').symlink_to(log.parent)
+        self.assertEqual(h.native_log(self.home, session), log)
+
+    def test_an_unreadable_projects_directory_refuses_before_launch(self):
+        projects = self.home / '.claude/projects'; projects.mkdir(parents=True)
+        projects.chmod(0)
+        config = self.case('unreadable')
+        try:
+            with patch.object(h, 'HOME', self.home), patch.object(h, 'prepare') as prepare, \
+                 patch.object(h, 'cli_version', return_value='fake'), patch.object(h, 'launch') as launch, \
+                 patch.object(h, 'session_shepherd', return_value=[str(self.subject)] * 2):
+                message = self.refused(h.run, config, 'A', 'claude')
+        finally:
+            projects.chmod(0o755)
+        self.assertIn(f'Cannot list the projects directory {projects}', message)
+        prepare.assert_not_called(); launch.assert_not_called()
+
+    def test_the_fake_names_a_projects_directory_as_claude_code_does(self):
+        # Expected values from the CLI's own `p0`, run unchanged in Bun.
+        vectors = [
+            ('/tmp/x/workspace', '-tmp-x-workspace'),
+            ('/' + 'a' * 199, '-' + 'a' * 199),
+            ('/' + 'a' * 200, '-' + 'a' * 199 + '-b6ymvl'),
+            ('/private/var/folders/kq/T/' + 'r' * 150 + '/shepherd-eval-E-x/workspace',
+             '-private-var-folders-kq-T-' + 'r' * 150 + '-shepherd-eval-E-x-works-t2hkx7'),
+            ('/Users/jos\u00e9/\u00fcber/\U0001f600/workspace', '-Users-jos---ber----workspace'),
+            ('/Users/jos\u00e9/' + '\u00fc' * 190 + '/\U0001f600/workspace', '-Users-jos' + '-' * 190 + '-naqb52'),
+        ]
+        for cwd, name in vectors:
+            self.assertEqual(project_dir_name(cwd), name)
+
+    def test_a_workspace_whose_slug_passes_255_bytes_finds_its_native_log(self):
+        # Built long on purpose, whatever the caller's TMPDIR.
+        parent = self.root / ('l' * 120) / ('m' * 120); parent.mkdir(parents=True)
+        config = synthetic_config(self.root, subject=self.subject, artifact_root=self.root / 'long',
+                                  scratch_parent=parent)
+        rc, record, text, _ = self.fake_run(config)
+        self.assertGreater(len(h.re.sub(r'[^A-Za-z0-9]', '-', record['workspace']).encode()), 255)
+        self.assertEqual(rc, 0)
+        self.assertEqual(record['validity'], {'valid': True, 'void_reasons': []})
+        self.assertEqual(record['native_log_dir'], project_dir_name(record['workspace']))
+        self.assertTrue((config.artifact_root / 'A/claude.jsonl').exists())
+
+    def test_a_missing_native_log_voids_the_attempt(self):
+        rc, record, text, _ = self.fake_run(self.case('no-log'), write_log=False)
+        self.assertEqual(rc, 3)
+        self.assertIn('no native log', ' '.join(record['validity']['void_reasons']))
+        self.assertIsNone(record['native_log_dir'])
+
+    def test_a_session_id_with_two_native_logs_voids_naming_both(self):
+        rc, record, text, _ = self.fake_run(self.case('two-logs'), copies=['-elsewhere'])
+        self.assertEqual(rc, 3)
+        reasons = ' '.join(record['validity']['void_reasons'])
+        session = record['argv'][record['argv'].index('--session-id') + 1]
+        for name in (project_dir_name(record['workspace']), '-elsewhere'):
+            self.assertIn(str(self.home / '.claude/projects' / name / (session + '.jsonl')), reasons)
+        self.assertFalse((self.root / 'two-logs/A/claude.jsonl').exists())
 
 if __name__ == '__main__':
     unittest.main()

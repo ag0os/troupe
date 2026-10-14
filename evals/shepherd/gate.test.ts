@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
@@ -8,6 +9,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +21,7 @@ import {
 	testGit,
 } from "../../scripts/shepherd-source-fixture";
 import {
+	findNativeLog,
 	type GateOptions,
 	publishResult,
 	pythonChecks,
@@ -28,7 +31,7 @@ import {
 import { evaluationIdentity } from "./identity";
 import { loadRubric, policyHash, type Result, validateResult } from "./schema";
 import { validateDecisions } from "./scorer";
-import { invocation } from "./testing";
+import { invocation, projectDirName } from "./testing";
 import { verifyResults } from "./verify";
 
 const rubric = loadRubric();
@@ -46,6 +49,8 @@ let finalSnapshot: (json: string, run: string) => string;
 let runParent: string;
 /** Extra fields for each harness run manifest. */
 let manifestExtra: Record<string, unknown>;
+/** A home made outside TMPDIR, removed after the test. */
+let shortHome: string | undefined;
 
 beforeEach(() => {
 	scratch = realpathSync(mkdtempSync(join(tmpdir(), "shepherd-evals-gate-")));
@@ -60,6 +65,8 @@ beforeEach(() => {
 
 afterEach(() => {
 	rmSync(scratch, { recursive: true, force: true });
+	if (shortHome) rmSync(shortHome, { recursive: true, force: true });
+	shortHome = undefined;
 });
 
 type Behaviour =
@@ -775,10 +782,22 @@ describe("durability and bounds (review findings 1 and 9)", () => {
 });
 
 describe("pending attempts (fix round 1b, ruling D)", () => {
-	for (const slugged of [false, true])
-		test(`a kill during a wave leaves durable pending attempts that the next invocation resolves${slugged ? " (scratch under the home slug)" : ""}`, async () => {
-			const home = join(scratch, "home");
-			if (slugged) {
+	const LONG = " (a workspace whose slug passes 255 bytes)";
+	/** A run parent built long on purpose, whatever the caller's TMPDIR. */
+	const longParent = () => {
+		const parent = join(scratch, "l".repeat(120), "m".repeat(120));
+		mkdirSync(parent, { recursive: true });
+		return parent;
+	};
+	for (const variant of ["", " (scratch under the home slug)", LONG])
+		test(`a kill during a wave leaves durable pending attempts that the next invocation resolves${variant}`, async () => {
+			// The home slug names one directory, so that home sits under a short
+			// fixed root whatever the caller's TMPDIR.
+			if (variant && variant !== LONG)
+				shortHome = realpathSync(mkdtempSync("/tmp/sh-home-"));
+			const home = shortHome ?? join(scratch, "home");
+			if (variant === LONG) runParent = longParent();
+			else if (variant) {
 				runParent = join(scratch, `${home.replaceAll("/", "-")}-Projects-x`);
 				mkdirSync(runParent, { recursive: true });
 			}
@@ -795,6 +814,10 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 					const dir = join(killed.artifactRoot, trial, `attempt-${ordinal}`);
 					mkdirSync(dir, { recursive: true });
 					const workspace = `${run}/shepherd-eval-${trial}-x/workspace`;
+					if (variant === LONG)
+						expect(
+							Buffer.byteLength(workspace.replace(/[^A-Za-z0-9]/g, "-")),
+						).toBeGreaterThan(255);
 					const session = `00000000-0000-4000-8000-0000000000${trial === "E" ? "bb" : "aa"}`;
 					writeFileSync(
 						join(dir, "claude-run.json"),
@@ -814,7 +837,7 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 					const log = join(
 						home,
 						".claude/projects",
-						workspace.replace(/[^A-Za-z0-9]/g, "-"),
+						projectDirName(workspace),
 						`${session}.jsonl`,
 					);
 					mkdirSync(join(log, ".."), { recursive: true });
@@ -907,6 +930,109 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 			expect(gneg?.outcome).toBe("flaky-pass");
 			expect(validateResult(later.result)).toEqual([]);
 		});
+
+	test("a session id whose native log appears in two project directories refuses, naming both", async () => {
+		const home = join(scratch, "home");
+		const killed = options({}, {}, { home });
+		const run = killed.scratchRoot;
+		const workspace = `${run}/shepherd-eval-G-neg-x/workspace`;
+		const session = "00000000-0000-4000-8000-0000000000aa";
+		const logs = [projectDirName(workspace), "-elsewhere"].map((name) =>
+			join(home, ".claude/projects", name, `${session}.jsonl`),
+		);
+		killed.runWave = async (jobs) => {
+			for (const { trial: t, ordinal } of jobs) {
+				if (t !== "G-neg") continue;
+				const dir = join(killed.artifactRoot, t, `attempt-${ordinal}`);
+				mkdirSync(dir, { recursive: true });
+				writeFileSync(
+					join(dir, "claude-run.json"),
+					JSON.stringify({
+						trial: t,
+						workspace,
+						argv: [`${run}/bin/shepherd`, "--session-id", session],
+						validity: { valid: false, void_reasons: [] },
+						provenance: [],
+						started_at: "2026-10-13T15:11:10.000Z",
+						ended_at: null,
+					}),
+				);
+				for (const log of logs) {
+					mkdirSync(join(log, ".."), { recursive: true });
+					writeFileSync(log, "{}\n");
+				}
+			}
+			throw new Error("killed during the wave");
+		};
+		await expect(runGate(killed)).rejects.toThrow(/killed/);
+		// Each retry refuses again and writes nothing: no export, nothing set aside.
+		for (const _ of [1, 2]) {
+			const error = await runGate(options({}, {}, { home })).then(
+				() => undefined,
+				(e: Error) => e.message,
+			);
+			for (const log of logs) expect(error).toContain(log);
+			const pending = trial(read(), "G-neg")?.attempts[0];
+			expect(pending?.kind).toBe("pending");
+			const dir = join(evalsDir, pending?.artifactDir ?? "?");
+			expect(existsSync(dir)).toBe(false);
+			expect(existsSync(`${dir}.partial`)).toBe(false);
+		}
+	});
+
+	test("a projects directory reached twice through a symlink holds one native log", () => {
+		const home = join(scratch, "home");
+		const session = "00000000-0000-4000-8000-0000000000aa";
+		const log = join(home, ".claude/projects/-a", `${session}.jsonl`);
+		mkdirSync(join(log, ".."), { recursive: true });
+		writeFileSync(log, "{}\n");
+		symlinkSync(
+			join(home, ".claude/projects/-a"),
+			join(home, ".claude/projects/-alias"),
+		);
+		expect(findNativeLog(home, session)).toBe(log);
+	});
+
+	test("an unreadable projects directory refuses with a clear message", () => {
+		const home = join(scratch, "home");
+		const projects = join(home, ".claude/projects");
+		mkdirSync(projects, { recursive: true });
+		chmodSync(projects, 0o000);
+		try {
+			expect(() => findNativeLog(home, "x")).toThrow(
+				`Refusing: cannot list the projects directory ${projects}`,
+			);
+		} finally {
+			chmodSync(projects, 0o755);
+		}
+		rmSync(projects, { recursive: true });
+		writeFileSync(projects, "");
+		expect(() => findNativeLog(home, "x")).toThrow(
+			`Refusing: cannot list the projects directory ${projects}`,
+		);
+	});
+
+	test("the fake names a projects directory as Claude Code 2.1.299 does", () => {
+		// Expected values from the CLI's own `p0`, run unchanged in Bun.
+		const vectors: [string, string][] = [
+			["/tmp/x/workspace", "-tmp-x-workspace"],
+			[`/${"a".repeat(199)}`, `-${"a".repeat(199)}`],
+			[`/${"a".repeat(200)}`, `-${"a".repeat(199)}-b6ymvl`],
+			[
+				`/private/var/folders/kq/T/${"r".repeat(150)}/shepherd-eval-E-x/workspace`,
+				`-private-var-folders-kq-T-${"r".repeat(150)}-shepherd-eval-E-x-works-t2hkx7`,
+			],
+			[
+				"/Users/jos\u00e9/\u00fcber/\u{1f600}/workspace",
+				"-Users-jos---ber----workspace",
+			],
+			[
+				`/Users/jos\u00e9/${"\u00fc".repeat(190)}/\u{1f600}/workspace`,
+				`-Users-jos${"-".repeat(190)}-naqb52`,
+			],
+		];
+		for (const [cwd, name] of vectors) expect(projectDirName(cwd)).toBe(name);
+	});
 
 	test("a failure while recording a finished attempt leaves it pending (V1), and its leftover export never wedges later invocations (V2)", async () => {
 		const failing = options(
@@ -1463,7 +1589,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 				const log = join(
 					home,
 					".claude/projects",
-					workspace.replace(/[^A-Za-z0-9]/g, "-"),
+					projectDirName(workspace),
 					`${session}.jsonl`,
 				);
 				mkdirSync(join(log, ".."), { recursive: true });

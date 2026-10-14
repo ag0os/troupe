@@ -29,6 +29,8 @@ The eval never publishes into the repository `bin/`, which is the live launcher.
 
 The subject is resolved with `realpath`, and that resolved path is what provenance expects: on macOS a scratch directory under `/tmp` appears as `/private/tmp/...` in markers. Fixture tools and subjects use the same scratch executable, with its directory first on `PATH`. Every in-session `shepherd tool` response carries a `binary:` marker; a valid session needs one naming the resolved scratch binary and none naming any other binary.
 
+Each subject session gets a fresh session ID, and its native log is found by that ID: the harness, and the gate when it resolves an interrupted attempt, look for `<session-id>.jsonl` in every directory under `~/.claude/projects/`. Exactly one match is the log, and the run manifest records its directory name as `native_log_dir`; none leaves the attempt void for a missing log; more than one distinct file (a symlinked directory counts once) voids the attempt (or, in the gate, refuses the invocation before anything is exported) naming every path. A projects directory that cannot be listed refuses the run before launch and refuses the gate's invocation. The directory name is never derived from the workspace path, because Claude Code cuts a name past 200 characters and adds a hash of the path (2.1.299), so a long scratch parent stays safe. The system temp directory remains the recommended scratch parent.
+
 ## Version output and source identity
 
 A stamped Shepherd prints exactly one line:
@@ -144,7 +146,7 @@ Each trial root also gets a scratch `ZDOTDIR` whose startup files only put the s
 
 The user's `~/.claude/settings.json` (hooks, plugins, `env` block, effort and model settings) still applies to subject sessions, as do `settings.local.json` and managed settings. They are recorded, as raw hashes plus copies with secret values redacted, not neutralized. Settings differences between machines therefore change subject conditions.
 
-The harness refuses, by resolved path, scratch directories beneath `~/shepherds`, beneath a `.shepherd` ancestor or inside a Git repository (inherited Git routing variables are ignored during discovery). It also refuses nonempty workspace directories, non-executable subjects, an artifact set that already exists and a session ID collision. Fixture builds are refused after 23:40 local time and the wrapper refuses to start then; a build that crosses midnight fails as a void. Scratch placement and permission labels do not enforce filesystem read isolation.
+The harness refuses, by resolved path, scratch directories beneath `~/shepherds`, beneath a `.shepherd` ancestor or inside a Git repository (inherited Git routing variables are ignored during discovery). It also refuses nonempty workspace directories, non-executable subjects, an artifact set that already exists and a session ID collision (a log with the chosen ID in any projects directory, named in the refusal). Fixture builds are refused after 23:40 local time and the wrapper refuses to start then; a build that crosses midnight fails as a void. Scratch placement and permission labels do not enforce filesystem read isolation.
 
 ## Results and evidence
 

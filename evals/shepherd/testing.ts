@@ -273,3 +273,19 @@ export function result(
 export function trialsOf(value: Result): string[] {
 	return value.evaluation.trials.map((t) => t.trial);
 }
+
+/**
+ * The directory Claude Code names a session's projects directory after its
+ * working directory (CLI 2.1.299, `p0`): every UTF-16 code unit outside ASCII
+ * letters and digits as a dash, and a slug past 200 units cut to 200 with a
+ * base 36 hash of the original path. Only fakes that write a native log use
+ * it; the harness and the gate find the log by session id.
+ */
+export function projectDirName(cwd: string): string {
+	const slug = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+	if (slug.length <= 200) return slug;
+	let hash = 0;
+	for (let i = 0; i < cwd.length; i++)
+		hash = ((hash << 5) - hash + cwd.charCodeAt(i)) | 0;
+	return `${slug.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
+}
