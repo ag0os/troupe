@@ -47,7 +47,13 @@ import {
 	totalCost,
 	validateResult,
 } from "./schema";
-import { buildPacket, type Decision, type Packet, scoreAll } from "./scorer";
+import {
+	buildPacket,
+	type Decision,
+	loadPacket,
+	type Packet,
+	scoreAll,
+} from "./scorer";
 
 const CODE_DIR = import.meta.dir;
 /**
@@ -476,11 +482,9 @@ export async function runGate(
 		await scoreAll(
 			batch.map((pending) => async () => {
 				if (Date.now() + scorerTimeout > options.deadline) return;
-				const packet = buildPacket({
-					trial: pending.trial,
+				const packet = loadPacket({
 					dir: pending.dir,
-					requested: pending.requested,
-					rubric: options.rubric,
+					packet: pending.attempt.scoring?.packet ?? "packet.md",
 				});
 				if (packet.sha256 !== pending.attempt.scoring?.packetSha256) {
 					throw new Error(
@@ -1045,6 +1049,7 @@ function buildAttempt(input: {
 			dir,
 			requested,
 			rubric: options.rubric,
+			redact: (text) => redactText(text, input.context).text,
 		});
 		const stored = writeArtifact(dir, "packet.md", packet.text, input.context);
 		if (`sha256:${stored.sha256}` !== packet.sha256) {

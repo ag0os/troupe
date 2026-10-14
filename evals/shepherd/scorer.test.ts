@@ -16,6 +16,8 @@ import { loadRubric } from "./schema";
 import {
 	buildPacket,
 	checkIsolation,
+	DROPPED_ATTACHMENTS,
+	DROPPED_ENTRIES,
 	liveScorerGroups,
 	SCORER_ISOLATION,
 	type ScorerConfig,
@@ -23,6 +25,7 @@ import {
 	scoreAttempt,
 	scorerArgv,
 	stopScorers,
+	validateDecisions,
 } from "./scorer";
 
 let scratch: string;
@@ -342,6 +345,276 @@ describe("blind packet (4.2)", () => {
 				rubric,
 			}).sha256,
 		).toBe(packet.sha256);
+	});
+});
+
+describe("packet line numbers and slimming", () => {
+	const listing = (type: string, body: Record<string, unknown>) =>
+		JSON.stringify({
+			type: "attachment",
+			timestamp: "2026-10-13T15:11:10.000Z",
+			attachment: { type, ...body },
+		});
+	const KEPT = JSON.stringify({
+		type: "user",
+		timestamp: "2026-10-13T15:11:20.000Z",
+		message: { content: "the kept user line" },
+	});
+	const thinking = (text: string) =>
+		JSON.stringify({
+			type: "assistant",
+			message: {
+				content: [{ type: "thinking", thinking: text, signature: "SIGNED" }],
+			},
+		});
+	// One line of every dropped kind, each carrying a marker the packet must not show.
+	const DROPPED_LINES = [
+		...DROPPED_ATTACHMENTS.map((kind) =>
+			listing(kind, { text: `DROPPED-${kind}` }),
+		),
+		...DROPPED_ENTRIES.map((type) =>
+			JSON.stringify({ type, text: `DROPPED-${type}` }),
+		),
+		thinking(""),
+	];
+	const LOG = [
+		DROPPED_LINES[0] ?? "",
+		LOG_LINE,
+		...DROPPED_LINES.slice(1, 6),
+		listing("date", { date: "2026-10-13" }),
+		KEPT,
+		...DROPPED_LINES.slice(6),
+		thinking("THOUGHT-KEPT"),
+	];
+	const DIFF = [
+		"--- a/ledger/settings.txt",
+		"+++ b/ledger/settings.txt",
+		"@@ -1 +1 @@",
+		"-page_size=16",
+		"+page_size=24",
+		"",
+	].join("\n");
+
+	function numbered(): string {
+		const dir = exported();
+		writeFileSync(join(dir, "claude.jsonl"), `${LOG.join("\n")}\n`);
+		writeFileSync(join(dir, "claude-diff.patch"), DIFF);
+		writeFileSync(
+			join(dir, "claude-stdout.txt"),
+			"I set page_size to 24 first.\nNo newline ends this line.",
+		);
+		writeFileSync(
+			join(dir, "claude-final.json"),
+			JSON.stringify({
+				snapshotVersion: 1,
+				files: {
+					"ledger/settings.txt": {
+						type: "file",
+						encoding: "utf-8",
+						content: "page_size=24\nrows=3\n",
+					},
+					"ledger/logo.bin": {
+						type: "file",
+						encoding: "base64",
+						content: Buffer.concat([
+							Buffer.from("BINARY-BYTES"),
+							Buffer.from([0xff, 0x0a]),
+						]).toString("base64"),
+					},
+					"notes/second.md": {
+						type: "file",
+						encoding: "utf-8",
+						content: "second file one\nsecond file two",
+					},
+				},
+			}),
+		);
+		return dir;
+	}
+
+	/** Each snapshot path's shown rows, in order. */
+	function byPath(text: string, name: string): Map<string, [number, string][]> {
+		const begin = text.indexOf(`\nBEGIN ${name} `);
+		const end = text.indexOf(`\nEND ${name} `, begin);
+		const paths = new Map<string, [number, string][]>();
+		let rows: [number, string][] = [];
+		for (const line of text
+			.slice(text.indexOf("\n", begin + 1) + 1, end)
+			.split("\n")) {
+			const header = /^path (\S+) \(/.exec(line);
+			const row = /^(\d+)\t(.*)$/s.exec(line);
+			if (header) {
+				rows = [];
+				paths.set(header[1] ?? "", rows);
+			} else if (row) rows.push([Number(row[1]), row[2] ?? ""]);
+			else rows.push([0, line]);
+		}
+		return paths;
+	}
+
+	const build = () =>
+		buildPacket({ trial: "A", dir: numbered(), requested: ["A.M2"], rubric });
+
+	/** The shown lines of one packet file: its number prefix and its text. */
+	function shown(text: string, name: string): [number, string][] {
+		const begin = text.indexOf(`\nBEGIN ${name} `);
+		const end = text.indexOf(`\nEND ${name} `, begin);
+		return text
+			.slice(text.indexOf("\n", begin + 1) + 1, end)
+			.split("\n")
+			.flatMap((line): [number, string][] => {
+				const match = /^(\d+)\t(.*)$/s.exec(line);
+				return match ? [[Number(match[1]), match[2] ?? ""]] : [];
+			});
+	}
+
+	const decide = (
+		packet: ReturnType<typeof build>,
+		evidence: Record<string, unknown>,
+	) => {
+		const checked = validateDecisions(
+			JSON.stringify({
+				decisions: [
+					{ id: "A.M2", outcome: "pass", rationale: "r", evidence: [evidence] },
+				],
+			}),
+			["A.M2"],
+			packet,
+		);
+		if ("failure" in checked) throw new Error(checked.failure);
+		return checked.decisions[0]?.outcome;
+	};
+
+	test("every shown number is the validator's count of that line", () => {
+		const packet = build();
+		for (const name of [
+			"claude-fixture-notes.md",
+			"claude.jsonl",
+			"claude-stdout.txt",
+			"claude-diff.patch",
+		]) {
+			const lines =
+				packet.files.find((f) => f.name === name)?.content.split("\n") ?? [];
+			const rows = shown(packet.text, name);
+			expect(rows.length).toBeGreaterThan(0);
+			for (const [n, text] of rows) expect(text).toBe(lines[n - 1] ?? "?");
+		}
+		expect(shown(packet.text, "claude-fixture-notes.md")[0]).toEqual([
+			1,
+			"# Trial A fixture facts",
+		]);
+		expect(shown(packet.text, "claude-diff.patch")).toContainEqual([
+			3,
+			"@@ -1 +1 @@",
+		]);
+		expect(shown(packet.text, "claude-stdout.txt").at(-1)).toEqual([
+			2,
+			"No newline ends this line.",
+		]);
+	});
+
+	test("snapshot file contents are numbered per path as the validator counts them", () => {
+		const packet = build();
+		const paths = byPath(packet.text, "claude-final.json");
+		expect(paths.get("ledger/settings.txt")).toEqual([
+			[1, "page_size=24"],
+			[2, "rows=3"],
+		]);
+		expect(paths.get("notes/second.md")).toEqual([
+			[1, "second file one"],
+			[2, "second file two"],
+		]);
+		const cite = (path: string, lines: [number, number], quote: string) =>
+			decide(packet, { artifact: "claude-final.json", path, lines, quote });
+		expect(cite("ledger/settings.txt", [1, 1], "page_size=24")).toBe("pass");
+		expect(cite("notes/second.md", [2, 2], "second file two")).toBe("pass");
+		expect(cite("notes/second.md", [1, 1], "second file two")).toBe(
+			"inconclusive",
+		);
+	});
+
+	test("a binary snapshot record is shown as a marker, never decoded", () => {
+		const packet = build();
+		expect(
+			byPath(packet.text, "claude-final.json").get("ledger/logo.bin"),
+		).toEqual([]);
+		expect(packet.text).toContain(
+			"path ledger/logo.bin (binary, 14 bytes, not shown)",
+		);
+		expect(packet.text).not.toContain("BINARY-BYTES");
+	});
+
+	test("a quote cited at its shown number validates, and one line off is demoted", () => {
+		const packet = build();
+		const at = (artifact: string, line: number, quote: string) =>
+			decide(packet, { artifact, line, quote });
+		expect(at("claude-diff.patch", 3, "@@ -1 +1 @@")).toBe("pass");
+		expect(at("claude-diff.patch", 4, "@@ -1 +1 @@")).toBe("inconclusive");
+		expect(at("claude-stdout.txt", 2, "No newline ends")).toBe("pass");
+		expect(at("claude-stdout.txt", 1, "No newline ends")).toBe("inconclusive");
+		const kept = LOG.indexOf(KEPT) + 1;
+		expect(at("claude.jsonl", kept, "the kept user line")).toBe("pass");
+		expect(at("claude.jsonl", kept - 1, "the kept user line")).toBe(
+			"inconclusive",
+		);
+	});
+
+	test("the prompt checked in tells the scorer the numbers are a prefix", () => {
+		expect(config.prompt).toMatch(/prefix/);
+		expect(config.prompt).toMatch(/not part of/);
+	});
+
+	test("the dropped kinds are exactly these", () => {
+		expect([...DROPPED_ATTACHMENTS]).toEqual([
+			"prompt_snapshot",
+			"skill_listing",
+			"agent_listing_delta",
+			"mcp_instructions_delta",
+			"deferred_tools_delta",
+			"deferred_tools_record",
+			"total_tokens_reminder",
+			"session_context",
+			"credential_org",
+			"auto_mode",
+			"model",
+			"remote_session_change",
+		]);
+		expect([...DROPPED_ENTRIES]).toEqual([
+			"last-prompt",
+			"cost-state",
+			"atis-latch",
+		]);
+	});
+
+	test("the log copy drops every listed kind, keeps original numbers and names what it dropped", () => {
+		const packet = build();
+		for (const line of DROPPED_LINES) {
+			expect(packet.text).not.toContain(line);
+			const marker = /DROPPED-[\w-]+/.exec(line)?.[0];
+			if (marker) expect(packet.text).not.toContain(marker);
+		}
+		const kept = [
+			LOG_LINE,
+			LOG[LOG.indexOf(KEPT) - 1] ?? "",
+			KEPT,
+			LOG.at(-1) ?? "",
+		];
+		expect(shown(packet.text, "claude.jsonl")).toEqual(
+			kept.map((line) => [LOG.indexOf(line) + 1, line]),
+		);
+		expect(packet.text).toContain(
+			`dropped ${DROPPED_LINES.length} of ${LOG.length} lines`,
+		);
+		for (const kind of [
+			...DROPPED_ATTACHMENTS.map((k) => `attachment ${k}`),
+			...DROPPED_ENTRIES,
+			"assistant thinking without text",
+		])
+			expect(packet.text).toContain(`${kind}: 1`);
+		// The validator still reads the archived log, whole.
+		expect(packet.files.find((f) => f.name === "claude.jsonl")?.content).toBe(
+			`${LOG.join("\n")}\n`,
+		);
 	});
 });
 

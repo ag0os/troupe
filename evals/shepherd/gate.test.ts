@@ -27,6 +27,7 @@ import {
 } from "./gate";
 import { evaluationIdentity } from "./identity";
 import { loadRubric, policyHash, type Result, validateResult } from "./schema";
+import { validateDecisions } from "./scorer";
 import { invocation } from "./testing";
 import { verifyResults } from "./verify";
 
@@ -39,6 +40,8 @@ let scratch: string;
 let evalsDir: string;
 let launches: { trial: string; ordinal: number }[];
 let scored: { trial: string; round: number }[];
+/** Rewrites the final snapshot's JSON text as the harness wrote it. */
+let finalSnapshot: (json: string, run: string) => string;
 
 beforeEach(() => {
 	scratch = realpathSync(mkdtempSync(join(tmpdir(), "shepherd-evals-gate-")));
@@ -46,6 +49,7 @@ beforeEach(() => {
 	mkdirSync(evalsDir, { recursive: true });
 	launches = [];
 	scored = [];
+	finalSnapshot = (json) => json;
 });
 
 afterEach(() => {
@@ -234,7 +238,10 @@ function writeAttempt(
 		`${events.map((e) => JSON.stringify(e)).join("\n")}\n`,
 	);
 	writeFileSync(join(dir, "claude-baseline.json"), snapshot(before));
-	writeFileSync(join(dir, "claude-final.json"), snapshot(after));
+	writeFileSync(
+		join(dir, "claude-final.json"),
+		finalSnapshot(snapshot(after), run),
+	);
 	writeFileSync(join(dir, "claude-diff.patch"), "--- a/x\n+++ b/x\n");
 	writeFileSync(join(dir, "claude-stdout.txt"), "Done the NEXT first.\n");
 	writeFileSync(
@@ -373,6 +380,35 @@ describe("a gate invocation (sections 3 to 6)", () => {
 		const packet = readFileSync(join(dir, "packet.md"), "utf8");
 		expect(packet).not.toContain(HOME);
 		expect(a?.artifactDir).toStartWith(`artifacts/${HEX}/`);
+	});
+
+	test("the scored packet is the stored packet, whatever the snapshots hold", async () => {
+		// A binary record holding the home path, and a host path right after a
+		// Python `\\u` escape, as the harness's `ensure_ascii` JSON writes it.
+		const binary = Buffer.from(`${HOME}/secret\n\xff`, "latin1");
+		finalSnapshot = (json) =>
+			json.replace(
+				/\}\}$/,
+				`,"ledger/logo.bin":{"type":"file","encoding":"base64","content":"${binary.toString("base64")}"},"notes/tools.md":{"type":"file","encoding":"utf-8","content":"see \\u201c/opt/vendor/tool\\u201d\\n"}}}`,
+			);
+		const { result } = await runGate(options({}));
+		for (const trial of result.evaluation.trials) {
+			const a = trial.attempts[0];
+			if (!a?.scoring) continue;
+			const stored = a.artifacts.find((x) => x.path === "packet.md");
+			expect(`sha256:${stored?.sha256}`).toBe(a.scoring.packetSha256);
+			expect(a.scoring.invocations[0]?.packetSha256).toBe(
+				a.scoring.packetSha256,
+			);
+			const packet = readFileSync(
+				join(evalsDir, a.artifactDir, "packet.md"),
+				"utf8",
+			);
+			expect(packet).toContain("path ledger/logo.bin (binary, ");
+			expect(packet).not.toContain("/opt/vendor");
+			expect(packet).not.toContain(HOME);
+		}
+		expect(scored.length).toBeGreaterThan(0);
 	});
 
 	test("the four wrong outcomes block the gate", async () => {
@@ -914,6 +950,133 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 		expect(result.evaluation.trials.every((t) => t.attempts.length === 0)).toBe(
 			true,
 		);
+	});
+});
+
+describe("archived packets scored in a later invocation (R1, pending)", () => {
+	// Each invocation's final snapshots note the run's own scratch root; the
+	// packet built in the first invocation keeps that root as provenance.
+	let runs: string[];
+	beforeEach(() => {
+		runs = [];
+		finalSnapshot = (json, run) => {
+			if (!runs.includes(run)) runs.push(run);
+			return json.replace(
+				/\}\}$/,
+				`,"notes/where.md":{"type":"file","encoding":"utf-8","content":"worked in ${run}/shepherd-eval-E-x/workspace\\n"}}}`,
+			);
+		};
+	});
+
+	/** E's scorer validates a reply quoting the note, as the real scorer does. */
+	function quoting(
+		base: GateOptions,
+		quote: () => string,
+		outcomes: string[],
+	): GateOptions {
+		const fallback = base.score;
+		base.score = async (args) => {
+			if (args.trial !== "E") return fallback(args);
+			scored.push({ trial: args.trial, round: args.round });
+			const reply = JSON.stringify({
+				decisions: args.requested.map((id) => ({
+					id,
+					outcome: "pass",
+					rationale: "quoted the note",
+					evidence: [
+						{
+							artifact: "claude-final.json",
+							path: "notes/where.md",
+							lines: [1, 1],
+							quote: quote(),
+						},
+					],
+				})),
+			});
+			const checked = validateDecisions(reply, args.requested, args.packet);
+			if ("failure" in checked) throw new Error(checked.failure);
+			outcomes.push(...checked.decisions.map((d) => d.outcome));
+			return {
+				invocations: [
+					invocation({ round: args.round, packetSha256: args.packet.sha256 }),
+				],
+				outputs: [reply],
+				decisions: checked.decisions,
+			};
+		};
+		return base;
+	}
+
+	/** The outcomes of an attempt's scored Musts. */
+	const judged = (
+		attempt:
+			| Result["evaluation"]["trials"][number]["attempts"][number]
+			| undefined,
+	) =>
+		new Set(
+			attempt?.musts
+				.filter((m) => attempt.scoring?.requested.includes(m.id))
+				.map((m) => m.outcome),
+		);
+	const exact = () => `worked in ${runs[0]}/shepherd-eval-E-x/workspace`;
+	const wrong = () => `worked in ${runs[0]}/shepherd-eval-D-x/workspace`;
+
+	for (const [name, quote, outcome] of [
+		["an exact quote of the earlier scratch root validates", exact, "pass"],
+		["a wrong quote is still demoted", wrong, "inconclusive"],
+	] as const) {
+		test(`on an R1 rescore, ${name}`, async () => {
+			await runGate(options({}, { E: ["infra"] }));
+			const outcomes: string[] = [];
+			const later = await runGate(quoting(options({}), quote, outcomes));
+			const e = trial(later.result, "E")?.attempts[0];
+			expect(e?.scoring?.invocations.map((i) => i.round)).toEqual([1, 1, 2]);
+			expect(judged(e)).toEqual(new Set([outcome]));
+		});
+
+		test(`on a resolved pending attempt, ${name}`, async () => {
+			const failing = options(
+				{},
+				{},
+				{
+					checks: (t, dir) => {
+						if (t === "E") throw new Error("checker printed garbage");
+						return pythonChecks(t, dir);
+					},
+				},
+			);
+			await expect(runGate(failing)).rejects.toThrow(/garbage/);
+			expect(trial(read(), "E")?.attempts.map((a) => a.kind)).toEqual([
+				"pending",
+			]);
+			launches = [];
+			const outcomes: string[] = [];
+			const later = await runGate(quoting(options({}), quote, outcomes));
+			const e = trial(later.result, "E")?.attempts[0];
+			expect(e?.ordinal).toBe(1);
+			expect(launches).not.toContainEqual({ trial: "E", ordinal: 1 });
+			expect(judged(e)).toEqual(new Set([outcome]));
+		});
+	}
+
+	test("a rescore refuses an archived packet that changed, and scores nothing from it", async () => {
+		await runGate(options({}, { E: ["infra"] }));
+		const before = trial(read(), "E")?.attempts[0];
+		expect(before?.kind).toBe("unscored");
+		const path = join(evalsDir, before?.artifactDir ?? "?", "packet.md");
+		const text = readFileSync(path, "utf8");
+		writeFileSync(
+			path,
+			text.replace("Decide these Musts", "Decide these musts"),
+		);
+		scored = [];
+		await expect(runGate(options({}, { E: ["pass"] }))).rejects.toThrow(
+			/archived packet of E attempt 1 changed/,
+		);
+		expect(scored.filter((s) => s.trial === "E")).toEqual([]);
+		const after = trial(read(), "E")?.attempts[0];
+		expect(after?.kind).toBe("unscored");
+		expect(after?.scoring?.invocations).toHaveLength(2);
 	});
 });
 
