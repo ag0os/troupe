@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
-	lstatSync,
+	fstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
+	type Stats,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -1102,37 +1103,67 @@ parentPort.close();
 }
 
 describe("inode reuse", () => {
+	const real = { ...lockFs };
 	afterEach(() => {
-		lockFs.lstat = (path) => lstatSync(path);
+		Object.assign(lockFs, real);
 	});
 
-	// ext4 and overlay hand a released lock's inode number to the next writer's directory at once.
-	function reuseAfterFirstProbe(state: string, release: () => void = () => {}) {
-		let calls = 0;
-		let first = lstatSync(state);
-		lockFs.lstat = (path) => {
-			calls += 1;
-			if (calls === 1) {
-				first = lstatSync(path);
+	function held(stat: Stats): boolean {
+		for (const name of readdirSync("/dev/fd")) {
+			try {
+				const open = fstatSync(Number(name));
+				if (open.dev === stat.dev && open.ino === stat.ino) return true;
+			} catch {
+				// The descriptor readdir used is already closed.
+			}
+		}
+		return false;
+	}
+
+	// ext4 and overlay give a freed inode number to the next directory made,
+	// unless a descriptor still holds it. `release` runs once the prober has
+	// identified 102's lock; `reacquire` runs at its second probe, which then
+	// sees 102's inode number again if nothing holds it. The first lstat stands
+	// in for the descriptor when a prober identifies the lock by path alone.
+	function reuse(release: () => void, reacquire: () => void) {
+		let original: Stats | undefined;
+		let pending: (() => void) | undefined = reacquire;
+		lockFs.openDirectory = (path) => {
+			const fd = real.openDirectory(path);
+			if (!original) {
+				original = fstatSync(fd);
 				release();
-				return first;
 			}
-			if (calls === 2) {
-				owner(state, 103);
-				return first;
+			return fd;
+		};
+		lockFs.lstat = (path) => {
+			if (!original) {
+				original = real.lstat(path);
+				release();
+				return original;
 			}
-			return lstatSync(path);
+			if (pending) {
+				pending();
+				pending = undefined;
+				if (!held(original)) return original;
+			}
+			return real.lstat(path);
 		};
 	}
 
 	function releaseHolder(state: string) {
-		renameSync(join(state, ".state.lock"), join(state, "released"));
+		const gone = join(state, "released");
+		renameSync(join(state, ".state.lock"), gone);
+		rmSync(gone, { recursive: true });
 	}
 
 	test("status retries a live lock that reused the inode of a lock released before the owner probe", () => {
 		const { state, env } = fixture();
 		owner(state, 102);
-		reuseAfterFirstProbe(state, () => releaseHolder(state));
+		reuse(
+			() => releaseHolder(state),
+			() => owner(state, 103),
+		);
 		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
 	});
 
@@ -1143,17 +1174,51 @@ describe("inode reuse", () => {
 			if (pid === 102) releaseHolder(state);
 			return pid === 103;
 		};
-		reuseAfterFirstProbe(state);
+		reuse(
+			() => {},
+			() => owner(state, 103),
+		);
 		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+	});
+
+	test("status is not stale when a writer took and released a reused inode while the owner was missing", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => {
+				owner(state, 103);
+				releaseHolder(state);
+			},
+		);
+		expect(lockStatus(state, env)).toEqual({ status: "free" });
 	});
 
 	test("a contending writer waits on a live lock that reused a released inode instead of failing stale", async () => {
 		const { state, env } = fixture();
 		owner(state, 102);
-		reuseAfterFirstProbe(state, () => releaseHolder(state));
+		reuse(
+			() => releaseHolder(state),
+			() => owner(state, 103),
+		);
 		const error = await rejection(withStateLock(state, env, () => {}, options));
 		expect(error.kind).toBe("alive");
 		expect(error.pid).toBe(103);
+		noTemporary(state);
+	});
+
+	test("a contending writer acquires after a reused inode was taken and released while the owner was missing", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => {
+				owner(state, 103);
+				releaseHolder(state);
+			},
+		);
+		expect(await withStateLock(state, env, () => 7, options)).toBe(7);
+		expect(lockStatus(state, env)).toEqual({ status: "free" });
 		noTemporary(state);
 	});
 });

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+	closeSync,
+	constants,
+	fstatSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	renameSync,
 	rmdirSync,
@@ -60,8 +64,16 @@ type UnlockResult = {
 
 const activeTemporaries = new Set<string>();
 
-/** Test seam: tests replace `lstat` to simulate the inode reuse macOS never shows. */
-export const lockFs: { lstat: (path: string) => Stats } = {
+/** Test seam: tests wrap these to simulate the inode reuse macOS never shows. */
+export const lockFs: {
+	openDirectory: (path: string) => number;
+	lstat: (path: string) => Stats;
+} = {
+	openDirectory: (path) =>
+		openSync(
+			path,
+			constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+		),
 	lstat: (path) => lstatSync(path),
 };
 
@@ -69,22 +81,15 @@ function errorCode(error: unknown): string | undefined {
 	return (error as NodeJS.ErrnoException)?.code;
 }
 
-function ownerText(path: string): string | undefined {
+function ownerPid(path: string): number | undefined {
+	let text: string;
 	try {
-		return readFileSync(join(path, "owner"), "utf8");
+		text = readFileSync(join(path, "owner"), "utf8");
 	} catch (error) {
 		if (errorCode(error) === "ENOENT" || errorCode(error) === "EISDIR")
 			return undefined;
 		throw error;
 	}
-}
-
-function ownerPid(path: string): number | undefined {
-	return pidOf(ownerText(path));
-}
-
-function pidOf(text: string | undefined): number | undefined {
-	if (text === undefined) return undefined;
 	try {
 		const owner = JSON.parse(text);
 		if (
@@ -106,31 +111,36 @@ function statusAt(
 	path: string,
 	toolEnv: ToolEnv,
 ): LockStatus | { status: "changed" } {
-	let before: Stats;
+	// Holding the directory open keeps its inode number from going to the next
+	// writer's directory, as ext4 and overlay otherwise do at once, so an equal
+	// lstat afterwards proves the owner was read from this same directory.
+	let fd: number;
 	try {
-		before = lockFs.lstat(path);
+		fd = lockFs.openDirectory(path);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return { status: "free" };
+		if (errorCode(error) === "ENOTDIR" || errorCode(error) === "ELOOP")
+			return { status: "stale" };
 		throw error;
 	}
-	if (!before.isDirectory()) return { status: "stale" };
-	const text = ownerText(path);
-	const pid = pidOf(text);
-	const alive = pid !== undefined && toolEnv.pidAlive(pid);
 	try {
-		const after = lockFs.lstat(path);
-		if (before.dev !== after.dev || before.ino !== after.ino)
-			return { status: "changed" };
-	} catch (error) {
-		if (errorCode(error) === "ENOENT") return { status: "free" };
-		throw error;
+		const before = fstatSync(fd);
+		const pid = ownerPid(path);
+		const alive = pid !== undefined && toolEnv.pidAlive(pid);
+		try {
+			const after = lockFs.lstat(path);
+			if (before.dev !== after.dev || before.ino !== after.ino)
+				return { status: "changed" };
+		} catch (error) {
+			if (errorCode(error) === "ENOENT") return { status: "free" };
+			throw error;
+		}
+		return pid !== undefined && alive
+			? { status: "alive", pid }
+			: { status: "stale", pid };
+	} finally {
+		closeSync(fd);
 	}
-	// A released lock's inode number can go straight to the next writer's
-	// directory, so an equal inode alone does not prove the owner is unchanged.
-	if (ownerText(path) !== text) return { status: "changed" };
-	return pid !== undefined && alive
-		? { status: "alive", pid }
-		: { status: "stale", pid };
 }
 
 function removeLock(path: string): void {
