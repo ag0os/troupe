@@ -1004,7 +1004,7 @@ for (const which of ["state", "unlock"] as const) {
 		writeFileSync(
 			script,
 			`
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parentPort, threadId, workerData } from "node:worker_threads";
 import { LockError, unlockState, withStateLock } from ${JSON.stringify(new URL("./lock.ts", import.meta.url).href)};
@@ -1020,7 +1020,9 @@ const env = {
 		catch (error) { alive = error.code === "EPERM"; }
 		if (!announced) {
 			announced = true;
-			writeFileSync(ready, JSON.stringify({ temporary, threadId, pid: process.pid }));
+			// Rename into place so the parent never reads a partly written file.
+			writeFileSync(ready + ".partial", JSON.stringify({ temporary, threadId, pid: process.pid }));
+			renameSync(ready + ".partial", ready);
 		}
 		return alive;
 	},
