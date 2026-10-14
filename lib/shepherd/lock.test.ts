@@ -1241,3 +1241,50 @@ describe("inode reuse", () => {
 		noTemporary(state);
 	});
 });
+
+describe("non-directory lock paths", () => {
+	const real = { ...lockFs };
+	afterEach(() => {
+		Object.assign(lockFs, real);
+	});
+
+	// lockStatus retries "changed" synchronously, so a test timeout cannot stop
+	// a spin; fail after a bounded number of probes instead.
+	function boundProbes() {
+		let probes = 0;
+		lockFs.lstat = (path) => {
+			probes += 1;
+			if (probes > 20) throw new Error("lockStatus kept probing");
+			return real.lstat(path);
+		};
+	}
+
+	for (const [kind, make] of [
+		[
+			"a regular file",
+			(state: string) => writeFileSync(join(state, ".state.lock"), "file"),
+		],
+		[
+			"a symlink to a directory",
+			(state: string) => {
+				mkdirSync(join(state, "elsewhere"));
+				writeFileSync(
+					join(state, "elsewhere/owner"),
+					JSON.stringify({ pid: 102, started }),
+				);
+				symlinkSync("elsewhere", join(state, ".state.lock"));
+			},
+		],
+		[
+			"a dangling symlink",
+			(state: string) => symlinkSync("missing", join(state, ".state.lock")),
+		],
+	] as const) {
+		test(`${kind} at the lock path is stale`, () => {
+			const { state, env } = fixture();
+			make(state);
+			boundProbes();
+			expect(lockStatus(state, env)).toEqual({ status: "stale" });
+		});
+	}
+});
