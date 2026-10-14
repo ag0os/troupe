@@ -193,7 +193,8 @@ async function acquire(
 				if (remaining <= 0) {
 					if (status.status === "alive")
 						throw new LockError("alive", status.pid, state);
-					throw error;
+					// Another call in this thread still holds the temporary.
+					throw new LockError("alive", pid, state);
 				}
 				await new Promise<void>((done) =>
 					setTimeout(done, Math.min(pollMs, remaining)),

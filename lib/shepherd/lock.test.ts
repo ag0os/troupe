@@ -264,6 +264,23 @@ describe("workspace locks", () => {
 		}
 	});
 
+	test("a same-process waiter that times out after the lock frees reports a lock error", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		const holder = withStateLock(state, env, () => 7, {
+			...options,
+			timeoutMs: 1000,
+			pollMs: 200,
+		});
+		const waiter = rejection(withStateLock(state, env, () => 8, options));
+		rmSync(join(state, ".state.lock"), { recursive: true });
+		const error = await waiter;
+		expect(error.kind).toBe("alive");
+		expect(error.pid).toBe(101);
+		expect(await holder).toBe(7);
+		noTemporary(state);
+	});
+
 	test("release leaves a replacement owner's lock intact", async () => {
 		const { state, env } = fixture();
 		await withStateLock(
