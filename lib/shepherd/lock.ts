@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import {
+	closeSync,
+	constants,
+	fstatSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
+	type Stats,
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -59,6 +64,19 @@ type UnlockResult = {
 
 const activeTemporaries = new Set<string>();
 
+/** Test seam: tests wrap these to simulate the inode reuse macOS never shows. */
+export const lockFs: {
+	openDirectory: (path: string) => number;
+	lstat: (path: string) => Stats;
+} = {
+	openDirectory: (path) =>
+		openSync(
+			path,
+			constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+		),
+	lstat: (path) => lstatSync(path),
+};
+
 function errorCode(error: unknown): string | undefined {
 	return (error as NodeJS.ErrnoException)?.code;
 }
@@ -93,27 +111,36 @@ function statusAt(
 	path: string,
 	toolEnv: ToolEnv,
 ): LockStatus | { status: "changed" } {
-	let before: ReturnType<typeof lstatSync>;
+	// Holding the directory open keeps its inode number from going to the next
+	// writer's directory, as ext4 and overlay otherwise do at once, so an equal
+	// lstat afterwards proves the owner was read from this same directory.
+	let fd: number;
 	try {
-		before = lstatSync(path);
+		fd = lockFs.openDirectory(path);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return { status: "free" };
+		if (errorCode(error) === "ENOTDIR" || errorCode(error) === "ELOOP")
+			return { status: "stale" };
 		throw error;
 	}
-	if (!before.isDirectory()) return { status: "stale" };
-	const pid = ownerPid(path);
-	const alive = pid !== undefined && toolEnv.pidAlive(pid);
 	try {
-		const after = lstatSync(path);
-		if (before.dev !== after.dev || before.ino !== after.ino)
-			return { status: "changed" };
-	} catch (error) {
-		if (errorCode(error) === "ENOENT") return { status: "free" };
-		throw error;
+		const before = fstatSync(fd);
+		const pid = ownerPid(path);
+		const alive = pid !== undefined && toolEnv.pidAlive(pid);
+		try {
+			const after = lockFs.lstat(path);
+			if (before.dev !== after.dev || before.ino !== after.ino)
+				return { status: "changed" };
+		} catch (error) {
+			if (errorCode(error) === "ENOENT") return { status: "free" };
+			throw error;
+		}
+		return pid !== undefined && alive
+			? { status: "alive", pid }
+			: { status: "stale", pid };
+	} finally {
+		closeSync(fd);
 	}
-	return pid !== undefined && alive
-		? { status: "alive", pid }
-		: { status: "stale", pid };
 }
 
 function removeLock(path: string): void {
@@ -166,7 +193,8 @@ async function acquire(
 				if (remaining <= 0) {
 					if (status.status === "alive")
 						throw new LockError("alive", status.pid, state);
-					throw error;
+					// Another call in this thread still holds the temporary.
+					throw new LockError("alive", pid, state);
 				}
 				await new Promise<void>((done) =>
 					setTimeout(done, Math.min(pollMs, remaining)),

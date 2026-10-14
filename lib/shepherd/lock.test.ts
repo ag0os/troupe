@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
+	fstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
+	type Stats,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -15,6 +17,7 @@ import { Worker } from "node:worker_threads";
 import {
 	LockError,
 	LockReleaseError,
+	lockFs,
 	lockStatus,
 	unlockState,
 	withStateLock,
@@ -259,6 +262,23 @@ describe("workspace locks", () => {
 			release.resolve();
 			await holder;
 		}
+	});
+
+	test("a same-process waiter that times out after the lock frees reports a lock error", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		const holder = withStateLock(state, env, () => 7, {
+			...options,
+			timeoutMs: 1000,
+			pollMs: 200,
+		});
+		const waiter = rejection(withStateLock(state, env, () => 8, options));
+		rmSync(join(state, ".state.lock"), { recursive: true });
+		const error = await waiter;
+		expect(error.kind).toBe("alive");
+		expect(error.pid).toBe(101);
+		expect(await holder).toBe(7);
+		noTemporary(state);
 	});
 
 	test("release leaves a replacement owner's lock intact", async () => {
@@ -984,7 +1004,7 @@ for (const which of ["state", "unlock"] as const) {
 		writeFileSync(
 			script,
 			`
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parentPort, threadId, workerData } from "node:worker_threads";
 import { LockError, unlockState, withStateLock } from ${JSON.stringify(new URL("./lock.ts", import.meta.url).href)};
@@ -1000,7 +1020,9 @@ const env = {
 		catch (error) { alive = error.code === "EPERM"; }
 		if (!announced) {
 			announced = true;
-			writeFileSync(ready, JSON.stringify({ temporary, threadId, pid: process.pid }));
+			// Rename into place so the parent never reads a partly written file.
+			writeFileSync(ready + ".partial", JSON.stringify({ temporary, threadId, pid: process.pid }));
+			renameSync(ready + ".partial", ready);
 		}
 		return alive;
 	},
@@ -1098,3 +1120,171 @@ parentPort.close();
 		}
 	}, 5000);
 }
+
+describe("inode reuse", () => {
+	const real = { ...lockFs };
+	afterEach(() => {
+		Object.assign(lockFs, real);
+	});
+
+	function held(stat: Stats): boolean {
+		for (const name of readdirSync("/dev/fd")) {
+			try {
+				const open = fstatSync(Number(name));
+				if (open.dev === stat.dev && open.ino === stat.ino) return true;
+			} catch {
+				// The descriptor readdir used is already closed.
+			}
+		}
+		return false;
+	}
+
+	// ext4 and overlay give a freed inode number to the next directory made,
+	// unless a descriptor still holds it. `release` runs once the prober has
+	// identified 102's lock; `reacquire` runs at its second probe, which then
+	// sees 102's inode number again if nothing holds it. The first lstat stands
+	// in for the descriptor when a prober identifies the lock by path alone.
+	function reuse(release: () => void, reacquire: () => void) {
+		let original: Stats | undefined;
+		let pending: (() => void) | undefined = reacquire;
+		lockFs.openDirectory = (path) => {
+			const fd = real.openDirectory(path);
+			if (!original) {
+				original = fstatSync(fd);
+				release();
+			}
+			return fd;
+		};
+		lockFs.lstat = (path) => {
+			if (!original) {
+				original = real.lstat(path);
+				release();
+				return original;
+			}
+			if (pending) {
+				pending();
+				pending = undefined;
+				if (!held(original)) return original;
+			}
+			return real.lstat(path);
+		};
+	}
+
+	function releaseHolder(state: string) {
+		const gone = join(state, "released");
+		renameSync(join(state, ".state.lock"), gone);
+		rmSync(gone, { recursive: true });
+	}
+
+	test("status retries a live lock that reused the inode of a lock released before the owner probe", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => owner(state, 103),
+		);
+		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+	});
+
+	test("status retries a live lock that reused the inode of a holder that released and exited", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		env.pidAlive = (pid) => {
+			if (pid === 102) releaseHolder(state);
+			return pid === 103;
+		};
+		reuse(
+			() => {},
+			() => owner(state, 103),
+		);
+		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+	});
+
+	test("status is not stale when a writer took and released a reused inode while the owner was missing", () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => {
+				owner(state, 103);
+				releaseHolder(state);
+			},
+		);
+		expect(lockStatus(state, env)).toEqual({ status: "free" });
+	});
+
+	test("a contending writer waits on a live lock that reused a released inode instead of failing stale", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => owner(state, 103),
+		);
+		const error = await rejection(withStateLock(state, env, () => {}, options));
+		expect(error.kind).toBe("alive");
+		expect(error.pid).toBe(103);
+		noTemporary(state);
+	});
+
+	test("a contending writer acquires after a reused inode was taken and released while the owner was missing", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		reuse(
+			() => releaseHolder(state),
+			() => {
+				owner(state, 103);
+				releaseHolder(state);
+			},
+		);
+		expect(await withStateLock(state, env, () => 7, options)).toBe(7);
+		expect(lockStatus(state, env)).toEqual({ status: "free" });
+		noTemporary(state);
+	});
+});
+
+describe("non-directory lock paths", () => {
+	const real = { ...lockFs };
+	afterEach(() => {
+		Object.assign(lockFs, real);
+	});
+
+	// lockStatus retries "changed" synchronously, so a test timeout cannot stop
+	// a spin; fail after a bounded number of probes instead.
+	function boundProbes() {
+		let probes = 0;
+		lockFs.lstat = (path) => {
+			probes += 1;
+			if (probes > 20) throw new Error("lockStatus kept probing");
+			return real.lstat(path);
+		};
+	}
+
+	for (const [kind, make] of [
+		[
+			"a regular file",
+			(state: string) => writeFileSync(join(state, ".state.lock"), "file"),
+		],
+		[
+			"a symlink to a directory",
+			(state: string) => {
+				mkdirSync(join(state, "elsewhere"));
+				writeFileSync(
+					join(state, "elsewhere/owner"),
+					JSON.stringify({ pid: 102, started }),
+				);
+				symlinkSync("elsewhere", join(state, ".state.lock"));
+			},
+		],
+		[
+			"a dangling symlink",
+			(state: string) => symlinkSync("missing", join(state, ".state.lock")),
+		],
+	] as const) {
+		test(`${kind} at the lock path is stale`, () => {
+			const { state, env } = fixture();
+			make(state);
+			boundProbes();
+			expect(lockStatus(state, env)).toEqual({ status: "stale" });
+		});
+	}
+});
