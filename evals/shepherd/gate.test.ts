@@ -42,6 +42,10 @@ let launches: { trial: string; ordinal: number }[];
 let scored: { trial: string; round: number }[];
 /** Rewrites the final snapshot's JSON text as the harness wrote it. */
 let finalSnapshot: (json: string, run: string) => string;
+/** The directory each invocation's scratch root is made in. */
+let runParent: string;
+/** Extra fields for each harness run manifest. */
+let manifestExtra: Record<string, unknown>;
 
 beforeEach(() => {
 	scratch = realpathSync(mkdtempSync(join(tmpdir(), "shepherd-evals-gate-")));
@@ -50,6 +54,8 @@ beforeEach(() => {
 	launches = [];
 	scored = [];
 	finalSnapshot = (json) => json;
+	runParent = scratch;
+	manifestExtra = {};
 });
 
 afterEach(() => {
@@ -227,6 +233,7 @@ function writeAttempt(
 		validity: { valid, void_reasons: voidReasons },
 		started_at: "2026-10-13T15:11:10.000Z",
 		ended_at: "2026-10-13T15:12:10.000Z",
+		...manifestExtra,
 	};
 	writeFileSync(
 		join(dir, "claude-run.json"),
@@ -255,7 +262,7 @@ function options(
 	verdicts: Record<string, Verdict[]> = {},
 	changes: Partial<GateOptions> = {},
 ): GateOptions {
-	const run = join(scratch, `run-${Math.random().toString(16).slice(2, 8)}`);
+	const run = join(runParent, `run-${Math.random().toString(16).slice(2, 8)}`);
 	const artifactRoot = join(run, "artifacts");
 	mkdirSync(artifactRoot, { recursive: true });
 	const runId = `20261013T15000${Object.keys(plan).length}Z-${run.slice(-6)}`;
@@ -768,130 +775,138 @@ describe("durability and bounds (review findings 1 and 9)", () => {
 });
 
 describe("pending attempts (fix round 1b, ruling D)", () => {
-	test("a kill during a wave leaves durable pending attempts that the next invocation resolves", async () => {
-		const home = join(scratch, "home");
-		const killed = options({}, {}, { home });
-		const run = killed.scratchRoot;
-		let seenMidWave: Result | undefined;
-		killed.runWave = async (jobs) => {
-			// The pending records are on disk before any subject runs.
-			seenMidWave = read();
-			for (const { trial, ordinal } of jobs) {
-				if (trial !== "G-neg" && trial !== "E") continue;
-				// The sessions started: the harness wrote its manifest, Claude its native log.
-				// G-neg's log proves the scratch binary (a valid session); E's does not (V3).
-				const dir = join(killed.artifactRoot, trial, `attempt-${ordinal}`);
-				mkdirSync(dir, { recursive: true });
-				const workspace = `${run}/shepherd-eval-${trial}-x/workspace`;
-				const session = `00000000-0000-4000-8000-0000000000${trial === "E" ? "bb" : "aa"}`;
-				writeFileSync(
-					join(dir, "claude-run.json"),
-					JSON.stringify({
-						trial,
-						workspace,
-						argv: [`${run}/bin/shepherd`, "--session-id", session],
-						HOME: home,
-						cli_version: "2.1.296",
-						validity: { valid: false, void_reasons: [] },
-						provenance: [{ expected_binary: `${run}/bin/shepherd` }],
-						started_at: "2026-10-13T15:11:10.000Z",
-						ended_at: null,
-					}),
-				);
-				const log = join(
-					home,
-					".claude/projects",
-					workspace.replace(/[^A-Za-z0-9]/g, "-"),
-					`${session}.jsonl`,
-				);
-				mkdirSync(join(log, ".."), { recursive: true });
-				writeFileSync(
-					log,
-					[
-						{
-							type: "assistant",
-							cwd: workspace,
-							message: {
-								model: "claude-opus-5-5",
-								role: "assistant",
-								content: [
-									{
-										type: "tool_use",
-										id: "toolu_s",
-										name: "Bash",
-										input: { command: "shepherd tool start" },
-									},
-								],
-							},
-						},
-						{
-							type: "user",
-							cwd: workspace,
-							message: {
-								role: "user",
-								content: [
-									{
-										type: "tool_result",
-										tool_use_id: "toolu_s",
-										content:
-											trial === "E"
-												? "started"
-												: `binary: ${run}/bin/shepherd\n${home}/secret`,
-									},
-								],
-							},
-						},
-						{ type: "cost-state", totalCostUSD: 0.3, modelUsage: {} },
-					]
-						.map((e) => JSON.stringify(e))
-						.join("\n")
-						.concat("\n"),
-				);
+	for (const slugged of [false, true])
+		test(`a kill during a wave leaves durable pending attempts that the next invocation resolves${slugged ? " (scratch under the home slug)" : ""}`, async () => {
+			const home = join(scratch, "home");
+			if (slugged) {
+				runParent = join(scratch, `${home.replaceAll("/", "-")}-Projects-x`);
+				mkdirSync(runParent, { recursive: true });
 			}
-			throw new Error("killed during the wave");
-		};
-		await expect(runGate(killed)).rejects.toThrow(/killed/);
-		expect(
-			seenMidWave?.evaluation.trials.every(
-				(t) => t.attempts.map((a) => a.kind).join() === "pending",
-			),
-		).toBe(true);
-		expect(trial(read(), "G-neg")?.attempts[0]?.kind).toBe("pending");
-		expect(validateResult(read())).toEqual([]);
+			const killed = options({}, {}, { home });
+			const run = killed.scratchRoot;
+			let seenMidWave: Result | undefined;
+			killed.runWave = async (jobs) => {
+				// The pending records are on disk before any subject runs.
+				seenMidWave = read();
+				for (const { trial, ordinal } of jobs) {
+					if (trial !== "G-neg" && trial !== "E") continue;
+					// The sessions started: the harness wrote its manifest, Claude its native log.
+					// G-neg's log proves the scratch binary (a valid session); E's does not (V3).
+					const dir = join(killed.artifactRoot, trial, `attempt-${ordinal}`);
+					mkdirSync(dir, { recursive: true });
+					const workspace = `${run}/shepherd-eval-${trial}-x/workspace`;
+					const session = `00000000-0000-4000-8000-0000000000${trial === "E" ? "bb" : "aa"}`;
+					writeFileSync(
+						join(dir, "claude-run.json"),
+						JSON.stringify({
+							trial,
+							workspace,
+							argv: [`${run}/bin/shepherd`, "--session-id", session],
+							HOME: home,
+							cli_version: "2.1.296",
+							validity: { valid: false, void_reasons: [] },
+							provenance: [{ expected_binary: `${run}/bin/shepherd` }],
+							started_at: "2026-10-13T15:11:10.000Z",
+							ended_at: null,
+							note: "first.person@example.org then second.person@example.org",
+						}),
+					);
+					const log = join(
+						home,
+						".claude/projects",
+						workspace.replace(/[^A-Za-z0-9]/g, "-"),
+						`${session}.jsonl`,
+					);
+					mkdirSync(join(log, ".."), { recursive: true });
+					writeFileSync(
+						log,
+						[
+							{
+								type: "assistant",
+								cwd: workspace,
+								message: {
+									model: "claude-opus-5-5",
+									role: "assistant",
+									content: [
+										{
+											type: "tool_use",
+											id: "toolu_s",
+											name: "Bash",
+											input: { command: "shepherd tool start" },
+										},
+									],
+								},
+							},
+							{
+								type: "user",
+								cwd: workspace,
+								message: {
+									role: "user",
+									content: [
+										{
+											type: "tool_result",
+											tool_use_id: "toolu_s",
+											content:
+												trial === "E"
+													? "started"
+													: `binary: ${run}/bin/shepherd\n${home}/secret cc second.person@example.org`,
+										},
+									],
+								},
+							},
+							{ type: "cost-state", totalCostUSD: 0.3, modelUsage: {} },
+						]
+							.map((e) => JSON.stringify(e))
+							.join("\n")
+							.concat("\n"),
+					);
+				}
+				throw new Error("killed during the wave");
+			};
+			await expect(runGate(killed)).rejects.toThrow(/killed/);
+			expect(
+				seenMidWave?.evaluation.trials.every(
+					(t) => t.attempts.map((a) => a.kind).join() === "pending",
+				),
+			).toBe(true);
+			expect(trial(read(), "G-neg")?.attempts[0]?.kind).toBe("pending");
+			expect(validateResult(read())).toEqual([]);
 
-		launches = [];
-		const later = await runGate(options({}, {}, { home }));
-		const gneg = trial(later.result, "G-neg");
-		expect(gneg?.attempts[0]).toMatchObject({
-			kind: "behavioral",
-			behavioralOrdinal: 1,
-			interrupted: 0,
+			launches = [];
+			const later = await runGate(options({}, {}, { home }));
+			const gneg = trial(later.result, "G-neg");
+			expect(gneg?.attempts[0]).toMatchObject({
+				kind: "behavioral",
+				behavioralOrdinal: 1,
+				interrupted: 0,
+			});
+			expect(gneg?.attempts[0]?.musts.map((m) => m.outcome)).toEqual([
+				"inconclusive",
+				"inconclusive",
+				"inconclusive",
+			]);
+			expect(gneg?.attempts[0]?.cost.subject.usd).toBe(0.3);
+			const log = readFileSync(
+				join(evalsDir, gneg?.attempts[0]?.artifactDir ?? "?", "claude.jsonl"),
+				"utf8",
+			);
+			expect(log).not.toContain(home);
+			// The native log is written apart from the export, under one numbering.
+			expect(log).toContain(" cc [redacted-email-2]");
+			const e = trial(later.result, "E")?.attempts[0];
+			expect(e?.kind).toBe("void");
+			expect(e?.voidReasons.join()).toMatch(/no tool-result binary evidence/);
+			const d = trial(later.result, "D");
+			expect(d?.attempts[0]).toMatchObject({ kind: "void" });
+			expect(d?.attempts[0]?.voidReasons.join()).toMatch(
+				/before a valid session/,
+			);
+			// Both trials go on under their remaining allowances.
+			expect(launches).toContainEqual({ trial: "G-neg", ordinal: 2 });
+			expect(launches).toContainEqual({ trial: "D", ordinal: 2 });
+			expect(gneg?.outcome).toBe("flaky-pass");
+			expect(validateResult(later.result)).toEqual([]);
 		});
-		expect(gneg?.attempts[0]?.musts.map((m) => m.outcome)).toEqual([
-			"inconclusive",
-			"inconclusive",
-			"inconclusive",
-		]);
-		expect(gneg?.attempts[0]?.cost.subject.usd).toBe(0.3);
-		const log = readFileSync(
-			join(evalsDir, gneg?.attempts[0]?.artifactDir ?? "?", "claude.jsonl"),
-			"utf8",
-		);
-		expect(log).not.toContain(home);
-		const e = trial(later.result, "E")?.attempts[0];
-		expect(e?.kind).toBe("void");
-		expect(e?.voidReasons.join()).toMatch(/no tool-result binary evidence/);
-		const d = trial(later.result, "D");
-		expect(d?.attempts[0]).toMatchObject({ kind: "void" });
-		expect(d?.attempts[0]?.voidReasons.join()).toMatch(
-			/before a valid session/,
-		);
-		// Both trials go on under their remaining allowances.
-		expect(launches).toContainEqual({ trial: "G-neg", ordinal: 2 });
-		expect(launches).toContainEqual({ trial: "D", ordinal: 2 });
-		expect(gneg?.outcome).toBe("flaky-pass");
-		expect(validateResult(later.result)).toEqual([]);
-	});
 
 	test("a failure while recording a finished attempt leaves it pending (V1), and its leftover export never wedges later invocations (V2)", async () => {
 		const failing = options(
@@ -1077,6 +1092,82 @@ describe("archived packets scored in a later invocation (R1, pending)", () => {
 		const after = trial(read(), "E")?.attempts[0];
 		expect(after?.kind).toBe("unscored");
 		expect(after?.scoring?.invocations).toHaveLength(2);
+	});
+});
+
+describe("a scratch root under a home-derived directory (F2 fix round 1)", () => {
+	// A Claude Code scratchpad is named after the home path, slashes as dashes.
+	beforeEach(() => {
+		runParent = join(
+			scratch,
+			`claude-501${HOME.replaceAll("/", "-")}-Projects-x`,
+		);
+		mkdirSync(runParent, { recursive: true });
+	});
+	const account = HOME.split("/").at(-1) ?? "?";
+
+	test("the account name is redacted from evidence and the result, and the gate still passes", async () => {
+		const { result } = await runGate(options({}));
+		expect(result.outcome).toBe("pass");
+		expect(validateResult(result)).toEqual([]);
+		const published = readFileSync(
+			join(evalsDir, `results/${HEX}.json`),
+			"utf8",
+		);
+		expect(published).not.toContain(account);
+		for (const t of result.evaluation.trials) {
+			const dir = join(evalsDir, t.attempts[0]?.artifactDir ?? "?");
+			for (const name of ["claude.jsonl", "claude-run.json", "packet.md"])
+				if (existsSync(join(dir, name)))
+					expect(readFileSync(join(dir, name), "utf8")).not.toContain(account);
+		}
+	});
+
+	test("a pending attempt there is still found and recorded as finished", async () => {
+		const failing = options(
+			{},
+			{},
+			{
+				checks: (t, dir) => {
+					if (t === "G-neg") throw new Error("checker printed garbage");
+					return pythonChecks(t, dir);
+				},
+			},
+		);
+		await expect(runGate(failing)).rejects.toThrow(/garbage/);
+		expect(
+			readFileSync(join(evalsDir, `results/${HEX}.json`), "utf8"),
+		).not.toContain(account);
+		launches = [];
+		const second = await runGate(options({}));
+		const gneg = trial(second.result, "G-neg");
+		expect(gneg?.attempts.map((a) => a.kind)).toEqual(["behavioral"]);
+		expect(gneg?.outcome).toBe("pass");
+		expect(launches.filter((l) => l.trial === "G-neg")).toEqual([]);
+	});
+});
+
+describe("one email numbering per attempt (F2 fix round 2)", () => {
+	const FIRST = "first.person@example.org";
+	const SECOND = "second.person@example.org";
+	const number = (text: string, address: string) =>
+		text.includes(address) ? "raw" : /\[redacted-email-(\d+)\]/.exec(text)?.[1];
+
+	test("a scorer output written later numbers an address as the attempt's export did", async () => {
+		manifestExtra = { note: `${FIRST} then ${SECOND}` };
+		const base = options({});
+		const fallback = base.score;
+		base.score = async (args) => {
+			const scored = await fallback(args);
+			return { ...scored, outputs: scored.outputs.map(() => `cc ${SECOND}`) };
+		};
+		const { result } = await runGate(base);
+		const a = trial(result, "A")?.attempts[0];
+		const dir = join(evalsDir, a?.artifactDir ?? "?");
+		const manifest = readFileSync(join(dir, "claude-run.json"), "utf8");
+		expect(manifest).toContain(`[redacted-email-1] then [redacted-email-2]`);
+		const output = readFileSync(join(dir, "scorer-1-r1.json"), "utf8");
+		expect(number(output, SECOND)).toBe("2");
 	});
 });
 

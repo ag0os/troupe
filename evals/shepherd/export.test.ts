@@ -11,7 +11,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportAttempt, REDACTED, redactText } from "./export";
+import {
+	ACCOUNT_MARKER,
+	ENV_MARKER,
+	ENVIRONMENT_MARKER,
+	emailMarker,
+	exportAttempt,
+	REDACTED,
+	redactText,
+	SESSION_ATTACHMENTS,
+	SLUG_MARKER,
+} from "./export";
 import { pythonChecks } from "./gate";
 
 let scratch: string;
@@ -128,6 +138,488 @@ describe("redaction (6.1)", () => {
 		const text = `a ${HOME}/x\n\nb /var/folders/zz/T/other\n${RUN}/keep\n`;
 		const out = redact(text).text;
 		expect(out.split("\n").length).toBe(text.split("\n").length);
+	});
+});
+
+describe("personal data and environment (F2)", () => {
+	const EMAIL = "a.person@example.org";
+	const attachment = (type: string, body: Record<string, unknown>) =>
+		JSON.stringify({
+			type: "attachment",
+			uuid: "u-1",
+			timestamp: "2026-10-13T15:11:10.000Z",
+			attachment: { type, ...body },
+			rendered: [
+				{
+					content: `<system-reminder>${JSON.stringify(body)}</system-reminder>`,
+				},
+			],
+		});
+	const SHEPHERD = "# Shepherd\n\nYou are Shepherd, the prompt under test.";
+	const LOG = [
+		attachment("prompt_snapshot", {
+			systemPrompt: [
+				"You are an agent. CLI-PROMPT-TEXT",
+				"# Memory\nMEMORY-TEXT",
+				SHEPHERD,
+			],
+			tools: [{ name: "Bash", description: "TOOL-TEXT" }],
+		}),
+		attachment("skill_listing", {
+			content: "- secret-skill: SKILL-TEXT",
+			names: ["secret-skill"],
+			skillCount: 1,
+		}),
+		attachment("mcp_instructions_delta", {
+			addedNames: ["secret-mcp"],
+			addedBlocks: ["## secret-mcp\nMCP-TEXT"],
+		}),
+		attachment("deferred_tools_delta", {
+			addedNames: ["mcp__secret-mcp__tool"],
+			pendingMcpServers: ["secret-mcp"],
+			surfacedDefinitions: [
+				{
+					name: "mcp__secret-mcp__tool",
+					definition: { description: "DEFERRED-TEXT" },
+				},
+			],
+		}),
+		attachment("agent_listing_delta", {
+			addedTypes: ["secret-plugin:agent"],
+			addedLines: ["- secret-plugin:agent: AGENT-TEXT"],
+		}),
+		attachment("session_context", {
+			context: { userEmail: `The user's email address is ${EMAIL}.` },
+		}),
+		JSON.stringify({
+			type: "user",
+			message: {
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: "toolu_1",
+						content: `mail ${EMAIL}\nok`,
+					},
+				],
+			},
+		}),
+		attachment("date", { date: "2026-10-13" }),
+	];
+	const run = {
+		trial: "A",
+		HOME,
+		backend_settings: {
+			user: {
+				path: `${HOME}/.claude/settings.json`,
+				present: true,
+				sha256: "d".repeat(64),
+				settings: {
+					env: { GIT_AUTHOR_EMAIL: EMAIL, SUBAGENT_MODEL: "ENV-VALUE" },
+					statusLine: { command: `notify ${EMAIL}` },
+					enabledPlugins: {
+						"secret-plugin@market": true,
+						"other-plugin@market": false,
+					},
+					extraKnownMarketplaces: {
+						"secret-market": { source: { repo: "[redacted]" } },
+					},
+					model: "opus",
+				},
+			},
+		},
+	};
+	const RUN_JSON = JSON.stringify(run, null, 2);
+
+	function exported(): string {
+		const from = join(scratch, "raw");
+		mkdirSync(from, { recursive: true });
+		writeFileSync(join(from, "claude.jsonl"), `${LOG.join("\n")}\n`);
+		writeFileSync(join(from, "claude-run.json"), RUN_JSON);
+		writeFileSync(
+			join(from, "claude-stdout.txt"),
+			`Done; wrote to ${EMAIL}.\n`,
+		);
+		const to = join(scratch, "exported");
+		exportAttempt({ from, to, scratchRoot: RUN, home: HOME });
+		return to;
+	}
+	const lines = (dir: string, name: string) =>
+		readFileSync(join(dir, name), "utf8").split("\n");
+
+	test("an email in a tool result, an attachment, settings and the final answer is redacted", () => {
+		const dir = exported();
+		for (const name of [
+			"claude.jsonl",
+			"claude-run.json",
+			"claude-stdout.txt",
+		]) {
+			const text = readFileSync(join(dir, name), "utf8");
+			expect(text).not.toContain(EMAIL);
+			expect(text).not.toContain("example.org");
+		}
+		const result = JSON.parse(lines(dir, "claude.jsonl")[6] ?? "");
+		expect(result.message.content[0].content).toBe(
+			`mail ${emailMarker(1)}\nok`,
+		);
+		expect(readFileSync(join(dir, "claude-stdout.txt"), "utf8")).toBe(
+			`Done; wrote to ${emailMarker(1)}.\n`,
+		);
+	});
+
+	test("listing attachments are redacted, their lines stay valid JSON, and the prompt under test stays", () => {
+		const dir = exported();
+		const text = readFileSync(join(dir, "claude.jsonl"), "utf8");
+		for (const hidden of [
+			"CLI-PROMPT-TEXT",
+			"MEMORY-TEXT",
+			"TOOL-TEXT",
+			"secret-skill",
+			"SKILL-TEXT",
+			"secret-mcp",
+			"MCP-TEXT",
+			"DEFERRED-TEXT",
+			"secret-plugin",
+			"AGENT-TEXT",
+		])
+			expect(text).not.toContain(hidden);
+		const entries = lines(dir, "claude.jsonl")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
+		expect(entries.map((e) => e.attachment?.type)).toEqual([
+			"prompt_snapshot",
+			"skill_listing",
+			"mcp_instructions_delta",
+			"deferred_tools_delta",
+			"agent_listing_delta",
+			"session_context",
+			undefined,
+			"date",
+		]);
+		const prompt = entries[0].attachment.systemPrompt;
+		expect(prompt[2]).toBe(SHEPHERD);
+		const sha = (value: string) =>
+			createHash("sha256").update(value).digest("hex");
+		expect(prompt[0]).toBe(
+			`[redacted-system-prompt sha256:${sha("You are an agent. CLI-PROMPT-TEXT")}]`,
+		);
+		expect(entries[1].attachment.skillCount).toBe(1);
+		expect(entries[1].attachment.names).toEqual([ENVIRONMENT_MARKER]);
+		expect(entries[1].rendered[0].content).toBe(ENVIRONMENT_MARKER);
+		expect(entries[0].uuid).toBe("u-1");
+		expect(entries[7].attachment.date).toBe("2026-10-13");
+	});
+
+	test("a prompt snapshot whose last block is not the prompt under test is redacted whole, with hashes", () => {
+		const from = join(scratch, "raw");
+		mkdirSync(from, { recursive: true });
+		const blocks = ["CLI-PROMPT-TEXT", "NOT-SHEPHERD"];
+		writeFileSync(
+			join(from, "claude.jsonl"),
+			`${attachment("prompt_snapshot", { systemPrompt: blocks })}\n`,
+		);
+		const to = join(scratch, "exported");
+		exportAttempt({ from, to, scratchRoot: RUN, home: HOME });
+		const entry = JSON.parse(lines(to, "claude.jsonl")[0] ?? "");
+		expect(entry.attachment.systemPrompt).toEqual(
+			blocks.map(
+				(b) =>
+					`[redacted-system-prompt sha256:${createHash("sha256").update(b).digest("hex")}]`,
+			),
+		);
+	});
+
+	test("settings env values and plugin names are redacted; env keys stay", () => {
+		const dir = exported();
+		const text = readFileSync(join(dir, "claude-run.json"), "utf8");
+		const settings = JSON.parse(text).backend_settings.user.settings;
+		expect(settings.env).toEqual({
+			GIT_AUTHOR_EMAIL: ENV_MARKER,
+			SUBAGENT_MODEL: ENV_MARKER,
+		});
+		expect(Object.keys(settings.enabledPlugins)).toEqual([
+			"[redacted-plugin-1]",
+			"[redacted-plugin-2]",
+		]);
+		expect(Object.values(settings.enabledPlugins)).toEqual([true, false]);
+		expect(Object.keys(settings.extraKnownMarketplaces)).toEqual([
+			"[redacted-marketplace-1]",
+		]);
+		expect(settings.model).toBe("opus");
+		expect(text).not.toContain("secret");
+		expect(text).not.toContain("ENV-VALUE");
+	});
+
+	test("redaction never adds or removes lines", () => {
+		const dir = exported();
+		expect(lines(dir, "claude.jsonl")).toHaveLength(LOG.length + 1);
+		expect(lines(dir, "claude-run.json")).toHaveLength(
+			RUN_JSON.split("\n").length,
+		);
+	});
+
+	test("a non-ASCII home path written with ensure_ascii escapes is redacted whole", () => {
+		const home = "/Users/jos\u00e9";
+		// Python's json.dumps escapes every non-ASCII character as \uXXXX,
+		// built here at run time so no tool can turn it back into a character.
+		const e = `${"\\"}u00e9`;
+		const escaped = `"cwd": "/Users/jos${e}/notes/caf${e}/x", "other": "/opt/caf${e}/y"`;
+		const raw = `cwd ${home}/notes/caf\u00e9/x and /opt/caf\u00e9/y`;
+		expect(escaped).toContain("jos\\u00e9");
+		for (const text of [escaped, raw]) {
+			const out = redactText(text, { scratchRoot: RUN, home }).text;
+			expect(out).not.toContain("jos");
+			expect(out).not.toContain("caf");
+			expect(out).not.toContain("00e9");
+		}
+		expect(redactText(escaped, { scratchRoot: RUN, home }).text).toBe(
+			`"cwd": "${REDACTED}", "other": "${REDACTED}"`,
+		);
+	});
+
+	test("a host path right after a \\uXXXX, \\b or \\f escape is redacted", () => {
+		for (const prefix of ["\\u201c", "\\b", "\\f"]) {
+			const line = `{"content": "see ${prefix}/opt/vendor/tool${prefix === "\\u201c" ? "\\u201d" : ""} now"}`;
+			const out = redact(line).text;
+			expect(out).not.toContain("/opt/vendor");
+			expect(out).toContain(`${prefix}${REDACTED}`);
+			expect(() => JSON.parse(out)).not.toThrow();
+		}
+	});
+
+	test("an email right after a JSON escape is redacted without breaking the escape", () => {
+		const line = JSON.stringify({ content: `to:\n${EMAIL}\tcc` });
+		const out = redact(line).text;
+		expect(JSON.parse(out).content).toBe(`to:\n${emailMarker(1)}\tcc`);
+	});
+});
+
+describe("redaction, fix round 1 (F2)", () => {
+	const EMAIL = "a.person@example.org";
+	const line = (entry: unknown) => JSON.stringify(entry);
+	const exportOne = (
+		files: Record<string, string>,
+		context: { scratchRoot?: string; home?: string; repoRoot?: string } = {},
+	) => {
+		const from = join(scratch, "raw-r1");
+		mkdirSync(from, { recursive: true });
+		for (const [name, text] of Object.entries(files))
+			writeFileSync(join(from, name), text);
+		const to = join(scratch, "exported-r1");
+		exportAttempt({
+			from,
+			to,
+			scratchRoot: context.scratchRoot ?? RUN,
+			home: context.home ?? HOME,
+			repoRoot: context.repoRoot,
+		});
+		return (name: string) => readFileSync(join(to, name), "utf8");
+	};
+
+	test("the home slug is redacted wherever it appears, scratch paths included, with one marker", () => {
+		const root = "/private/tmp/claude-501/-Users-someone-Projects-x/abc/run";
+		const out = redactText(`cd ${root}/A/workspace && ls ${root}/bin`, {
+			scratchRoot: root,
+			home: HOME,
+		}).text;
+		const kept = `/private/tmp/claude-501/${SLUG_MARKER}-Projects-x/abc/run`;
+		expect(out).toBe(`cd ${kept}/A/workspace && ls ${kept}/bin`);
+		// A non-ASCII home's slug, as ensure_ascii JSON writes it.
+		const home = "/Users/josé";
+		const e = `${"\\"}u00e9`;
+		const escapedRoot = `/tmp/c/-Users-jos${e}-P/run`;
+		expect(
+			redactText(`"cwd": "${escapedRoot}/w"`, {
+				scratchRoot: "/tmp/c/-Users-josé-P/run",
+				home,
+			}).text,
+		).toBe(`"cwd": "/tmp/c/${SLUG_MARKER}-P/run/w"`);
+		// Only a whole slug: a longer name is another account.
+		expect(redact("/tmp/c/-Users-someoneelse/x").text).not.toContain(
+			SLUG_MARKER,
+		);
+	});
+
+	test("every attachment not on the session allow list is redacted, keys included, and isMeta messages too", () => {
+		expect(SESSION_ATTACHMENTS).toEqual(["date", "silent_turn_reminder"]);
+		const types = [
+			"skill_listing",
+			"agent_listing_delta",
+			"mcp_instructions_delta",
+			"deferred_tools_delta",
+			"deferred_tools_record",
+			"session_context",
+			"credential_org",
+			"total_tokens_reminder",
+			"environment",
+			"remote_session_change",
+			"auto_mode",
+			"model",
+			"skill_listing_v2",
+		];
+		const lines = [
+			...types.map((type) =>
+				line({
+					type: "attachment",
+					attachment: {
+						type,
+						value: `SENTINEL-${type}`,
+						blocks: { [`KEY-${type}`]: "x" },
+					},
+				}),
+			),
+			line({
+				type: "user",
+				isMeta: true,
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "- META-SKILL: a listed skill" }],
+				},
+			}),
+			line({
+				type: "attachment",
+				attachment: { type: "date", date: "KEPT-DATE" },
+			}),
+			line({
+				type: "attachment",
+				attachment: { type: "silent_turn_reminder", text: "KEPT-NUDGE" },
+			}),
+			line({ type: "user", message: { role: "user", content: "KEPT-PROMPT" } }),
+		];
+		const read = exportOne({ "claude.jsonl": `${lines.join("\n")}\n` });
+		const text = read("claude.jsonl");
+		for (const type of types) {
+			expect(text).not.toContain(`SENTINEL-${type}`);
+			expect(text).not.toContain(`KEY-${type}`);
+		}
+		expect(text).not.toContain("META-SKILL");
+		for (const kept of ["KEPT-DATE", "KEPT-NUDGE", "KEPT-PROMPT"])
+			expect(text).toContain(kept);
+		const entries = text
+			.split("\n")
+			.filter(Boolean)
+			.map((l) => JSON.parse(l));
+		expect(entries.map((e) => e.attachment?.type ?? e.type)).toEqual([
+			...types,
+			"user",
+			"date",
+			"silent_turn_reminder",
+			"user",
+		]);
+		const meta = entries[types.length];
+		expect(meta.message.role).toBe("user");
+		expect(meta.message.content[0].type).toBe("text");
+	});
+
+	test("a # Shepherd block that is not last is redacted", () => {
+		const read = exportOne({
+			"claude.jsonl": `${line({
+				type: "attachment",
+				attachment: {
+					type: "prompt_snapshot",
+					systemPrompt: ["# Shepherd\nNOT-LAST", "OTHER"],
+				},
+			})}\n`,
+		});
+		expect(read("claude.jsonl")).not.toContain("NOT-LAST");
+	});
+
+	test("a non-ASCII scratch root is kept in its raw and escaped spellings; an escaped repository root elsewhere is redacted", () => {
+		const root = "/tmp/rés/run";
+		const e = `${"\\"}u00e9`;
+		const context = {
+			scratchRoot: root,
+			home: HOME,
+			repoRoot: "/srv/josé/repo",
+		};
+		const raw = `${root}/A/workspace`;
+		const escaped = `/tmp/r${e}s/run/A/workspace`;
+		expect(redactText(raw, context).text).toBe(raw);
+		expect(redactText(`"${escaped}"`, context).text).toBe(`"${escaped}"`);
+		expect(redactText(`"/srv/jos${e}/repo/evals/x"`, context).text).toBe(
+			`"${REDACTED}"`,
+		);
+	});
+
+	test("an email inside a kept scratch path is redacted", () => {
+		const out = redact(`${RUN}/notes/${EMAIL}/x`).text;
+		expect(out).toBe(`${RUN}/notes/${emailMarker(1)}/x`);
+	});
+
+	test("redaction is idempotent", () => {
+		const corpus = [
+			"https://bot@example.org/tmp/report.txt",
+			"user@host.org/opt/x",
+			`cat ${HOME}/x ${RUN}/keep /opt/a voilà/opt/b`,
+			JSON.stringify({ content: `to:\n${EMAIL}\t${HOME}/n` }),
+		];
+		for (const text of corpus) {
+			const once = redact(text).text;
+			expect(redact(once).text).toBe(once);
+		}
+		expect(redact(corpus[0] ?? "").text).not.toContain("/tmp/report");
+		expect(redact(corpus[1] ?? "").text).not.toContain("/opt/x");
+	});
+
+	test("distinct addresses get distinct numbered markers, the same address the same number across an attempt", () => {
+		const snapshot = JSON.stringify({
+			snapshotVersion: 1,
+			files: {
+				"icons/a@2x.png": { type: "file", encoding: "utf-8", content: "a" },
+				"icons/b@2x.png": { type: "file", encoding: "utf-8", content: "b" },
+			},
+		});
+		const read = exportOne({
+			"claude-final.json": snapshot,
+			"claude-stdout.txt": `mail ${EMAIL}\n`,
+			"claude.jsonl": `${line({ type: "user", message: { content: `cc ${EMAIL}` } })}\n`,
+		});
+		expect(Object.keys(JSON.parse(read("claude-final.json")).files)).toEqual([
+			`icons/${emailMarker(1)}`,
+			`icons/${emailMarker(2)}`,
+		]);
+		expect(read("claude-stdout.txt")).toBe(`mail ${emailMarker(3)}\n`);
+		expect(read("claude.jsonl")).toContain(`cc ${emailMarker(3)}`);
+	});
+
+	test("the account name is redacted as an owner or group in a long listing, and nowhere else", () => {
+		const account = HOME.split("/").at(-1) ?? "?";
+		const listing = JSON.stringify({
+			content: `total 8\n-rw-r--r--@  1 ${account}  staff   91 Oct 14 00:55 journal.md\ndrwxr-xr-x 2 ${account} ${account} 4096 Oct 14 00:55 docs\nask ${account} first`,
+		});
+		const out = redact(listing).text;
+		expect(JSON.parse(out).content).toBe(
+			`total 8\n-rw-r--r--@  1 ${ACCOUNT_MARKER}  staff   91 Oct 14 00:55 journal.md\ndrwxr-xr-x 2 ${ACCOUNT_MARKER} ${ACCOUNT_MARKER} 4096 Oct 14 00:55 docs\nask ${account} first`,
+		);
+	});
+
+	test("a host path that holds the home slug is redacted whole, tail included", () => {
+		const slug = HOME.replaceAll("/", "-");
+		expect(
+			redact(`cat ${HOME}/.claude/projects/${slug}-Projects-clientx/1f2e.jsonl`)
+				.text,
+		).toBe(`cat ${REDACTED}`);
+		expect(
+			redact(`{"cwd":"/private/tmp/claude-501/${slug}-Projects-clientx/9a8b"}`)
+				.text,
+		).toBe(`{"cwd":"${REDACTED}"}`);
+	});
+
+	test("a home with a dot is found by its dashed slug, the spelling Claude Code writes", () => {
+		const home = "/Users/jo.doe";
+		const root = "/tmp/c/-Users-jo-doe-P/run";
+		expect(redactText(`${root}/w`, { scratchRoot: root, home }).text).toBe(
+			`/tmp/c/${SLUG_MARKER}-P/run/w`,
+		);
+	});
+
+	test("a longer owner name that starts with the account name is left alone", () => {
+		const account = HOME.split("/").at(-1) ?? "?";
+		const listing = `-rw-r--r--  1 ${account}else  staff  9 Oct 14 00:55 x`;
+		expect(redact(listing).text).toBe(listing);
+	});
+
+	test("a host path right after a non-ASCII letter is still redacted", () => {
+		expect(redact("voilà/opt/vendor/tool").text).toBe(`voilà${REDACTED}`);
 	});
 });
 

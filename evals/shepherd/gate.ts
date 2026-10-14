@@ -22,9 +22,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
 	exportAttempt,
+	homeSlugs,
 	REDACTED,
 	type RedactionContext,
 	redactText,
+	SLUG_MARKER,
 	setAsidePartial,
 	writeArtifact,
 } from "./export";
@@ -345,6 +347,8 @@ interface Pending {
 	attempt: Attempt;
 	dir: string;
 	requested: string[];
+	/** The attempt's email numbering, when this invocation exported it. */
+	emails?: Map<string, number>;
 }
 
 function mustFromCheck(
@@ -498,7 +502,10 @@ export async function runGate(
 					round: scoringRounds(pending.attempt) + 1,
 					deadline: options.deadline,
 				});
-				applyScoring(pending, scored, context);
+				applyScoring(pending, scored, {
+					...context,
+					emails: pending.emails ?? new Map(),
+				});
 			}),
 			concurrency,
 		);
@@ -512,8 +519,10 @@ export async function runGate(
 		exitCode: number | null,
 		from: string,
 		artifactDir: string,
-		at: RedactionContext,
+		context: RedactionContext,
 	) => {
+		// One email numbering for everything written for this attempt.
+		const at = { ...context, emails: context.emails ?? new Map() };
 		const dir = join(options.evalsDir, artifactDir);
 		let artifacts: Artifact[] = [];
 		if (existsSync(from)) artifacts = exportAttempt({ from, to: dir, ...at });
@@ -536,7 +545,7 @@ export async function runGate(
 		);
 		const requested = attempt.scoring?.requested ?? [];
 		if (requested.length > 0) attempt.kind = "unscored";
-		return { attempt, dir, requested };
+		return { attempt, dir, requested, emails: at.emails };
 	};
 
 	/**
@@ -555,13 +564,18 @@ export async function runGate(
 			scratchRoot: launch?.scratchRoot ?? options.scratchRoot,
 			home: options.home,
 			repoRoot: resolve(options.evalsDir, "../.."),
+			emails: new Map(),
 		};
-		const scratch =
-			launch &&
-			!launch.scratchDir.includes(REDACTED) &&
-			existsSync(launch.scratchDir)
-				? launch.scratchDir
-				: undefined;
+		// The recorded directory may hold the home slug's marker; this machine's
+		// home gives it back.
+		const scratch = launch?.scratchDir.includes(REDACTED)
+			? undefined
+			: [
+					launch?.scratchDir ?? "",
+					...homeSlugs(options.home).map((slug) =>
+						(launch?.scratchDir ?? "").replaceAll(SLUG_MARKER, slug),
+					),
+				].find((dir) => dir && existsSync(dir));
 		const runPath = scratch ? join(scratch, "claude-run.json") : undefined;
 		const run: RunManifest =
 			runPath && existsSync(runPath)
@@ -639,7 +653,12 @@ export async function runGate(
 			effort?: string;
 		};
 		const log = readFileSync(join(dir, "claude.jsonl"), "utf8");
-		const problems = sessionValidity(log, argv[0] ?? "", policy.model ?? "");
+		// The log is exported; compare it with the binary's exported spelling.
+		const problems = sessionValidity(
+			log,
+			redactText(argv[0] ?? "", at).text,
+			policy.model ?? "",
+		);
 		const cost = {
 			subject: subjectCost(join(dir, "claude.jsonl")),
 			scorer: [],
@@ -769,7 +788,7 @@ export async function runGate(
 					}
 				}
 				// The pending entry stays published until the attempt is fully built.
-				const { attempt, dir, requested } = recordFinished(
+				const { attempt, dir, requested, emails } = recordFinished(
 					trial,
 					ordinal,
 					exitCode,
@@ -783,7 +802,7 @@ export async function runGate(
 				else list.push(attempt);
 				created.push(attempt);
 				if (requested.length > 0)
-					toScore.push({ trial, attempt, dir, requested });
+					toScore.push({ trial, attempt, dir, requested, emails });
 			}
 			renumber();
 			persist();
