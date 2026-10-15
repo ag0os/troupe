@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,9 +21,55 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Install deps
         run: bun install --frozen-lockfile
 
       - name: TypeScript + Biome checks
         run: bun run check:all
 
+      - name: Tests
+        run: bun test
+
+  # The informational Shepherd evals check (docs/SHEPHERD-EVALS.md). Evals
+  # run on demand, so a missing or blocked result never fails a PR; only a
+  # committed result for the head's source hash that does not verify does.
+  # It runs no model and needs no credentials.
+  shepherd-evals:
+    name: shepherd-evals (informational)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - name: Check out the PR head with full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # No PR script runs before the verifier hashes the tree.
+      - name: Install deps
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check the Shepherd evals result
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bun evals/shepherd/verify.ts --base "$BASE_SHA" --head "$HEAD_SHA"

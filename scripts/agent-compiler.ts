@@ -48,6 +48,13 @@ import {
 	type ExtensionExport,
 } from "../lib/agent-format/types";
 import { toBinaryName } from "./binary-name";
+import {
+	type BuildProvenance,
+	gitStamp,
+	SHEPHERD_ID,
+	type StampSource,
+	versionLine,
+} from "./shepherd-source";
 
 /** Roots an include's realpath must stay under (D-027). */
 export const INCLUDE_ROOTS = ["agents", "system-prompts"] as const;
@@ -762,17 +769,23 @@ function isSideEffectFree(expression: ts.Expression): boolean {
  * reserved extension exports. It parses its argv with the shared CLI (help
  * and parse errors exit there), serves `--show-prompt` through the runner's
  * preview and otherwise hands the invocation to the runner's lifecycle.
+ * Given provenance, Shepherd's entry answers `--version` with the stamp
+ * before anything else; other agents ignore it.
  */
-export function generateEntry(agent: LoadedAgent): string {
+export function generateEntry(
+	agent: LoadedAgent,
+	provenance?: BuildProvenance,
+): string {
 	const cli = fileURLToPath(
 		new URL("../lib/agent-format/cli.ts", import.meta.url),
 	);
 	const run = fileURLToPath(
 		new URL("../lib/agent-format/run.ts", import.meta.url),
 	);
+	const stamped = agent.id === SHEPHERD_ID && provenance !== undefined;
 	const lines: string[] = [
 		'import { statSync } from "node:fs";',
-		`import { resolveCli } from ${JSON.stringify(cli)};`,
+		`import { ${stamped ? "resolveCli, resolveVersion" : "resolveCli"} } from ${JSON.stringify(cli)};`,
 		`import { previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
 	];
 	const names = agent.extension?.exports ?? [];
@@ -784,6 +797,17 @@ export function generateEntry(agent: LoadedAgent): string {
 	lines.push(
 		`const spec = ${JSON.stringify(agent.spec, null, "\t")};`,
 		`const extension = { ${names.join(", ")} };`,
+	);
+	if (stamped) {
+		lines.push(
+			`const versioned = resolveVersion(spec.id, ${JSON.stringify(versionLine(provenance))}, process.argv.slice(2), {`,
+			"\tstdout: (text) => process.stdout.write(text),",
+			"\tstderr: (text) => process.stderr.write(text),",
+			"});",
+			"if (versioned) process.exit(versioned.exitCode);",
+		);
+	}
+	lines.push(
 		"const io = {",
 		"\tcwd: process.cwd(),",
 		"\tstdout: (text) => process.stdout.write(text),",
@@ -802,35 +826,96 @@ export function generateEntry(agent: LoadedAgent): string {
 /**
  * Validate one declaration and build its binary at `outFile`. The binary is
  * built in a temporary directory beside `outFile` and renamed into place, so
- * any failure leaves `outFile` untouched.
+ * any failure or abort leaves `outFile` untouched. Shepherd is stamped as
+ * `publish` stamps it.
  */
 export async function compileAgent(options: {
 	root: string;
 	file: string;
 	outFile: string;
-}): Promise<LoadedAgent> {
+	stamp?: StampSource;
+	build?: Builder;
+	signal?: AbortSignal;
+}): Promise<LoadedAgent & { provenance?: BuildProvenance }> {
+	const root = resolve(options.root);
+	const stamp = options.stamp ?? gitStamp();
+	const early =
+		toBinaryName(resolve(root, options.file), root) === SHEPHERD_ID
+			? await settle(() => stamp.capture(root))
+			: undefined;
 	const agent = await loadAgentDefinition(options.root, options.file);
 	const outFile = resolve(options.outFile);
+	const provenance =
+		agent.id === SHEPHERD_ID
+			? unwrap(early ?? (await settle(() => stamp.capture(root))))
+			: undefined;
 	const workDir = await mkdtemp(join(dirname(outFile), ".agent-build-"));
 	try {
 		const entry = join(workDir, "entry.ts");
 		const built = join(workDir, "binary");
-		await writeFile(entry, generateEntry(agent));
-		await bunBuild({ entry, outFile: built, cwd: workDir, label: agent.file });
+		await writeFile(entry, generateEntry(agent, provenance));
+		await (options.build ?? bunBuild)({
+			entry,
+			outFile: built,
+			cwd: workDir,
+			label: agent.file,
+			signal: options.signal,
+		});
+		if (provenance) await recheckSource(stamp, root, provenance);
+		options.signal?.throwIfAborted();
 		await rename(built, outFile);
-		return agent;
+		return provenance ? { ...agent, provenance } : agent;
 	} finally {
 		await rm(workDir, { recursive: true, force: true });
 	}
 }
 
-async function bunBuild(options: {
+type Settled<T> = { value: T } | { error: unknown };
+
+/**
+ * Shepherd's provenance is captured before its sources are read, so the
+ * stamp covers what is built; a capture error is reported only after any
+ * source error.
+ */
+async function settle<T>(capture: () => T | Promise<T>): Promise<Settled<T>> {
+	try {
+		return { value: await capture() };
+	} catch (error) {
+		return { error };
+	}
+}
+
+function unwrap<T>(settled: Settled<T>): T {
+	if ("error" in settled) throw settled.error;
+	return settled.value;
+}
+
+/** Refuse publication when the Shepherd source changed during the build. */
+async function recheckSource(
+	stamp: StampSource,
+	root: string,
+	provenance: BuildProvenance,
+): Promise<void> {
+	const now = await stamp.recheck(root);
+	if (now.source !== provenance.manifest.source) {
+		throw new Error(
+			`Shepherd source changed during the build (captured ${provenance.manifest.source}, now ${now.source})`,
+		);
+	}
+}
+
+export interface BuildRequest {
 	entry: string;
 	outFile: string;
 	cwd: string;
 	label: string;
 	signal?: AbortSignal;
-}): Promise<void> {
+}
+
+/** Builds one entry into one binary; `bun build --compile` by default. */
+export type Builder = (request: BuildRequest) => Promise<void>;
+
+async function bunBuild(options: BuildRequest): Promise<void> {
 	options.signal?.throwIfAborted();
 	const child = Bun.spawn(
 		[
@@ -904,6 +989,10 @@ export interface CompilerOptions {
 	outDir?: string;
 	/** Defaults to `ROSTER`. */
 	roster?: readonly string[];
+	/** Shepherd's provenance. Defaults to the Git repository at `root`. */
+	stamp?: StampSource;
+	/** Defaults to `bun build --compile`; tests pass a fake. */
+	build?: Builder;
 }
 
 export interface BuildEntry {
@@ -1167,6 +1256,8 @@ export interface PublishResult {
 	built: string[];
 	pruned: string[];
 	dryRun: boolean;
+	/** The stamp embedded in Shepherd, when Shepherd was built. */
+	provenance?: BuildProvenance;
 }
 
 /**
@@ -1178,7 +1269,9 @@ export interface PublishResult {
  * pruned. Builds run one at a time: concurrent `bun build --compile`
  * children were seen to lose and corrupt outputs under load. A validation
  * error, build failure, failed output check or abort removes the temporary
- * directory and leaves the output directory untouched. An error after the
+ * directory and leaves the output directory untouched. Shepherd's provenance
+ * is captured before any source is read or temporary directory exists, and
+ * publication is refused if its source changed by the end of the builds. An error after the
  * first rename throws `PartialPublishError`; a prune error after every rename
  * throws `PruneError`. There is no cross-process lock (D-023).
  */
@@ -1189,6 +1282,12 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 	const log = options.log ?? (() => {});
 	const warn = options.warn ?? log;
 	const prune = options.prune !== false && !options.only;
+	const stamp = options.stamp ?? gitStamp();
+	const early =
+		!options.dryRun &&
+		(options.only ? options.only === SHEPHERD_ID : roster.has(SHEPHERD_ID))
+			? await settle(() => stamp.capture(root))
+			: undefined;
 
 	const plan = await planBuild({ ...options, root });
 	for (const warning of plan.warnings) warn(warning);
@@ -1209,6 +1308,9 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 	}
 
 	options.signal?.throwIfAborted();
+	const provenance = plan.entries.some((entry) => entry.id === SHEPHERD_ID)
+		? unwrap(early ?? (await settle(() => stamp.capture(root))))
+		: undefined;
 	const workDir = await mkdtemp(join(dirname(outDir), ".troupe-build-"));
 	try {
 		if (existsSync(outDir) && statSync(outDir).dev !== statSync(workDir).dev) {
@@ -1224,8 +1326,8 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 		for (const entry of plan.entries) {
 			options.signal?.throwIfAborted();
 			const file = join(entryDir, `${entry.id}.ts`);
-			await writeFile(file, generateEntry(entry.agent));
-			await bunBuild({
+			await writeFile(file, generateEntry(entry.agent, provenance));
+			await (options.build ?? bunBuild)({
 				entry: file,
 				outFile: join(builtDir, entry.id),
 				cwd: entryDir,
@@ -1235,6 +1337,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 			log(`built ${entry.id}`);
 		}
 
+		if (provenance) await recheckSource(stamp, root, provenance);
 		options.signal?.throwIfAborted();
 		preflightPublish(plan.entries, builtDir, outDir);
 		await mkdir(outDir, { recursive: true });
@@ -1271,6 +1374,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 			built: plan.entries.map((entry) => entry.id),
 			pruned: orphans,
 			dryRun: false,
+			...(provenance ? { provenance } : {}),
 		};
 	} finally {
 		await rm(workDir, { recursive: true, force: true });

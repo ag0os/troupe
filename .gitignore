@@ -8,6 +8,16 @@ bin
 # publication temp dirs left by a killed compile (scripts/agent-compiler.ts)
 .troupe-build-*/
 *.tgz
+# a running Shepherd eval invocation's lock, a killed one's unpublished result files, and evidence it set aside (docs/SHEPHERD-EVALS.md)
+evals/shepherd/results/*.lock*
+evals/shepherd/results/*.tmp-*
+evals/shepherd/validation/**/*.tmp-*
+evals/shepherd/artifacts/**/*.tmp-*
+evals/shepherd/validation/**/*.lock*
+evals/shepherd/artifacts/**/*.orphan*
+evals/shepherd/validation/**/*.orphan*
+evals/shepherd/artifacts/**/*.partial*
+evals/shepherd/validation/**/*.partial*
 
 # code coverage
 coverage
@@ -27,6 +37,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # caches
 .eslintcache
+__pycache__/
+*.pyc
 .cache
 *.tsbuildinfo
 

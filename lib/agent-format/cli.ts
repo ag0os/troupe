@@ -217,6 +217,29 @@ export function resolveCli(
 	return { invocation: outcome.invocation };
 }
 
+/**
+ * `--version` for a binary built with a version line, checked before
+ * `resolveCli`. Exactly `--version` prints the line; `--version` before the
+ * first `--` beside any other argument is a usage error. Undefined when the
+ * version is not asked for, so `-- --version` stays passthrough.
+ */
+export function resolveVersion(
+	id: string,
+	line: string,
+	argv: readonly string[],
+	io: Pick<CliIo, "stdout" | "stderr">,
+): { exitCode: number } | undefined {
+	const separator = argv.indexOf("--");
+	const before = separator === -1 ? argv : argv.slice(0, separator);
+	if (!before.includes("--version")) return undefined;
+	if (argv.length === 1) {
+		io.stdout(`${line}\n`);
+		return { exitCode: 0 };
+	}
+	io.stderr(`${id}: --version takes no other arguments\n`);
+	return { exitCode: 2 };
+}
+
 function lookupOption(
 	spec: Readonly<AgentSpec>,
 	written: string,

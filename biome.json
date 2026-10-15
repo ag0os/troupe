@@ -2,7 +2,15 @@
 	"$schema": "https://biomejs.dev/schemas/2.1.4/schema.json",
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["./agents/**/*", "./lib/shepherd/**/*", "!**/*.md"]
+		"includes": [
+			"./agents/**/*",
+			"./lib/shepherd/**/*",
+			"./evals/**/*",
+			"!evals/shepherd/results/**",
+			"!evals/shepherd/artifacts/**",
+			"!evals/shepherd/validation/**",
+			"!**/*.md"
+		]
 	},
 	"vcs": {
 		"enabled": false,

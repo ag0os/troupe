@@ -33,6 +33,7 @@ import {
 	startWatcher,
 	WATCH_ROOTS,
 } from "./agent-compiler";
+import { initShepherdRepo } from "./shepherd-source-fixture";
 
 let root: string;
 let outDir: string;
@@ -938,6 +939,8 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 	for (const signals of [["SIGINT", "SIGINT"], ["SIGHUP"]] as const) {
 		test(`compile-all on ${signals.join(" then ")} removes its temp dir and leaves bin/ untouched`, async () => {
 			for (const id of ROSTER) addDeclaration(`agents/${id.split(":").join("/")}.md`, id);
+			// A real Shepherd build needs a Git revision and its source set.
+			initShepherdRepo(root);
 			seedOutDir();
 			const before = snapshot(outDir);
 			const child = Bun.spawn(
