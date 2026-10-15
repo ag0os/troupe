@@ -89,12 +89,10 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 }
 
 const UPDATED_SHAPE =
-	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,\s*(.*?))?\s*$/;
+	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,\s*(.*?))?\s*?(\r?)$/;
 
 /** CURRENT's first `Updated:` line outside a fence and above `## Items`. */
-export function updatedLine(
-	text: string,
-): { line: number; text: string } | null {
+function updatedLine(text: string): { line: number; text: string } | null {
 	for (const { n, line } of proseLines(text)) {
 		if (/^##\s+Items\b/i.test(line)) return null;
 		if (/^Updated:/.test(line)) return { line: n, text: line };
@@ -127,7 +125,7 @@ export function withUpdatedName(
 	const before = match[2] || null;
 	if (before === writer) return { status: "same" };
 	const lines = text.split("\n");
-	lines[found.line - 1] = `Updated: ${match[1]}, ${writer}`;
+	lines[found.line - 1] = `Updated: ${match[1]}, ${writer}${match[3]}`;
 	return { status: "rewritten", text: lines.join("\n"), before };
 }
 
@@ -137,10 +135,7 @@ export function currentItems(text: string): CurrentItems {
 	const prose = proseLines(text);
 	const start = prose.findIndex(({ line }) => /^##\s+Items\b/i.test(line));
 	const updated =
-		prose
-			.slice(0, start < 0 ? undefined : start)
-			.map(({ line }) => line.match(/^Updated:\s*(.+?)\s*$/)?.[1])
-			.find((value) => value !== undefined) ?? null;
+		updatedLine(text)?.text.slice("Updated:".length).trim() || null;
 	const result: CurrentItems = {
 		updated,
 		noNext: noNext(text),

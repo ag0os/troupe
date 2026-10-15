@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { currentItems, statusProjection } from "./query-items";
+import {
+	currentItems,
+	statusProjection,
+	updatedName,
+	withUpdatedName,
+} from "./query-items";
 import { makeTree, OFF_SHAPE_CURRENT } from "./test-support";
 import { closedDate } from "./text";
 
@@ -162,6 +167,18 @@ describe("currentItems", () => {
 		).toBe("top");
 	});
 
+	test("reads the same Updated: line as the checkpoint rewrite", () => {
+		const text =
+			"Updated:\nUpdated: 2026-10-15 09:00, forge-1014\n\n## Items\n";
+		expect(currentItems(text).updated).toBeNull();
+		expect(updatedName(text)).toBeNull();
+		expect(withUpdatedName(text, "forge-1015")).toEqual({
+			status: "skipped",
+			reason: "not in the standard shape",
+		});
+		expect(currentItems("Updated:   \n## Items\n").updated).toBeNull();
+	});
+
 	test("reads noNext", () => {
 		expect(currentItems("## Items\nNo NEXT is set.\n").noNext).toBeTrue();
 		expect(currentItems(CURRENT).noNext).toBeFalse();
@@ -193,6 +210,17 @@ Nested text.
 ## State
 Done.
 `;
+
+describe("withUpdatedName", () => {
+	test("keeps a CRLF line ending and changes only the name", () => {
+		const text = "# C\r\nUpdated: 2026-10-15 09:00, forge-1014\r\n## Items\r\n";
+		expect(withUpdatedName(text, "forge-1015")).toEqual({
+			status: "rewritten",
+			text: "# C\r\nUpdated: 2026-10-15 09:00, forge-1015\r\n## Items\r\n",
+			before: "forge-1014",
+		});
+	});
+});
 
 describe("statusProjection", () => {
 	test("keeps the raw file and projects the supported frontmatter subset", () => {
