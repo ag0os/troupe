@@ -634,8 +634,15 @@ describe("tool query item", () => {
 		});
 	}
 
-	test("renders the text form", async () => {
+	test("renders the text form with each section's lines as written", async () => {
 		const fixture = contractTree();
+		fs.writeFileSync(
+			join(fixture.a, ".shepherd", "work", "in-progress", "evals", "STATUS.md"),
+			STATUS.replace(
+				"Running.\n",
+				"Running.\n- one\n- two\n\n    an indented paragraph\n",
+			),
+		);
 		const output = await runTool(
 			["query", "item", "evals"],
 			{},
@@ -648,8 +655,13 @@ describe("tool query item", () => {
 				"opened: 2026-10-13",
 				"## What and origin",
 				"The origin.",
+				"",
 				"## State",
 				"Running.",
+				"- one",
+				"- two",
+				"",
+				"    an indented paragraph",
 				"",
 			].join("\n"),
 		);

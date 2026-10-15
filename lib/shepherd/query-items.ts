@@ -252,13 +252,15 @@ export function statusProjection(text: string): StatusProjection {
 	const titleIndex = headings.findIndex(({ level }) => level === 1);
 	const title = headings[titleIndex];
 	if (title) projection.title = title.heading;
-	const rest = headings.filter((_, index) => index !== titleIndex);
-	const sections = rest.filter(({ n }) => !title || n > title.n);
 	const span = (from: number, to: number) =>
 		collapse(all.slice(from - 1, to).join("\n"));
+	const nextHeading = (index: number) =>
+		(headings[index + 1]?.n ?? all.length + 1) - 1;
 
 	const preambleStart = title ? title.n + 1 : bodyStart;
-	const preambleEnd = (sections[0]?.n ?? all.length + 1) - 1;
+	const preambleEnd = title
+		? nextHeading(titleIndex)
+		: (headings[0]?.n ?? all.length + 1) - 1;
 	if (preambleEnd >= preambleStart) {
 		projection.preamble = {
 			line: preambleStart,
@@ -266,15 +268,18 @@ export function statusProjection(text: string): StatusProjection {
 			text: span(preambleStart, preambleEnd),
 		};
 	}
-	projection.sections = sections.map((section, index) => {
-		const endLine = (sections[index + 1]?.n ?? all.length + 1) - 1;
-		return {
-			heading: section.heading,
-			level: section.level,
-			line: section.n,
-			endLine,
-			text: span(section.n + 1, endLine),
-		};
+	projection.sections = headings.flatMap((section, index) => {
+		if (index === titleIndex) return [];
+		const endLine = nextHeading(index);
+		return [
+			{
+				heading: section.heading,
+				level: section.level,
+				line: section.n,
+				endLine,
+				text: span(section.n + 1, endLine),
+			},
+		];
 	});
 	return projection;
 }

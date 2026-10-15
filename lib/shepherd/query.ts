@@ -410,9 +410,12 @@ function collectItem({ request, target }: QueryContext): Collected {
 	if (status) {
 		text.push(status.path);
 		if (status.frontmatter?.raw) text.push(status.frontmatter.raw);
+		const lines = status.raw.split("\n");
 		for (const section of status.sections) {
-			text.push(`${"#".repeat(section.level)} ${section.heading}`);
-			if (section.text) text.push(section.text);
+			text.push(
+				`${"#".repeat(section.level)} ${section.heading}`,
+				...lines.slice(section.line, section.endLine),
+			);
 		}
 	} else if (candidates.length > 1) {
 		text.push(`candidates: ${candidates.join(", ")}`);

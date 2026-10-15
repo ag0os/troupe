@@ -228,6 +228,18 @@ describe("statusProjection", () => {
 		]);
 	});
 
+	test("keeps headings before the title, each ending at the next heading", () => {
+		const projection = statusProjection(
+			"---\na: b\n---\n## Early\nearly text\n# Title\n## Later\nlater text\n",
+		);
+		expect(projection.title).toBe("Title");
+		expect(projection.preamble).toBeNull();
+		expect(projection.sections).toEqual([
+			{ heading: "Early", level: 2, line: 4, endLine: 5, text: "early text" },
+			{ heading: "Later", level: 2, line: 7, endLine: 8, text: "later text" },
+		]);
+	});
+
 	test("projects a file without frontmatter and flags it", () => {
 		const projection = statusProjection("# title\n\n## One\nx\n");
 		expect(projection.frontmatter).toBeNull();
