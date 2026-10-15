@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { coveredPaths, hashPaths } from "./checkpoint";
 import type { ToolEnv } from "./sessions";
-import { fakeToolEnv, type MakeTreeOptions, makeTree } from "./test-support";
+import {
+	fakeToolEnv,
+	jsonCommandResult,
+	type MakeTreeOptions,
+	makeTree,
+} from "./test-support";
 import { journalChain } from "./text";
 import { runTool } from "./tool";
 
@@ -813,6 +818,473 @@ describe("tool query autonomy", () => {
 	});
 });
 
+const SESSIONS = `Updated: 2026-10-13 17:26, ws-1013
+
+## Items
+- **NEXT** [evals](work/in-progress/evals/STATUS.md): the trials
+
+## Live sessions
+- ws-1013: Claude Code, Opus, Shepherd (Herdr w9:p1M)
+- ws-1012b retired at 16:00
+- delegate-cdx-1: Codex delegate for evals
+`;
+
+type Registered = { pid: number; name: string; cwd: string; status?: string };
+
+/** A with the sessions CURRENT and a Codex home file naming ~/.codex-fake. */
+function sessionsTree(
+	extra: Record<string, string> = {},
+	options: MakeTreeOptions = {},
+) {
+	const fixture = contractTree(
+		{
+			"root/a/.shepherd/CURRENT.md": SESSIONS,
+			"home/.codex-active": "~/.codex-fake\n",
+			...extra,
+		},
+		options,
+	);
+	const home = join(fixture.base, "home");
+	return {
+		...fixture,
+		home,
+		register(entries: Registered[]) {
+			const dir = join(home, ".claude", "sessions");
+			fs.mkdirSync(dir, { recursive: true });
+			for (const entry of entries) {
+				fs.writeFileSync(join(dir, `${entry.pid}.json`), JSON.stringify(entry));
+			}
+		},
+		/** An env with a Herdr fake listing agents, or no Herdr when undefined. */
+		sessionsEnv(
+			cwd: string,
+			{
+				agents,
+				alive = [],
+				env = {},
+			}: {
+				agents?: unknown[];
+				alive?: number[];
+				env?: Record<string, string>;
+			} = {},
+		) {
+			const calls: string[][] = [];
+			return {
+				calls,
+				env: fixture.env(cwd, {
+					alivePids: alive,
+					env: {
+						XDG_CONFIG_HOME: join(fixture.base, "xdg"),
+						...(agents ? { HERDR_ENV: "1" } : {}),
+						...env,
+					},
+					runCommand: async ({ argv }) => {
+						calls.push(argv);
+						return jsonCommandResult({ result: { agents: agents ?? [] } });
+					},
+				}),
+			};
+		},
+	};
+}
+
+describe("tool query sessions", () => {
+	test("lists the Live sessions names with their text and flags", async () => {
+		const fixture = sessionsTree();
+		const { env, calls } = fixture.sessionsEnv(fixture.a);
+		const { code, json } = await query(["sessions"], env);
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			query: "sessions",
+			prefix: "ws",
+			hasChildren: false,
+		});
+		expect(json.listed).toEqual([
+			{
+				name: "ws-1013",
+				line: 7,
+				text: "ws-1013: Claude Code, Opus, Shepherd (Herdr w9:p1M)",
+				retired: false,
+				subagent: false,
+				codex: false,
+			},
+			{
+				name: "ws-1012b",
+				line: 8,
+				text: "ws-1012b retired at 16:00",
+				retired: true,
+				subagent: false,
+				codex: false,
+			},
+			{
+				name: "delegate-cdx-1",
+				line: 9,
+				text: "delegate-cdx-1: Codex delegate for evals",
+				retired: false,
+				subagent: false,
+				codex: true,
+			},
+		]);
+		expect(json.claude).toEqual({
+			available: false,
+			reason: "Claude session registry not found",
+			sessions: [],
+		});
+		expect(json.herdr).toEqual({
+			available: false,
+			reason: "not inside Herdr",
+			agents: [],
+		});
+		expect(json.codexNames).toEqual({
+			consulted: false,
+			homes: [],
+			failures: [],
+		});
+		expect(codes(json)).toEqual(["source-unavailable", "source-unavailable"]);
+		expect(calls).toEqual([]);
+	});
+
+	test("keeps the registry entries the workspace owns, by the exact-directory rule", async () => {
+		const fixture = sessionsTree({ "root/notes/x.md": "x" });
+		fixture.register([
+			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+			{ pid: 202, name: "ws-1013", cwd: join(fixture.a, "notes") },
+			{ pid: 203, name: "root-1013", cwd: fixture.root, status: "busy" },
+			{ pid: 204, name: "deep-1013", cwd: join(fixture.root, "notes") },
+			{ pid: 205, name: "b-1013", cwd: fixture.b },
+			{ pid: 206, name: "ws-1012b", cwd: fixture.a, status: "idle" },
+			{ pid: 207, name: "other-1013", cwd: fixture.a, status: "idle" },
+			{ pid: 208, name: "dead-1013", cwd: fixture.a },
+		]);
+		const alive = [201, 202, 203, 204, 205, 206, 207];
+		const child = await query(
+			["sessions"],
+			fixture.sessionsEnv(fixture.a, { alive }).env,
+		);
+		expect(child.code).toBe(0);
+		expect(child.json.hasChildren).toBe(false);
+		expect(child.json.claude).toEqual({
+			available: true,
+			reason: null,
+			sessions: [
+				{
+					name: "ws-1013",
+					pid: 201,
+					file: "201.json",
+					cwd: fixture.a,
+					status: "idle",
+					listed: { line: 7, retired: false },
+					prefixMatch: true,
+				},
+				{
+					name: "ws-1013",
+					pid: 202,
+					file: "202.json",
+					cwd: join(fixture.a, "notes"),
+					status: null,
+					listed: { line: 7, retired: false },
+					prefixMatch: true,
+				},
+				{
+					name: "ws-1012b",
+					pid: 206,
+					file: "206.json",
+					cwd: fixture.a,
+					status: "idle",
+					listed: { line: 8, retired: true },
+					prefixMatch: true,
+				},
+				{
+					name: "other-1013",
+					pid: 207,
+					file: "207.json",
+					cwd: fixture.a,
+					status: "idle",
+					listed: null,
+					prefixMatch: false,
+				},
+			],
+		});
+
+		const root = await query(
+			["sessions"],
+			fixture.sessionsEnv(fixture.root, { alive }).env,
+		);
+		expect(root.json.hasChildren).toBe(true);
+		expect(root.json.claude.sessions).toEqual([
+			{
+				name: "root-1013",
+				pid: 203,
+				file: "203.json",
+				cwd: fixture.root,
+				status: "busy",
+				listed: null,
+				prefixMatch: false,
+			},
+		]);
+	});
+
+	test("takes the prefix from the directory name without sessionPrefix", async () => {
+		const fixture = sessionsTree();
+		fs.rmSync(join(fixture.a, ".shepherd", "config.json"));
+		fixture.register([
+			{ pid: 201, name: "a-1013", cwd: fixture.a },
+			{ pid: 202, name: "ws-1013", cwd: fixture.a },
+		]);
+		const { code, json } = await query(
+			["sessions"],
+			fixture.sessionsEnv(fixture.a, { alive: [201, 202] }).env,
+		);
+		expect(code).toBe(0);
+		expect(json.prefix).toBe("a");
+		expect(
+			json.claude.sessions.map(
+				({ name, prefixMatch }: { name: string; prefixMatch: boolean }) => [
+					name,
+					prefixMatch,
+				],
+			),
+		).toEqual([
+			["a-1013", true],
+			["ws-1013", false],
+		]);
+	});
+
+	test("an invalid or symlinked config leaves the prefix unknown", async () => {
+		const invalid = sessionsTree({ "root/a/.shepherd/config.json": "{" });
+		invalid.register([{ pid: 201, name: "ws-1013", cwd: invalid.a }]);
+		const bad = await query(
+			["sessions"],
+			invalid.sessionsEnv(invalid.a, { alive: [201] }).env,
+		);
+		expect(bad.code).toBe(1);
+		expect(bad.json.prefix).toBeNull();
+		expect(bad.json.claude.sessions[0].prefixMatch).toBeNull();
+		expect(codes(bad.json)).toEqual(["config-invalid", "source-unavailable"]);
+		expect(bad.json.problems[0].file).toBe(
+			join(invalid.a, ".shepherd", "config.json"),
+		);
+
+		const linked = sessionsTree({
+			"outside/config.json": '{"sessionPrefix":"ws"}',
+		});
+		const config = join(linked.a, ".shepherd", "config.json");
+		fs.rmSync(config);
+		fs.symlinkSync(join(linked.base, "outside", "config.json"), config);
+		const { value, calls } = await spyFs(() =>
+			query(["sessions"], linked.sessionsEnv(linked.a).env),
+		);
+		expect(value.code).toBe(1);
+		expect(value.json.prefix).toBeNull();
+		expect(codes(value.json)).toEqual([
+			"record-unsafe",
+			"source-unavailable",
+			"source-unavailable",
+		]);
+		expect(value.json.problems[0].file).toBe(config);
+		expect(
+			calls.filter(
+				({ fn, path }) =>
+					path.includes(`${sep}outside`) ||
+					(fn === "readFileSync" && path === config),
+			),
+		).toEqual([]);
+	});
+
+	test("keeps Herdr's Claude agents beside the registry and reads no Codex index without a Codex agent", async () => {
+		const fixture = sessionsTree({
+			"home/.codex-fake/session_index.jsonl": "",
+		});
+		fixture.register([
+			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+		]);
+		const { env, calls: commands } = fixture.sessionsEnv(fixture.a, {
+			alive: [201],
+			agents: [
+				{
+					agent: "claude",
+					agent_session: { value: "c-1" },
+					name: "ws-1013",
+					cwd: fixture.a,
+					agent_status: "idle",
+				},
+				{
+					agent: "claude",
+					agent_session: { value: "c-2" },
+					name: "ws-1014",
+					cwd: join(fixture.a, "notes"),
+					agent_status: "working",
+				},
+				{
+					agent: "claude",
+					agent_session: { value: "c-3" },
+					name: "b-1013",
+					cwd: fixture.b,
+					agent_status: "idle",
+				},
+			],
+		});
+		const { value, calls } = await spyFs(() => query(["sessions"], env));
+		expect(value.code).toBe(0);
+		expect(commands).toEqual([["herdr", "agent", "list"]]);
+		expect(value.json.problems).toEqual([]);
+		expect(
+			value.json.claude.sessions.map(({ pid }: { pid: number }) => pid),
+		).toEqual([201]);
+		expect(value.json.herdr).toEqual({
+			available: true,
+			reason: null,
+			agents: [
+				{
+					agent: "claude",
+					sessionId: "c-1",
+					label: "ws-1013",
+					cwd: fixture.a,
+					status: "idle",
+					name: "ws-1013",
+					listed: { line: 7, retired: false },
+					prefixMatch: true,
+				},
+				{
+					agent: "claude",
+					sessionId: "c-2",
+					label: "ws-1014",
+					cwd: join(fixture.a, "notes"),
+					status: "working",
+					name: "ws-1014",
+					listed: null,
+					prefixMatch: true,
+				},
+			],
+		});
+		expect(value.json.codexNames).toEqual({
+			consulted: false,
+			homes: [],
+			failures: [],
+		});
+		expect(calls.filter(({ path }) => path.includes(".codex"))).toEqual([]);
+	});
+
+	test("names Codex agents from the indexes and reports a home it cannot read", async () => {
+		const fixture = sessionsTree({
+			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
+		});
+		const gone = join(fixture.base, "codex-gone");
+		const { env } = fixture.sessionsEnv(fixture.a, {
+			env: { CODEX_HOME: gone },
+			agents: [
+				{
+					agent: "codex",
+					agent_session: { value: "x-1" },
+					name: "pane-3",
+					cwd: join(fixture.a, "sub"),
+					agent_status: "working",
+				},
+				{
+					agent: "codex",
+					agent_session: { value: "x-2" },
+					name: "pane-4",
+					cwd: fixture.a,
+				},
+				{ agent: "codex", agent_session: { value: "x-3" }, cwd: fixture.a },
+			],
+		});
+		const { code, json } = await query(["sessions"], env);
+		expect(code).toBe(0);
+		expect(json.herdr.agents).toEqual([
+			{
+				agent: "codex",
+				sessionId: "x-1",
+				label: "pane-3",
+				cwd: join(fixture.a, "sub"),
+				status: "working",
+				name: "delegate-cdx-1",
+				listed: { line: 9, retired: false },
+				prefixMatch: false,
+			},
+			{
+				agent: "codex",
+				sessionId: "x-2",
+				label: "pane-4",
+				cwd: fixture.a,
+				status: null,
+				name: "pane-4",
+				listed: null,
+				prefixMatch: false,
+			},
+			{
+				agent: "codex",
+				sessionId: "x-3",
+				label: null,
+				cwd: fixture.a,
+				status: null,
+				name: null,
+				listed: null,
+				prefixMatch: false,
+			},
+		]);
+		expect(json.codexNames).toEqual({
+			consulted: true,
+			homes: [join(fixture.home, ".codex-fake", "session_index.jsonl")],
+			failures: [{ home: gone, reason: expect.any(String) }],
+		});
+		expect(codes(json)).toEqual(["source-unavailable", "source-unavailable"]);
+	});
+
+	test("renders the text form", async () => {
+		const fixture = sessionsTree({
+			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
+		});
+		fixture.register([
+			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+		]);
+		const { env } = fixture.sessionsEnv(fixture.a, {
+			alive: [201],
+			agents: [
+				{
+					agent: "claude",
+					agent_session: { value: "c-1" },
+					name: "ws-1013",
+					cwd: fixture.a,
+					agent_status: "idle",
+				},
+				{
+					agent: "codex",
+					agent_session: { value: "x-1" },
+					cwd: join(fixture.a, "sub"),
+					agent_status: "working",
+				},
+			],
+		});
+		expect(await runTool(["query", "sessions"], {}, env)).toEqual({
+			text: [
+				"prefix: ws",
+				"listed ws-1013  CURRENT.md:7",
+				"listed ws-1012b (retired)  CURRENT.md:8",
+				"listed delegate-cdx-1 (codex)  CURRENT.md:9",
+				`claude ws-1013 pid 201 idle ${fixture.a}  (listed, prefix)`,
+				`herdr claude ws-1013 idle ${fixture.a}  (listed, prefix)`,
+				`herdr codex delegate-cdx-1 working ${join(fixture.a, "sub")}  (listed, no prefix)`,
+				"claude registry: 1 session",
+				"herdr: 2 agents",
+				"codex names: 1 index read",
+				"",
+			].join("\n"),
+			code: 0,
+			stream: "stdout",
+		});
+		const bare = await runTool(
+			["query", "sessions"],
+			{},
+			fixture.sessionsEnv(fixture.b).env,
+		);
+		expect(bare).toMatchObject({ code: 0, stream: "stdout" });
+		expect(bare.text).toContain("herdr: unavailable (not inside Herdr)\n");
+		expect(bare.text).toContain("codex names: not consulted\n");
+		expect(bare.notice).toContain("not inside Herdr");
+	});
+});
+
 const ARCHIVE = "## 2026-09-30\n- 09:00 september one\n- 10:00 september two\n";
 const JOURNAL = "## 2026-10-13\n- 10:00 started\n- 11:00 more\n- 12:00 last\n";
 
@@ -1585,6 +2057,74 @@ describe("tool query read contract", () => {
 				fn: "readFileSync",
 				path: join(fixture.a, ".shepherd", "journal.md"),
 			});
+		}
+	});
+
+	test("sessions reads CURRENT, its own config and the session sources", async () => {
+		const fixture = sessionsTree({
+			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
+		});
+		fixture.register([{ pid: 201, name: "ws-1013", cwd: fixture.a }]);
+		const claude = join(fixture.home, ".claude");
+		const codexHome = join(fixture.home, ".codex-fake");
+		const homeFile = join(fixture.home, ".codex-active");
+		const codexCalls = (call: FsCall) =>
+			(call.path === homeFile && call.fn === "readFileSync") ||
+			(call.path === fixture.home && call.fn === "readdirSync") ||
+			call.path.startsWith(`${codexHome}${sep}`);
+		const claudeAgent = {
+			agent: "claude",
+			agent_session: { value: "c-1" },
+			name: "ws-1013",
+			cwd: fixture.a,
+		};
+		const codexAgent = {
+			agent: "codex",
+			agent_session: { value: "x-1" },
+			cwd: fixture.b,
+		};
+		for (const [agents, codex] of [
+			[undefined, false],
+			[[claudeAgent], false],
+			[[claudeAgent, codexAgent], true],
+		] as const) {
+			const { env, calls: commands } = fixture.sessionsEnv(fixture.a, {
+				alive: [201],
+				...(agents ? { agents: [...agents] } : {}),
+			});
+			const { value, calls } = await spyFs(() => query(["sessions"], env));
+			expect(value.code).toBe(0);
+			expect(commands).toEqual(agents ? [["herdr", "agent", "list"]] : []);
+			const outside = calls.filter(
+				(call) =>
+					!(call.path === fixture.a && call.fn === "readdirSync") &&
+					!call.path.startsWith(`${claude}${sep}`) &&
+					!(codex && codexCalls(call)),
+			);
+			expectContract(
+				outside,
+				fixture,
+				fixture.a,
+				(path, call) =>
+					(path === "CURRENT.md" || path === "config.json") &&
+					(call.fn === "lstatSync" || call.fn === "readFileSync"),
+			);
+			expect(calls).toContainEqual({
+				fn: "readFileSync",
+				path: join(fixture.a, ".shepherd", "config.json"),
+			});
+			expect(calls).toContainEqual({
+				fn: "readFileSync",
+				path: join(claude, "sessions", "201.json"),
+			});
+			expect(calls.some((call) => codexCalls(call))).toBe(codex);
+			if (codex) {
+				expect(calls).toContainEqual({ fn: "readFileSync", path: homeFile });
+				expect(calls).toContainEqual({
+					fn: "readFileSync",
+					path: join(codexHome, "session_index.jsonl"),
+				});
+			}
 		}
 	});
 });

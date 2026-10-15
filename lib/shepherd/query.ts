@@ -24,12 +24,26 @@ import {
 	statusProjection,
 } from "./query-items";
 import { readRecord, readRecordDir, recordPath } from "./query-read";
-import type { ToolEnv } from "./sessions";
-import { STATUS_WORDS } from "./status-parse";
-import { journalChain } from "./text";
+import { sessionPrefixFor } from "./session-name";
+import {
+	type CodexIndex,
+	claudeRegistry,
+	codexIndex,
+	type HerdrResult,
+	herdrSessions,
+	type RegistryResult,
+	type ToolEnv,
+} from "./sessions";
+import { ownsDirectory } from "./status";
+import {
+	type ListedSession,
+	listedSessions,
+	STATUS_WORDS,
+} from "./status-parse";
+import { journalChain, journalFenceProblem } from "./text";
 import { type ToolResult, treeError, usage } from "./tool";
 import { enclosingWorkspace, type Workspace, WorkspaceTreeError } from "./tree";
-import { STATE_DIR } from "./workspace";
+import { findChildWorkspaces, STATE_DIR } from "./workspace";
 
 type ToolFlags = Readonly<Record<string, string | boolean>>;
 
@@ -396,6 +410,282 @@ function collectItem({ request, target }: QueryContext): Collected {
 	};
 }
 
+type WorkspaceConfig =
+	| { status: "ok"; config: Config | undefined }
+	| { status: "refused"; problems: QueryProblem[] };
+
+/** The workspace's own config.json, refused when symlinked or invalid. */
+function workspaceConfig(toolEnv: ToolEnv, target: Workspace): WorkspaceConfig {
+	const checked = recordPath(target.state, "config.json");
+	if (checked.status === "unsafe") {
+		return {
+			status: "refused",
+			problems: [unsafe(join(target.state, checked.file), checked.reason)],
+		};
+	}
+	if (checked.status === "missing") return { status: "ok", config: undefined };
+	const config = loadConfig({
+		home: toolEnv.home,
+		env: toolEnv.env,
+		workspaceChain: [target.dir],
+	});
+	const invalid = splitConfigProblems(config.problems, toolEnv).workspace;
+	if (invalid.length > 0) {
+		return {
+			status: "refused",
+			problems: invalid.map((entry) =>
+				problem("config-invalid", entry.file, `${entry.key}: ${entry.problem}`),
+			),
+		};
+	}
+	return { status: "ok", config };
+}
+
+type ListedEntry = ListedSession & { text: string };
+
+type SessionSources = {
+	claude: RegistryResult;
+	herdr: HerdrResult;
+	codex: CodexIndex | null;
+};
+
+/**
+ * Each session source read once, the Codex indexes only when Herdr lists a
+ * Codex agent; a caller filters one reading per workspace.
+ */
+async function readSessionSources(
+	toolEnv: ToolEnv,
+	config: Config,
+): Promise<SessionSources> {
+	const claude = claudeRegistry(toolEnv);
+	const herdr = await herdrSessions(toolEnv);
+	const codex =
+		herdr.available &&
+		(herdr.agents ?? []).some(({ agent }) => agent === "codex")
+			? codexIndex(toolEnv, config)
+			: null;
+	return { claude, herdr, codex };
+}
+
+function stringOrNull(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
+}
+
+function plural(count: number, word: string, many = `${word}s`): string {
+	return `${count} ${count === 1 ? word : many}`;
+}
+
+function listedEntries(text: string): ListedEntry[] {
+	const lines = text.split("\n");
+	return listedSessions(text).map(
+		({ name, line, retired, subagent, codex }) => ({
+			name,
+			line,
+			text: (lines[line - 1] ?? "").replace(/^\s*(?:[-*]\s+)?/, ""),
+			retired,
+			subagent,
+			codex,
+		}),
+	);
+}
+
+/** The sessions query for one workspace, from sources already read. */
+function sessionsFrom(
+	{ toolEnv, target }: QueryContext,
+	sources: SessionSources,
+): Collected {
+	const problems: QueryProblem[] = [];
+	let listed: ListedEntry[] = [];
+	const current = readRecord(target.state, "CURRENT.md");
+	if (current.status === "missing") {
+		problems.push(
+			problem("current-missing", "CURRENT.md", "CURRENT.md is missing"),
+		);
+	} else if (current.status === "unsafe") {
+		problems.push(unsafe(current.file, current.reason));
+	} else {
+		const fence = journalFenceProblem(current.text);
+		if (fence) {
+			problems.push(
+				problem("fence-unclosed", "CURRENT.md", fence.reason, fence.line),
+			);
+		}
+		listed = listedEntries(current.text);
+	}
+
+	const own = workspaceConfig(toolEnv, target);
+	const hasChildren = findChildWorkspaces(target.dir).length > 0;
+	let prefix: string | null = null;
+	if (own.status === "ok") {
+		prefix = sessionPrefixFor(
+			target.dir,
+			own.config?.sessionPrefix,
+			hasChildren,
+		);
+	} else {
+		problems.push(...own.problems);
+	}
+
+	const owned = (cwd: string | null) =>
+		cwd !== null && ownsDirectory(target.dir, hasChildren, cwd);
+	const listedAs = (name: string | null) => {
+		const matches = listed.filter((entry) => entry.name === name);
+		const entry = matches.find(({ retired }) => !retired) ?? matches[0];
+		return entry ? { line: entry.line, retired: entry.retired } : null;
+	};
+	const prefixMatch = (name: string | null) =>
+		prefix === null ? null : name?.startsWith(`${prefix}-`) === true;
+
+	const { claude, herdr, codex } = sources;
+	const registry = claude.available
+		? claude.sessions
+				.filter(({ cwd }) => owned(cwd))
+				.sort((left, right) => left.pid - right.pid)
+				.map(({ name, pid, file, cwd, status }) => ({
+					name,
+					pid,
+					file,
+					cwd,
+					status,
+					listed: listedAs(name),
+					prefixMatch: prefixMatch(name),
+				}))
+		: [];
+	const agents = herdr.available
+		? (herdr.agents ?? []).flatMap((agent) => {
+				const cwd = stringOrNull(agent.cwd);
+				if (!owned(cwd)) return [];
+				const kind = stringOrNull(agent.agent);
+				const sessionId = stringOrNull(agent.agent_session?.value);
+				const label = stringOrNull(agent.name);
+				const threadName =
+					kind === "codex" && sessionId !== null
+						? codex?.names.get(sessionId)
+						: undefined;
+				const name = threadName ?? label;
+				return [
+					{
+						agent: kind,
+						sessionId,
+						label,
+						cwd,
+						status: stringOrNull(agent.agent_status),
+						name,
+						listed: listedAs(name),
+						prefixMatch: prefixMatch(name),
+					},
+				];
+			})
+		: [];
+
+	if (!claude.available) {
+		problems.push(
+			problem(
+				"source-unavailable",
+				join(toolEnv.home, ".claude", "sessions"),
+				claude.reason,
+			),
+		);
+	}
+	if (!herdr.available) {
+		problems.push(
+			problem(
+				"source-unavailable",
+				"herdr agent list",
+				`Herdr unavailable: ${herdr.reason}`,
+			),
+		);
+	}
+	if (codex) {
+		for (const failure of codex.failures) {
+			problems.push(
+				problem(
+					"source-unavailable",
+					failure.home,
+					`Codex index unavailable: ${failure.reason}`,
+				),
+			);
+		}
+		if (codex.homes.length === 0 && codex.failures.length === 0) {
+			problems.push(
+				problem(
+					"source-unavailable",
+					"session_index.jsonl",
+					"no Codex home with a session index was found",
+				),
+			);
+		}
+	}
+
+	const marks = (name: string | null) => {
+		const entry = listedAs(name);
+		const match = prefixMatch(name);
+		return `(${[
+			entry === null
+				? "unlisted"
+				: entry.retired
+					? "listed, retired"
+					: "listed",
+			...(match === null ? [] : [match ? "prefix" : "no prefix"]),
+		].join(", ")})`;
+	};
+	const text = [
+		`prefix: ${prefix ?? "unknown"}`,
+		...listed.map((entry) => {
+			const flags = (["retired", "subagent", "codex"] as const).filter(
+				(flag) => entry[flag],
+			);
+			return `listed ${entry.name}${flags.length > 0 ? ` (${flags.join(", ")})` : ""}  CURRENT.md:${entry.line}`;
+		}),
+		...registry.map(
+			(entry) =>
+				`claude ${entry.name} pid ${entry.pid} ${entry.status ?? "?"} ${entry.cwd}  ${marks(entry.name)}`,
+		),
+		...agents.map(
+			(agent) =>
+				`herdr ${agent.agent ?? "?"} ${agent.name ?? "(unnamed)"} ${agent.status ?? "?"} ${agent.cwd}  ${marks(agent.name)}`,
+		),
+		claude.available
+			? `claude registry: ${plural(registry.length, "session")}`
+			: `claude registry: unavailable (${claude.reason})`,
+		herdr.available
+			? `herdr: ${plural(agents.length, "agent")}`
+			: `herdr: unavailable (${herdr.reason})`,
+		codex
+			? `codex names: ${plural(codex.homes.length, "index", "indexes")} read${codex.failures.length > 0 ? `, ${codex.failures.length} failed` : ""}`
+			: "codex names: not consulted",
+	];
+	return {
+		fields: {
+			prefix,
+			hasChildren,
+			listed,
+			claude: {
+				available: claude.available,
+				reason: claude.available ? null : claude.reason,
+				sessions: registry,
+			},
+			herdr: {
+				available: herdr.available,
+				reason: herdr.available ? null : herdr.reason,
+				agents,
+			},
+			codexNames: {
+				consulted: codex !== null,
+				homes: codex?.homes ?? [],
+				failures: codex?.failures ?? [],
+			},
+		},
+		problems,
+		text,
+	};
+}
+
+async function collectSessions(context: QueryContext): Promise<Collected> {
+	const sources = await readSessionSources(context.toolEnv, context.config);
+	return sessionsFrom(context, sources);
+}
+
 function collectAutonomy({
 	toolEnv,
 	target,
@@ -409,34 +699,18 @@ function collectAutonomy({
 		active: boolean;
 		expired: boolean | null;
 	} = { file, present: null, autonomy: null, active: false, expired: null };
-	const checked = recordPath(target.state, "config.json");
-	if (checked.status === "unsafe") {
+	const own = workspaceConfig(toolEnv, target);
+	if (own.status === "refused") {
+		const symlinked = own.problems.some(({ code }) => code === "record-unsafe");
 		return {
 			fields,
-			problems: [unsafe(join(target.state, checked.file), checked.reason)],
-			text: ["autonomy: off (config.json refused)"],
+			problems: own.problems,
+			text: [
+				`autonomy: off (config.json ${symlinked ? "refused" : "is invalid"})`,
+			],
 		};
 	}
-	const config =
-		checked.status === "ok"
-			? loadConfig({
-					home: toolEnv.home,
-					env: toolEnv.env,
-					workspaceChain: [target.dir],
-				})
-			: undefined;
-	const invalid = config
-		? splitConfigProblems(config.problems, toolEnv).workspace
-		: [];
-	if (invalid.length > 0) {
-		return {
-			fields,
-			problems: invalid.map((entry) =>
-				problem("config-invalid", entry.file, `${entry.key}: ${entry.problem}`),
-			),
-			text: ["autonomy: off (config.json is invalid)"],
-		};
-	}
+	const { config } = own;
 	const grant = config?.autonomy;
 	if (!grant) {
 		fields.present = false;
@@ -839,6 +1113,7 @@ const COLLECTORS: Partial<
 > = {
 	items: collectItems,
 	item: collectItem,
+	sessions: collectSessions,
 	autonomy: collectAutonomy,
 	journal: collectJournal,
 	checkpoint: collectCheckpoint,
