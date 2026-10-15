@@ -9,6 +9,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CommandResult } from "../agent-format/types";
+import {
+	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import type { ToolEnv } from "./sessions";
 
 export interface MakeTreeOptions {
@@ -108,3 +115,16 @@ Some line.
 - **CANDIDATE** tool friction, standing
 - **BLOCKED** no access
 `;
+
+/** A valid config with the defaults, and the given fields over them. */
+export function testConfig(overrides: Partial<Config> = {}): Config {
+	return {
+		marks: { ...DEFAULT_MARKS },
+		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
+		codex: {},
+		problems: [],
+		...overrides,
+	};
+}

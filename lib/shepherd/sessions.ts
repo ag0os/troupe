@@ -63,6 +63,8 @@ export type RegistryEntry = {
 	file: string;
 	cwd: string | null;
 	status: string | null;
+	/** How Claude Code named the session; "derived" names were made up, not given. */
+	nameSource: string | null;
 };
 
 export type RegistryResult =
@@ -102,6 +104,8 @@ export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 				file,
 				cwd: typeof entry.cwd === "string" ? entry.cwd : null,
 				status: typeof entry.status === "string" ? entry.status : null,
+				nameSource:
+					typeof entry.nameSource === "string" ? entry.nameSource : null,
 			});
 		} catch {
 			// A malformed entry or a dead process does not invalidate the registry.
