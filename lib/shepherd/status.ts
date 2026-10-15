@@ -100,7 +100,7 @@ export function liveReports(
 	tree: WorkspaceTree,
 	running: RunningSessionsResult,
 	home: string,
-	configs?: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
+	configs: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
 ): LiveReports {
 	const texts = new Map(
 		tree.workspaces.map((workspace) => [
@@ -167,7 +167,7 @@ export function liveReports(
 					hasChildren: children,
 					prefix: sessionPrefixFor(
 						workspace.dir,
-						configs?.get(workspace.dir)?.sessionPrefix,
+						configs.get(workspace.dir)?.sessionPrefix,
 						children,
 					),
 				},

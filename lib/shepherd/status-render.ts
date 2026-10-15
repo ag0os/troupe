@@ -46,7 +46,7 @@ export function statusReport(
 	tree: WorkspaceTree,
 	running: RunningSessionsResult,
 	home: string,
-	configs?: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
+	configs: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
 ): StatusReport {
 	const reports = liveReports(workspaces, tree, running, home, configs);
 	return {

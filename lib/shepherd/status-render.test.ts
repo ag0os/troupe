@@ -50,7 +50,7 @@ No NEXT is set
 	};
 
 	const text = renderStatus(
-		statusReport(tree.workspaces, tree, running, home),
+		statusReport(tree.workspaces, tree, running, home, new Map()),
 		home,
 	);
 
@@ -89,7 +89,9 @@ test("returns the status JSON shape", () => {
 		codex: unavailable,
 	};
 
-	const json = statusJson(statusReport(tree.workspaces, tree, running, home));
+	const json = statusJson(
+		statusReport(tree.workspaces, tree, running, home, new Map()),
+	);
 
 	expect(json).toEqual({
 		workspaces: [
@@ -156,6 +158,7 @@ test("aligns record freshness labels without changing the stored value", () => {
 			codex: unavailable,
 		},
 		home,
+		new Map(),
 	);
 	const live = base.workspaces[0]?.live;
 	if (!live) throw new Error("workspace report missing");

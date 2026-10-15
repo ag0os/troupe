@@ -1,13 +1,91 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace } from "./check";
+import { runCheckpoint } from "./checkpoint-command";
+import { captureState } from "./checkpoint-write";
 import { runningSessions } from "./sessions";
 import { runStart } from "./start";
 import { renderStatus, statusReport } from "./status-render";
-import { IDENTITY_SESSION, identityFixture } from "./test-support";
+import {
+	fakeToolEnv,
+	jsonCommandResult,
+	makeTree,
+	testConfig,
+} from "./test-support";
 import { runTool } from "./tool";
 import { discoverTree } from "./tree";
+
+const IDENTITY_SESSION = "0f3c2a71-5b2e-4a8e-9d55-3f1e2b9c7a10";
+
+/**
+ * A workspace in directory forge with prefix fg, so the prefix cannot come
+ * from the directory name, whose CURRENT lists `listed` live and
+ * names it on the Updated: line, certified by `writer`, while the Claude
+ * registry runs `running` in the workspace as pid 4242, the caller.
+ */
+async function identityFixture({
+	listed,
+	writer,
+	running,
+	extraRunning = [],
+	herdrAgents,
+}: {
+	listed: string;
+	writer: string;
+	running: string;
+	extraRunning?: { pid: number; name: string; cwd?: string }[];
+	herdrAgents?: (dir: string) => unknown[];
+}) {
+	const tree = makeTree({
+		"xdg/shepherd/config.json": "{}",
+		"forge/.shepherd/charter.md": "# forge\n",
+		"forge/.shepherd/config.json": '{"sessionPrefix":"fg"}',
+		"forge/.shepherd/journal.md": "## 2026-10-15\n- 09:00 started\n",
+		"forge/.shepherd/CURRENT.md": `# Current\nUpdated: 2026-10-15 09:00, ${listed}\n\n## Items\n- **NEXT** carry on\n\n## Live sessions\n- ${listed}: Claude Code, Shepherd\n`,
+	});
+	const dir = join(tree.root, "forge");
+	const home = join(tree.root, "home");
+	const workspace = { name: "forge", dir, state: join(dir, ".shepherd") };
+	const config = testConfig({ sessionPrefix: "fg" });
+	const quiet = fakeToolEnv({ home, cwd: dir });
+	const certified = await runCheckpoint(workspace, quiet, config, {
+		apply: true,
+		token: captureState(workspace, quiet).token,
+		session: writer,
+		json: false,
+	});
+	if (certified.code !== 0) throw new Error(certified.text);
+	const sessions = join(home, ".claude", "sessions");
+	mkdirSync(sessions, { recursive: true });
+	const entries = [
+		{ pid: 4242, name: running, sessionId: IDENTITY_SESSION, cwd: dir },
+		...extraRunning.map((entry) => ({
+			sessionId: `session-${entry.pid}`,
+			cwd: dir,
+			...entry,
+		})),
+	];
+	for (const entry of entries)
+		writeFileSync(
+			join(sessions, `${entry.pid}.json`),
+			JSON.stringify({ status: "idle", nameSource: "user", ...entry }),
+		);
+	const env = fakeToolEnv({
+		home,
+		cwd: dir,
+		alivePids: entries.map(({ pid }) => pid),
+		env: {
+			XDG_CONFIG_HOME: join(tree.root, "xdg"),
+			CLAUDE_PID: "4242",
+			CLAUDE_CODE_SESSION_ID: IDENTITY_SESSION,
+			...(herdrAgents ? { HERDR_ENV: "1" } : {}),
+		},
+		runCommand: async () =>
+			jsonCommandResult({ result: { agents: herdrAgents?.(dir) ?? [] } }),
+	});
+	return { ...tree, dir, home, workspace, config, env };
+}
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -21,9 +99,9 @@ async function fixture(args: Parameters<typeof identityFixture>[0]) {
 	return f;
 }
 const PREDECESSOR = {
-	listed: "forge-1014",
-	writer: "forge-1014",
-	running: "forge-1015",
+	listed: "fg-1014",
+	writer: "fg-1014",
+	running: "fg-1015",
 };
 
 function identityFindings(f: Fixture) {
@@ -63,8 +141,8 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 			"session-gone",
 		]);
 		for (const { message } of findings) {
-			expect(message).toContain("forge-1014");
-			expect(message).toContain("forge-1015");
+			expect(message).toContain("fg-1014");
+			expect(message).toContain("fg-1015");
 		}
 	});
 
@@ -75,8 +153,8 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 			today: f.env.now,
 		});
 		const check = start.text.slice(start.text.indexOf("## Check"));
-		expect(check).toContain("forge-1015 is running here but the record names");
-		expect(check).toContain("forge-1014 is listed live");
+		expect(check).toContain("fg-1015 is running here but the record names");
+		expect(check).toContain("fg-1014 is listed live");
 	});
 
 	test("status reports the same drift and gone names", async () => {
@@ -87,6 +165,7 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 			tree,
 			await runningSessions(f.env, f.config),
 			f.home,
+			new Map([[f.dir, f.config]]),
 		);
 		const live = report.workspaces[0]?.live;
 		const findings = identityFindings(f);
@@ -94,10 +173,10 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 		expect(live?.gone.map(({ name }) => name)).toEqual(
 			findings
 				.filter(({ code }) => code === "session-gone")
-				.map(() => "forge-1014"),
+				.map(() => "fg-1014"),
 		);
 		expect(renderStatus(report, f.home)).toContain(
-			"  DRIFT     forge-1015 is running here",
+			"  DRIFT     fg-1015 is running here",
 		);
 	});
 
@@ -108,13 +187,13 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 		expect(json.caller).toEqual({
 			harness: "claude",
 			id: IDENTITY_SESSION,
-			name: "forge-1015",
+			name: "fg-1015",
 			role: "shepherd",
 		});
 		expect(asFindings(json.drift)).toEqual(identityFindings(f));
 		const text = await runTool(["query", "sessions"], {}, f.env);
-		expect(text.text).toContain("caller: forge-1015 (shepherd)");
-		expect(text.text).toContain("drift session-gone forge-1014");
+		expect(text.text).toContain("caller: fg-1015 (shepherd)");
+		expect(text.text).toContain("drift session-gone fg-1014");
 	});
 
 	test("query sessions names a Herdr Claude agent from the registry first", async () => {
@@ -133,7 +212,7 @@ describe("acceptance 2: a predecessor listed while another Shepherd runs", () =>
 			(await runTool(["query", "sessions"], { json: true }, f.env)).text,
 		);
 		expect(json.herdr.agents.map(({ name }: { name: string }) => name)).toEqual(
-			["forge-1015"],
+			["fg-1015"],
 		);
 	});
 });
@@ -145,8 +224,8 @@ describe("acceptance 1: a handoff with no name typed", () => {
 		writeFileSync(
 			current,
 			readFileSync(current, "utf8").replace(
-				"- forge-1014: Claude Code, Shepherd",
-				"- forge-1015: Claude Code, Shepherd",
+				"- fg-1014: Claude Code, Shepherd",
+				"- fg-1015: Claude Code, Shepherd",
 			),
 		);
 		const dry = JSON.parse(
@@ -163,9 +242,9 @@ describe("acceptance 1: a handoff with no name typed", () => {
 			JSON.parse(
 				readFileSync(join(f.workspace.state, "checkpoint.json"), "utf8"),
 			).session,
-		).toBe("forge-1015");
+		).toBe("fg-1015");
 		expect(readFileSync(current, "utf8")).toContain(
-			"Updated: 2026-10-15 09:00, forge-1015",
+			"Updated: 2026-10-15 09:00, fg-1015",
 		);
 		expect(identityFindings(f)).toEqual([]);
 	});
