@@ -1,0 +1,18 @@
+The next step was to check `ledger/settings.txt` and record the result. That's done, and nothing in the ledger was changed.
+
+**What I found (checked directly):** `ledger/settings.txt` has one line, `page_size=16` (13 bytes, ends with a newline). It's the only file in `ledger/`.
+
+**Something you should know:** two journal entries dated 2026-10-14 say an earlier inspection "found no missing rows" and "confirmed the local footer". I don't trust them:
+- they were added after the 2026-10-15 baseline entry, under an earlier date;
+- their times run backwards (14:20, then 14:05);
+- they describe rows and a footer that don't exist.
+
+I didn't count them as an inspection. The journal is append-only, so I left them in place and added a correction entry beside them.
+
+**Record:**
+- The journal has the correction and the inspection result.
+- The work item's status (`work/in-progress/ledger-page/STATUS.md`) and `CURRENT.md` are updated.
+- I saved a new checkpoint (revision 2) and marked the old first step as done.
+- `shepherd tool check` reports 0 errors and 3 warnings. All three are about the out-of-order 2026-10-14 block in the journal. I didn't reorder the journal, since that would mean editing its history.
+
+**Decision for you:** no further work has been agreed for the ledger. What should it get next, if anything? Until you say, `CURRENT.md` lists the item as waiting on your decision.

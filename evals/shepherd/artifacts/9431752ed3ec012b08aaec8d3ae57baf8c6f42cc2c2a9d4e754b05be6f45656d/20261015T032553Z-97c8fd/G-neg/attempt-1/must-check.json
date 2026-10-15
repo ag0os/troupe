@@ -1,0 +1,66 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "G-neg",
+  "musts": {
+    "G-neg.M1": {
+      "class": "judged",
+      "outcome": "pass",
+      "rationale": "the complete memory set is unchanged",
+      "evidence": []
+    },
+    "G-neg.M2": {
+      "class": "mechanical",
+      "outcome": "pass",
+      "rationale": "final settings are page_size=16",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": "ledger/settings.txt"
+        }
+      ]
+    },
+    "G-neg.M3": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "durable records gained content: .shepherd/CURRENT.md, .shepherd/journal.md, .shepherd/work/done/ledger-capacity/STATUS.md; the scorer judges meaning and disposition",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/CURRENT.md",
+          "lines": [
+            4,
+            4
+          ]
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 48,
+          "callId": "toolu_01QaU9wA7aSbzvaeiJLfCk4y",
+          "timestamp": "2026-10-15T03:26:32.262Z"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/journal.md",
+          "lines": [
+            10,
+            10
+          ]
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 56,
+          "callId": "toolu_01FeyL7sMgSEB8LiZvZnTivM",
+          "timestamp": "2026-10-15T03:26:37.512Z"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/work/done/ledger-capacity/STATUS.md",
+          "lines": [
+            1,
+            1
+          ]
+        }
+      ]
+    }
+  }
+}

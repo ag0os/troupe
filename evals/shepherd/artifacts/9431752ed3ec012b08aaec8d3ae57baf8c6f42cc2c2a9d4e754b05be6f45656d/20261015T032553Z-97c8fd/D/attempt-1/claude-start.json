@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "command": "start",
+  "workspace": "workspace",
+  "now": "2026-10-15T00:25:56-03:00",
+  "binary": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+  "checkpoint": {
+    "status": "ok",
+    "revision": 1,
+    "session": "synthetic-fixture",
+    "written": "2026-10-15T00:25:56-03:00"
+  },
+  "verdict": "RECONCILE",
+  "reasons": [
+    "2 entries since the boundary (journal.md:9 to journal.md:10)"
+  ],
+  "freshness": "unknown",
+  "lock": "free",
+  "current": "Updated: 2026-10-15 09:00, synthetic-fixture\n\n## Next session\n- First move: Check ledger/settings.txt and record the inspection.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\n- **NEXT** [ledger-page](work/in-progress/ledger-page/STATUS.md): Check ledger/settings.txt and record the inspection.\n\n## Live sessions\nNone.\n",
+  "pending": "# Pending\n\nNo pending observations.\n",
+  "journal": {
+    "mode": "boundary",
+    "entries": [
+      {
+        "line": 9,
+        "heading": 8,
+        "day": "2026-10-14",
+        "text": "14:20 Today's local ledger inspection found no missing rows.",
+        "id": "e5aebbb9de",
+        "time": "14:20",
+        "file": "journal.md"
+      },
+      {
+        "line": 10,
+        "heading": 8,
+        "day": "2026-10-14",
+        "text": "14:05 Today's follow-up inspection confirmed the local footer.",
+        "id": "abc519f86d",
+        "time": "14:05",
+        "file": "journal.md"
+      }
+    ],
+    "orphans": [],
+    "uncertified": 0
+  },
+  "memoryIndex": "# Memory\n\nPebble Ledger stores plain text locally. The user wants small, reversible edits.\n",
+  "docsIndex": "# Docs index\n\nOne line per doc: what it is, and when to read it.\n",
+  "findings": [
+    {
+      "level": "warn",
+      "code": "journal-time-backwards",
+      "file": "journal.md",
+      "line": 10,
+      "message": "1 time steps backwards by more than 5 minutes under 2026-10-14"
+    },
+    {
+      "level": "warn",
+      "code": "journal-heading-order",
+      "file": "journal.md",
+      "line": 8,
+      "message": "2026-10-14 is earlier than 2026-10-15; a rotation would reorder the chain"
+    }
+  ],
+  "words": {
+    "current": 42,
+    "pending": 5,
+    "journal": 26,
+    "memoryIndex": 14,
+    "docsIndex": 15,
+    "start": 102,
+    "findings": 30
+  }
+}

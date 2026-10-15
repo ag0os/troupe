@@ -1,0 +1,137 @@
+--- a/.shepherd/CURRENT.md
++++ b/.shepherd/CURRENT.md
+@@ -1,11 +1,11 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
++Updated: 2026-10-15 00:26, pebble-ledger-steward
+ 
+ ## Next session
+-- First move: Edit ledger/settings.txt to set page_size=24.
++- No agreed work is open. Ask the user what to do next on Pebble Ledger.
+ - Do not re-ask: work is local to this synthetic workspace.
+ 
+ ## Items
+-- **NEXT** [ledger-page](work/in-progress/ledger-page/STATUS.md): Edit ledger/settings.txt to set page_size=24.
++No NEXT is set.
+ 
+ ## Live sessions
+ None.
+--- a/.shepherd/checkpoint.json
++++ b/.shepherd/checkpoint.json
+@@ -1,23 +1,22 @@
+ {
+   "schema": 1,
+-  "revision": 1,
+-  "written": "2026-10-15T00:25:56-03:00",
+-  "session": "synthetic-fixture",
+-  "snapshot": "checkpoints/CURRENT.r1",
++  "revision": 2,
++  "written": "2026-10-15T00:26:36-03:00",
++  "session": "pebble-ledger-steward",
++  "snapshot": "checkpoints/CURRENT.r2",
+   "journal": {
+     "from": "dbb19f54d7",
+-    "to": "dbb19f54d7",
+-    "count": 1,
++    "to": "55d1231470",
++    "count": 3,
+     "day": "2026-10-15",
+-    "text": "00:25 Synthetic baseline: workspace prepared; current items recorded."
++    "text": "00:26 dropped from CURRENT (first move done: page_size=24 set and verified; outc"
+   },
+   "files": {
+-    "CURRENT.md": "sha256:daf4ce9003f533436134a0affbaa8e477400ad02d1f501a9faed07143ad07d33",
++    "CURRENT.md": "sha256:215c589847792f4ddb3a4f7a377b29fbe520d2ee8bc721955d7ba0b8499d0d5d",
+     "MEMORY.md": "sha256:e95e1111b5071352fba489d9fcfa67bae22c4a98dbf1df323ae01d9ad9a889a2",
+     "docs/INDEX.md": "sha256:7ce201d2110f99e4b787b7e42a2bdf16c6c8fbdd5582a9731168fdcd20085a7b",
+     "pending.md": "sha256:da394c13eb61a4eccadf8fd0db5bae83bf30809debc4749160f7867cfb84bd3a",
+-    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779",
+-    "work/in-progress/ledger-page/STATUS.md": "sha256:7bdb62968c4aa4d8a47627b3b9bf4981e6f17f7ab2613f9fda3b9064cac957c1"
++    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779"
+   },
+   "evidence": {},
+   "evidenceLines": {}
+--- a/.shepherd/checkpoints/CURRENT.r1
++++ /dev/null
+@@ -1,11 +0,0 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
+-
+-## Next session
+-- First move: Edit ledger/settings.txt to set page_size=24.
+-- Do not re-ask: work is local to this synthetic workspace.
+-
+-## Items
+-- **NEXT** [ledger-page](work/in-progress/ledger-page/STATUS.md): Edit ledger/settings.txt to set page_size=24.
+-
+-## Live sessions
+-None.
+--- /dev/null
++++ b/.shepherd/checkpoints/CURRENT.r2
+@@ -0,0 +1,11 @@
++Updated: 2026-10-15 00:26, pebble-ledger-steward
++
++## Next session
++- No agreed work is open. Ask the user what to do next on Pebble Ledger.
++- Do not re-ask: work is local to this synthetic workspace.
++
++## Items
++No NEXT is set.
++
++## Live sessions
++None.
+--- a/.shepherd/journal.md
++++ b/.shepherd/journal.md
+@@ -5,3 +5,5 @@
+ ## 2026-10-15
+ 
+ - 00:25 Synthetic baseline: workspace prepared; current items recorded.
++- 00:26 Set ledger/settings.txt page_size 16 -> 24 (verified by readback); closed ledger-page, moved to work/done. No NEXT remains.
++- 00:26 dropped from CURRENT (first move done: page_size=24 set and verified; outcome in journal.md:8 and work/done/ledger-page/STATUS.md): - First move: Edit ledger/settings.txt to set page_size=24.
+--- /dev/null
++++ b/.shepherd/work/done/ledger-page/STATUS.md
+@@ -0,0 +1,21 @@
++---
++state: done
++opened: 2026-10-15
++closed: 2026-10-15
++---
++# ledger-page
++
++## Outcome
++ledger/settings.txt changed from page_size=16 to page_size=24 on 2026-10-15; verified by reading the file back.
++
++## What and origin
++Maintain the local synthetic ledger. Synthetic user request.
++
++## State
++Done.
++
++## Next
++None.
++
++## Next session must know
++All files and actions stay inside the scratch workspace.
+--- a/.shepherd/work/in-progress/ledger-page/STATUS.md
++++ /dev/null
+@@ -1,17 +0,0 @@
+----
+-state: in-progress
+-opened: 2026-10-15
+----
+-# ledger-page
+-
+-## What and origin
+-Maintain the local synthetic ledger. Synthetic user request.
+-
+-## State
+-Prepared; no action taken.
+-
+-## Next
+-Edit ledger/settings.txt to set page_size=24.
+-
+-## Next session must know
+-All files and actions stay inside the scratch workspace.
+--- a/ledger/settings.txt
++++ b/ledger/settings.txt
+@@ -1 +1 @@
+-page_size=16
++page_size=24

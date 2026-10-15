@@ -1,0 +1,8 @@
+I accepted the reviewer's report on the preview helper and closed the item. There are no decisions for you, and nothing is queued next.
+
+- **The report:** its main finding ("the preview format is readable") says very little. The part that matters is a side note: running `tools/preview.py` overwrites `ledger/unique-notes.txt`, which holds the only copy of the margin notes. I read the code and that's true: `tools/preview.py:2` replaces the file's contents every time it runs.
+- **Where the warning lives now:** I wrote it up in `.shepherd/docs/preview-helper.md`, with the steps to back up the notes first. Before running the helper, read that doc; the docs index and the handoff notes for the next session both point to it.
+- **What I didn't do:** I didn't run the helper or change any project files. The margin notes are still intact. I also didn't make a backup copy, since nothing needs the helper right now; say if you want one anyway.
+- **Records:** the item is moved to `.shepherd/work/done/ledger-review/`, with the outcome in its `STATUS.md`. The journal and handoff notes are updated, and the workspace check passes with no warnings.
+
+What should I pick up next?

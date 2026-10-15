@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "command": "start",
+  "workspace": "workspace",
+  "now": "2026-10-15T00:25:56-03:00",
+  "binary": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+  "checkpoint": {
+    "status": "ok",
+    "revision": 1,
+    "session": "synthetic-fixture",
+    "written": "2026-10-15T00:25:56-03:00"
+  },
+  "verdict": "CLEAN",
+  "reasons": [],
+  "freshness": "unknown",
+  "lock": "free",
+  "current": "Updated: 2026-10-15 09:00, synthetic-fixture\n\n## Next session\n- First move: Edit ledger/settings.txt to set page_size=24.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\n- **NEXT** [ledger-page](work/in-progress/ledger-page/STATUS.md): Edit ledger/settings.txt to set page_size=24.\n\n## Live sessions\nNone.\n",
+  "pending": "# Pending\n\nNo pending observations.\n",
+  "journal": {
+    "mode": "boundary",
+    "entries": [],
+    "orphans": [],
+    "uncertified": 0
+  },
+  "memoryIndex": "# Memory\n\nPebble Ledger stores plain text locally. The user wants small, reversible edits.\n",
+  "docsIndex": "# Docs index\n\nOne line per doc: what it is, and when to read it.\n",
+  "findings": [],
+  "words": {
+    "current": 40,
+    "pending": 5,
+    "journal": 8,
+    "memoryIndex": 14,
+    "docsIndex": 15,
+    "start": 82,
+    "findings": 1
+  }
+}

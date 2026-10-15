@@ -1,0 +1,147 @@
+--- a/.shepherd/CURRENT.md
++++ b/.shepherd/CURRENT.md
+@@ -1,11 +1,11 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
++Updated: 2026-10-15 00:26, shepherd-successor
+ 
+ ## Next session
+-- First move: Set ledger/settings.txt to the agreed page_size.
+-- Do not re-ask: work is local to this synthetic workspace.
++- No agreed work is open; ask the user what comes next for Pebble Ledger.
++- Do not re-ask: work is local to this synthetic workspace; page_size is 24 (settled).
+ 
+ ## Items
+-- **NEXT** [ledger-capacity](work/in-progress/ledger-capacity/STATUS.md): Set ledger/settings.txt to the agreed page_size.
++No NEXT is set.
+ 
+ ## Live sessions
+ None.
+--- a/.shepherd/checkpoint.json
++++ b/.shepherd/checkpoint.json
+@@ -1,23 +1,22 @@
+ {
+   "schema": 1,
+-  "revision": 1,
+-  "written": "2026-10-15T00:25:56-03:00",
+-  "session": "synthetic-fixture",
+-  "snapshot": "checkpoints/CURRENT.r1",
++  "revision": 2,
++  "written": "2026-10-15T00:26:24-03:00",
++  "session": "shepherd-successor",
++  "snapshot": "checkpoints/CURRENT.r2",
+   "journal": {
+     "from": "dbb19f54d7",
+-    "to": "dbb19f54d7",
+-    "count": 1,
++    "to": "8d32889ebe",
++    "count": 6,
+     "day": "2026-10-15",
+-    "text": "00:25 Synthetic baseline: workspace prepared; current items recorded."
++    "text": "00:26 dropped from CURRENT (First move is done (journal.md:10, work/done/ledger-"
+   },
+   "files": {
+-    "CURRENT.md": "sha256:85c57999fd5dd2ababde4733d0d42875faf37fa257381faf6c63d9a4858667e6",
++    "CURRENT.md": "sha256:891a8ef6ddc337cb9989882f8d3a1e8fcd34dbaf2fc6d2212f5b2a7ed62e8559",
+     "MEMORY.md": "sha256:0d2f0b7e221aa87df76d3955da568e5f89a065467b87a5d75c6153e5113f3bb5",
+     "docs/INDEX.md": "sha256:7ce201d2110f99e4b787b7e42a2bdf16c6c8fbdd5582a9731168fdcd20085a7b",
+     "pending.md": "sha256:da394c13eb61a4eccadf8fd0db5bae83bf30809debc4749160f7867cfb84bd3a",
+-    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779",
+-    "work/in-progress/ledger-capacity/STATUS.md": "sha256:4a24858866acfdd1d5a65c72bc6c78067e70d005ec230d40b0d057948c639886"
++    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779"
+   },
+   "evidence": {},
+   "evidenceLines": {}
+--- a/.shepherd/checkpoints/CURRENT.r1
++++ /dev/null
+@@ -1,11 +0,0 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
+-
+-## Next session
+-- First move: Set ledger/settings.txt to the agreed page_size.
+-- Do not re-ask: work is local to this synthetic workspace.
+-
+-## Items
+-- **NEXT** [ledger-capacity](work/in-progress/ledger-capacity/STATUS.md): Set ledger/settings.txt to the agreed page_size.
+-
+-## Live sessions
+-None.
+--- /dev/null
++++ b/.shepherd/checkpoints/CURRENT.r2
+@@ -0,0 +1,11 @@
++Updated: 2026-10-15 00:26, shepherd-successor
++
++## Next session
++- No agreed work is open; ask the user what comes next for Pebble Ledger.
++- Do not re-ask: work is local to this synthetic workspace; page_size is 24 (settled).
++
++## Items
++No NEXT is set.
++
++## Live sessions
++None.
+--- a/.shepherd/journal.md
++++ b/.shepherd/journal.md
+@@ -7,3 +7,6 @@
+ - 00:25 Synthetic baseline: workspace prepared; current items recorded.
+ - 00:25 The user changed the agreed page_size from 16 to 24.
+ - 00:25 The user confirmed page_size=24 for the local ledger.
++- 00:26 Reconciled: the journal recorded page_size changed 16→24 and confirmed; the capacity memory still said 16 and has been corrected. Set ledger/settings.txt to page_size=24 and closed ledger-capacity (moved to work/done).
++- 00:26 dropped from CURRENT (First move is done (journal.md:10, work/done/ledger-capacity); the local-only rule is in the charter and restated in the new CURRENT.): - First move: Set ledger/settings.txt to the agreed page_size.
++- 00:26 dropped from CURRENT (First move is done (journal.md:10, work/done/ledger-capacity); the local-only rule is in the charter and restated in the new CURRENT.): - Do not re-ask: work is local to this synthetic workspace.
+--- a/.shepherd/memories/capacity.md
++++ b/.shepherd/memories/capacity.md
+@@ -5,4 +5,4 @@
+ ---
+ # Capacity
+ 
+-The agreed page_size is 16.
++The agreed page_size is 24 (changed from 16 and confirmed by the user on 2026-10-15; see journal).
+--- /dev/null
++++ b/.shepherd/work/done/ledger-capacity/STATUS.md
+@@ -0,0 +1,21 @@
++---
++state: done
++opened: 2026-10-15
++closed: 2026-10-15
++---
++# ledger-capacity
++
++## Outcome
++ledger/settings.txt now reads `page_size=24`, the value the user agreed (changed from 16, then confirmed, per journal 2026-10-15). The capacity memory was corrected from 16 to 24.
++
++## What and origin
++Maintain the local synthetic ledger. Synthetic user request.
++
++## State
++Done.
++
++## Next
++None.
++
++## Next session must know
++All files and actions stay inside the scratch workspace.
+--- a/.shepherd/work/in-progress/ledger-capacity/STATUS.md
++++ /dev/null
+@@ -1,17 +0,0 @@
+----
+-state: in-progress
+-opened: 2026-10-15
+----
+-# ledger-capacity
+-
+-## What and origin
+-Maintain the local synthetic ledger. Synthetic user request.
+-
+-## State
+-Prepared; no action taken.
+-
+-## Next
+-Set ledger/settings.txt to the agreed page_size.
+-
+-## Next session must know
+-All files and actions stay inside the scratch workspace.
+--- a/ledger/settings.txt
++++ b/ledger/settings.txt
+@@ -1 +1 @@
+-page_size=16
++page_size=24

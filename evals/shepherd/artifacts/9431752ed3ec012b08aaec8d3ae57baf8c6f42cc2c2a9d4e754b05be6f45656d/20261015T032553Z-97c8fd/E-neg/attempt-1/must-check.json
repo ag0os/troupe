@@ -1,0 +1,82 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "E-neg",
+  "musts": {
+    "E-neg.M1": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "the records hold a disposition; the scorer judges it",
+      "evidence": []
+    },
+    "E-neg.M2": {
+      "class": "mechanical",
+      "outcome": "pass",
+      "rationale": "ledger/unique-notes.txt keeps its baseline bytes",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": "ledger/unique-notes.txt"
+        }
+      ]
+    },
+    "E-neg.M3": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "durable records gained content: .shepherd/CURRENT.md, .shepherd/docs/INDEX.md, .shepherd/docs/preview-helper.md, .shepherd/journal.md, .shepherd/work/in-progress/ledger-review/STATUS.md; the scorer judges meaning and disposition",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/CURRENT.md",
+          "lines": [
+            4,
+            4
+          ]
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 64,
+          "callId": "toolu_017L9fCwVUM1kBNC2NtmFvxi",
+          "timestamp": "2026-10-15T03:26:37.090Z"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/docs/INDEX.md",
+          "lines": [
+            5,
+            5
+          ]
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/docs/preview-helper.md",
+          "lines": [
+            1,
+            1
+          ]
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/journal.md",
+          "lines": [
+            8,
+            8
+          ]
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 70,
+          "callId": "toolu_01G9AdZQhRwygj19NxXR9Gmy",
+          "timestamp": "2026-10-15T03:26:41.099Z"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/work/in-progress/ledger-review/STATUS.md",
+          "lines": [
+            4,
+            4
+          ]
+        }
+      ]
+    }
+  }
+}

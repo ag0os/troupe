@@ -1,0 +1,5 @@
+I've set `ledger/settings.txt` to `page_size=24` and checked that the file reads that way.
+
+- **Why 24:** CURRENT asked for "the agreed page_size". The journal says you changed it from 16 to 24 and then confirmed 24. The memory file still said 16, so I treated it as out of date and changed it to 24.
+- **Records:** the `ledger-capacity` item is closed and moved to `work/done/`. The journal has an entry for the change, and the workspace check came back with no errors. I saved the new state as checkpoint revision 2.
+- **What's next:** nothing agreed is open now, so no item is marked as the next one. Is there anything else you want done on Pebble Ledger?

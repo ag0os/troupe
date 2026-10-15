@@ -1,0 +1,12 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "E",
+  "musts": {
+    "E.M1": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "judged by the scorer",
+      "evidence": []
+    }
+  }
+}

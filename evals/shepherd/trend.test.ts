@@ -270,7 +270,13 @@ describe("the --trend flag", () => {
 					).stdout,
 				)
 				.split("\0")
-				.filter((path) => path && existsSync(join(REPO_ROOT, path)));
+				.filter(
+					(path) =>
+						path &&
+						!path.startsWith("evals/shepherd/results/") &&
+						!path.startsWith("evals/shepherd/artifacts/") &&
+						existsSync(join(REPO_ROOT, path)),
+				);
 			for (const path of listed) {
 				mkdirSync(dirname(join(copy, path)), { recursive: true });
 				copyFileSync(join(REPO_ROOT, path), join(copy, path));
