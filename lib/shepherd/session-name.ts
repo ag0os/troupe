@@ -75,10 +75,9 @@ function twoDigits(value: number): string {
 	return String(value).padStart(2, "0");
 }
 
-/** The unsuffixed conventional name for a launch directory and local date. */
-export function defaultSessionName(
+/** The prefix of the conventional session name for a launch directory. */
+export function sessionPrefixFor(
 	cwd: string,
-	now: Date,
 	sessionPrefix: string | undefined,
 	hasChildren: boolean,
 ): string {
@@ -90,6 +89,17 @@ export function defaultSessionName(
 	if (!prefix) prefix = "ws";
 	if (!/^[A-Za-z]/.test(prefix)) prefix = `ws-${prefix}`;
 	if (/shepherd/i.test(prefix)) prefix = hasChildren ? "root" : "ws";
+	return prefix;
+}
+
+/** The unsuffixed conventional name for a launch directory and local date. */
+export function defaultSessionName(
+	cwd: string,
+	now: Date,
+	sessionPrefix: string | undefined,
+	hasChildren: boolean,
+): string {
+	const prefix = sessionPrefixFor(cwd, sessionPrefix, hasChildren);
 	return `${prefix}-${twoDigits(now.getMonth() + 1)}${twoDigits(now.getDate())}`;
 }
 

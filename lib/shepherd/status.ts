@@ -41,6 +41,18 @@ function within(parent: string, child: string): boolean {
 	);
 }
 
+/**
+ * Whether a workspace owns a session's directory: exactly its own directory
+ * when child workspaces sit beneath it, anything within it otherwise.
+ */
+export function ownsDirectory(
+	dir: string,
+	hasChildren: boolean,
+	cwd: string,
+): boolean {
+	return hasChildren ? cwd === dir : within(dir, cwd);
+}
+
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -100,10 +112,8 @@ export function liveReports(
 			)
 			.map((workspace) => workspace.name),
 	);
-	const ownsDirectory = (workspace: Workspace, cwd: string) =>
-		hasChildren.has(workspace.name)
-			? cwd === workspace.dir
-			: within(workspace.dir, cwd);
+	const owns = (workspace: Workspace, cwd: string) =>
+		ownsDirectory(workspace.dir, hasChildren.has(workspace.name), cwd);
 	const references = tree.workspaces
 		.filter(
 			(workspace) =>
@@ -115,7 +125,7 @@ export function liveReports(
 		}));
 	const owner = (cwd: string): Workspace | undefined => {
 		const direct = tree.workspaces
-			.filter((workspace) => ownsDirectory(workspace, cwd))
+			.filter((workspace) => owns(workspace, cwd))
 			.sort((left, right) => right.dir.length - left.dir.length)[0];
 		if (direct) return direct;
 		let best: { workspace: Workspace; length: number } | undefined;
@@ -141,7 +151,7 @@ export function liveReports(
 		const checked = active.filter((session) => !unavailableReason(session));
 		byWorkspace.set(workspace.name, {
 			shepherd: running.sessions.filter((session) =>
-				ownsDirectory(workspace, session.cwd),
+				owns(workspace, session.cwd),
 			),
 			ok: checked
 				.filter((session) => runningByName.has(session.name))

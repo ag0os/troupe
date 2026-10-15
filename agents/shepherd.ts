@@ -179,6 +179,8 @@ export function prepare(
 		"token",
 		"session",
 		"accept-dropped",
+		"since",
+		"max",
 	]) {
 		const value = ctx.flags[name];
 		if (value !== undefined && value !== false) {
@@ -192,14 +194,18 @@ export function prepare(
 							: name === "master"
 								? "tool init"
 								: name === "json"
-									? "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock"
+									? "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query"
 									: name === "today"
 										? "tool check and tool archive"
 										: name === "apply"
 											? "tool archive and tool checkpoint"
 											: name === "recursive"
 												? "tool archive"
-												: "tool check";
+												: name === "since" || name === "max"
+													? "tool query journal"
+													: name === "all"
+														? "tool check and tool query"
+														: "tool check";
 			return {
 				exit: {
 					message: `shepherd: --${name} applies only to ${owner}\n`,

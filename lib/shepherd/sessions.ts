@@ -40,7 +40,7 @@ type HerdrAgent = {
 	name?: string;
 };
 
-type HerdrResult = AdapterResult & { agents?: HerdrAgent[] };
+export type HerdrResult = AdapterResult & { agents?: HerdrAgent[] };
 
 function text(file: string): string {
 	return readFileSync(file, "utf8");
@@ -56,14 +56,27 @@ function expandHome(path: string, home: string): string {
 	return path;
 }
 
-/** Live Claude sessions from the harness registry. */
-export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
+export type RegistryEntry = {
+	name: string | null;
+	sessionId: string | null;
+	pid: number;
+	file: string;
+	cwd: string | null;
+	status: string | null;
+};
+
+export type RegistryResult =
+	| { available: true; sessions: RegistryEntry[] }
+	| { available: false; reason: string };
+
+/** Entries of the Claude session registry whose process is alive, named or not. */
+export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 	const dir = join(toolEnv.home, ".claude", "sessions");
 	if (!existsSync(dir)) {
 		return { available: false, reason: "Claude session registry not found" };
 	}
 
-	const sessions: Running[] = [];
+	const sessions: RegistryEntry[] = [];
 	let files: string[];
 	try {
 		files = readdirSync(dir);
@@ -81,20 +94,34 @@ export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
 				unknown
 			>;
 			const pid = Number(entry.pid);
-			if (!entry.name || !Number.isFinite(pid) || !toolEnv.pidAlive(pid)) {
-				continue;
-			}
+			if (!Number.isFinite(pid) || !toolEnv.pidAlive(pid)) continue;
 			sessions.push({
-				name: String(entry.name),
-				cwd: typeof entry.cwd === "string" ? entry.cwd : "",
-				status: typeof entry.status === "string" ? entry.status : "?",
-				harness: "claude",
+				name: entry.name ? String(entry.name) : null,
+				sessionId: typeof entry.sessionId === "string" ? entry.sessionId : null,
+				pid,
+				file,
+				cwd: typeof entry.cwd === "string" ? entry.cwd : null,
+				status: typeof entry.status === "string" ? entry.status : null,
 			});
 		} catch {
 			// A malformed entry or a dead process does not invalidate the registry.
 		}
 	}
 	return { available: true, sessions };
+}
+
+/** Live Claude sessions from the harness registry. */
+export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
+	const registry = claudeRegistry(toolEnv);
+	if (!registry.available) return registry;
+	return {
+		available: true,
+		sessions: registry.sessions.flatMap(({ name, cwd, status }) =>
+			name === null
+				? []
+				: [{ name, cwd: cwd ?? "", status: status ?? "?", harness: "claude" }],
+		),
+	};
 }
 
 /** Newest Claude transcript modification time for sessions launched in cwd. */
@@ -206,24 +233,45 @@ export async function herdrSessions(
 	}
 }
 
+export type CodexFailure = { home: string; reason: string };
+
+export type CodexIndex = {
+	names: Map<string, string>;
+	homes: string[];
+	failures: CodexFailure[];
+};
+
 function configuredCodexHome(
 	toolEnv: ToolEnv,
 	config: Config,
+	failures: CodexFailure[],
 ): string | undefined {
 	if (config.codex.home) return expandHome(config.codex.home, toolEnv.home);
 	if (!config.codex.homeFile) return undefined;
+	const homeFile = expandHome(config.codex.homeFile, toolEnv.home);
 	try {
-		const line = text(expandHome(config.codex.homeFile, toolEnv.home))
+		const line = text(homeFile)
 			.split("\n")
 			.find((candidate) => candidate.trim());
-		if (!line) return undefined;
+		if (!line) {
+			failures.push({ home: homeFile, reason: "codex.homeFile names no home" });
+			return undefined;
+		}
 		return expandHome(line.trim(), toolEnv.home);
-	} catch {
+	} catch (error) {
+		failures.push({
+			home: homeFile,
+			reason: `codex.homeFile could not be read: ${reason(error)}`,
+		});
 		return undefined;
 	}
 }
 
-function codexHomes(toolEnv: ToolEnv, config: Config): string[] {
+function codexHomes(
+	toolEnv: ToolEnv,
+	config: Config,
+	failures: CodexFailure[],
+): string[] {
 	const homes = new Set<string>();
 	const add = (path: string | undefined) => {
 		if (!path) return;
@@ -231,7 +279,7 @@ function codexHomes(toolEnv: ToolEnv, config: Config): string[] {
 		if (isAbsolute(expanded)) homes.add(expanded);
 	};
 	add(toolEnv.env.CODEX_HOME);
-	add(configuredCodexHome(toolEnv, config));
+	add(configuredCodexHome(toolEnv, config, failures));
 	try {
 		for (const entry of readdirSync(toolEnv.home, { withFileTypes: true })) {
 			if (!entry.isDirectory() || !entry.name.startsWith(".codex")) continue;
@@ -244,32 +292,48 @@ function codexHomes(toolEnv: ToolEnv, config: Config): string[] {
 	return [...homes];
 }
 
+/**
+ * Codex thread names from every eligible home, with the last rename winning,
+ * beside the index files read and the homes that could not be read.
+ */
+export function codexIndex(toolEnv: ToolEnv, config: Config): CodexIndex {
+	const names = new Map<string, string>();
+	const homes: string[] = [];
+	const failures: CodexFailure[] = [];
+	for (const home of codexHomes(toolEnv, config, failures)) {
+		const file = join(home, "session_index.jsonl");
+		let content: string;
+		try {
+			content = text(file);
+		} catch (error) {
+			// One unreadable home does not hide indexes from the other homes.
+			failures.push({ home, reason: reason(error) });
+			continue;
+		}
+		homes.push(file);
+		for (const line of content.split("\n")) {
+			try {
+				const entry = JSON.parse(line) as Record<string, unknown>;
+				if (
+					typeof entry.id === "string" &&
+					typeof entry.thread_name === "string"
+				) {
+					names.set(entry.id, entry.thread_name);
+				}
+			} catch {
+				// Blank and partial trailing lines are normal for an active index.
+			}
+		}
+	}
+	return { names, homes, failures };
+}
+
 /** Codex thread names from every eligible home, with the last rename winning. */
 export function codexThreadNames(
 	toolEnv: ToolEnv,
 	config: Config,
 ): Map<string, string> {
-	const names = new Map<string, string>();
-	for (const home of codexHomes(toolEnv, config)) {
-		try {
-			for (const line of text(join(home, "session_index.jsonl")).split("\n")) {
-				try {
-					const entry = JSON.parse(line) as Record<string, unknown>;
-					if (
-						typeof entry.id === "string" &&
-						typeof entry.thread_name === "string"
-					) {
-						names.set(entry.id, entry.thread_name);
-					}
-				} catch {
-					// Blank and partial trailing lines are normal for an active index.
-				}
-			}
-		} catch {
-			// One unreadable home does not hide indexes from the other homes.
-		}
-	}
-	return names;
+	return codexIndex(toolEnv, config).names;
 }
 
 function codexSessions(

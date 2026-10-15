@@ -47,7 +47,43 @@ describe("runTool usage and validation", () => {
 			expect(output.text).toContain("shepherd tool guide [<name>]");
 			expect(output.text).toContain("shepherd tool init [--master] [--json]");
 			expect(output.text).toContain("shepherd tool doctor [--json]");
+			for (const query of [
+				"items",
+				"item",
+				"sessions",
+				"autonomy",
+				"journal",
+				"checkpoint",
+			]) {
+				expect(output.text).toContain(`shepherd tool query ${query}`);
+			}
 		}
+	});
+
+	test("refuses the query journal flags on other commands", async () => {
+		const { env } = fixture();
+		for (const [command, name, value] of [
+			["check", "since", "2026-10-01"],
+			["start", "max", "5"],
+		] as const) {
+			expect(await runTool([command], { [name]: value }, env)).toEqual({
+				text: `shepherd: --${name} applies only to tool query journal\n`,
+				code: 2,
+				stream: "stderr",
+			});
+		}
+	});
+
+	test("keeps --all for check and names both of its owners", async () => {
+		const { env } = fixture();
+		const check = await runTool(["check"], { all: true }, env);
+		expect(check.code).not.toBe(2);
+		expect(check.text).toContain("2 workspaces");
+		expect(await runTool(["start"], { all: true }, env)).toEqual({
+			text: "shepherd: --all applies only to tool check and tool query\n",
+			code: 2,
+			stream: "stderr",
+		});
 	});
 
 	test("rejects command-specific flags and conflicting check modes", async () => {
@@ -154,10 +190,10 @@ describe("runTool guide", () => {
 			[
 				"json",
 				true,
-				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock",
+				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query",
 			],
 			["today", "2026-13-40", "tool check and tool archive"],
-			["all", true, "tool check"],
+			["all", true, "tool check and tool query"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
 			["apply", true, "tool archive and tool checkpoint"],
@@ -363,7 +399,7 @@ describe("runTool init", () => {
 		});
 		for (const [name, value, owner] of [
 			["today", "invalid", "tool check and tool archive"],
-			["all", true, "tool check"],
+			["all", true, "tool check and tool query"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
 			["apply", true, "tool archive and tool checkpoint"],

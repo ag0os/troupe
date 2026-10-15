@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { localDate } from "./dates";
 
 export const DEFAULT_MARKS = {
 	opening: 12_000,
@@ -49,6 +50,15 @@ export type CodexConfig = {
 	effort?: string;
 };
 
+export type Autonomy = {
+	enabled: boolean;
+	until?: string;
+};
+
+export type AutonomyUntil =
+	| { kind: "date"; day: string }
+	| { kind: "instant"; time: number };
+
 export type ConfigProblem = {
 	file: string;
 	key: string;
@@ -61,6 +71,7 @@ export type Config = {
 	start: Start;
 	handoffCeilings: Record<string, number>;
 	sessionPrefix?: string;
+	autonomy?: Autonomy;
 	codex: CodexConfig;
 	problems: ConfigProblem[];
 };
@@ -107,6 +118,51 @@ const handoffCeilingsSchema = z.record(
 	z.string().min(1),
 	z.number().positive().max(100),
 );
+/** A bare local date, or an instant with `Z` or an offset; undefined otherwise. */
+export function autonomyUntil(text: string): AutonomyUntil | undefined {
+	if (!Number.isNaN(localDate(text).getTime()))
+		return { kind: "date", day: text };
+	const match = text.match(
+		/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|([+-])(\d{2}):(\d{2}))$/,
+	);
+	if (!match || Number.isNaN(localDate(match[1] as string).getTime())) {
+		return undefined;
+	}
+	const [hours, minutes, seconds] = [match[2], match[3], match[4] ?? "00"].map(
+		Number,
+	) as [number, number, number];
+	if (hours > 23 || minutes > 59 || seconds > 59) return undefined;
+	let offset = 0;
+	if (match[5] !== "Z") {
+		const offsetHours = Number(match[7]);
+		const offsetMinutes = Number(match[8]);
+		if (offsetMinutes > 59 || offsetHours * 60 + offsetMinutes > 840) {
+			return undefined;
+		}
+		offset =
+			(match[6] === "-" ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
+	}
+	const [year, month, day] = (match[1] as string).split("-").map(Number) as [
+		number,
+		number,
+		number,
+	];
+	return {
+		kind: "instant",
+		time: Date.UTC(year, month - 1, day, hours, minutes, seconds) - offset,
+	};
+}
+
+const autonomySchema = z.strictObject({
+	enabled: z.boolean(),
+	until: z
+		.string()
+		.refine((until) => autonomyUntil(until) !== undefined, {
+			message:
+				"must be a local date YYYY-MM-DD or an instant YYYY-MM-DDTHH:MM[:SS] with Z or an offset",
+		})
+		.optional(),
+});
 const userSchema = z.strictObject({
 	marks: marksSchema.optional(),
 	windows: windowsSchema.optional(),
@@ -126,6 +182,7 @@ const workspaceSchema = z.strictObject({
 			"must start with a letter and contain only letters, digits, and hyphens",
 		)
 		.optional(),
+	autonomy: autonomySchema.optional(),
 });
 
 type UserLayer = z.infer<typeof userSchema>;
@@ -268,6 +325,7 @@ export function loadConfig({
 		applyLayer(config, layer);
 		if (index === workspaceChain.length - 1) {
 			config.sessionPrefix = layer.sessionPrefix;
+			if (layer.autonomy) config.autonomy = layer.autonomy;
 		}
 	}
 
