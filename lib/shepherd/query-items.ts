@@ -89,7 +89,7 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 }
 
 const UPDATED_SHAPE =
-	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,\s*(.*?))?\s*?(\r?)$/;
+	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,[ \t]*(.*?))?[ \t]*(\r?)$/;
 
 /** CURRENT's first `Updated:` line outside a fence and above `## Items`. */
 function updatedLine(text: string): { line: number; text: string } | null {

@@ -220,6 +220,20 @@ describe("withUpdatedName", () => {
 			before: "forge-1014",
 		});
 	});
+
+	test("keeps a CRLF line ending when the line has a comma and no name", () => {
+		for (const tail of [",", ", "])
+			expect(
+				withUpdatedName(
+					`# C\r\nUpdated: 2026-10-15 09:00${tail}\r\n## Items\r\n`,
+					"forge-1015",
+				),
+			).toEqual({
+				status: "rewritten",
+				text: "# C\r\nUpdated: 2026-10-15 09:00, forge-1015\r\n## Items\r\n",
+				before: null,
+			});
+	});
 });
 
 describe("statusProjection", () => {
