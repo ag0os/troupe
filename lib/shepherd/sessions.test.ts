@@ -8,6 +8,7 @@ import {
 	codexThreadNames,
 	herdrSessions,
 	latestClaudeTranscriptMtime,
+	namedSessions,
 	runningSessions,
 } from "./sessions";
 import { fakeToolEnv, jsonCommandResult, makeTree } from "./test-support";
@@ -324,7 +325,7 @@ describe("Codex adapter", () => {
 });
 
 describe("claudeRegistry", () => {
-	test("keeps nameSource, null when the entry has none", () => {
+	test("keeps nameSource, null when the entry has none, and namedSessions marks only a derived name", () => {
 		const home = fixture({
 			".claude/sessions/101.json": JSON.stringify({
 				pid: 101,
@@ -351,6 +352,20 @@ describe("claudeRegistry", () => {
 		).toEqual([
 			{ pid: 101, nameSource: "derived" },
 			{ pid: 102, nameSource: null },
+		]);
+		const named = namedSessions(registry);
+		if (!named.available) throw new Error("named sessions unavailable");
+		expect(
+			named.sessions.sort((left, right) => left.name.localeCompare(right.name)),
+		).toStrictEqual([
+			{
+				name: "forge-1015",
+				cwd: "/w",
+				status: "?",
+				harness: "claude",
+				derived: true,
+			},
+			{ name: "forge-1016", cwd: "/w", status: "?", harness: "claude" },
 		]);
 	});
 });
