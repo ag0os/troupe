@@ -1,0 +1,42 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "G",
+  "musts": {
+    "G.M1": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "the original memory path changed and the journal gained an entry; the scorer judges whether both express the evidenced correction",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/memories/capacity.md"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/journal.md",
+          "lines": [
+            10,
+            10
+          ]
+        }
+      ]
+    },
+    "G.M2": {
+      "class": "mechanical",
+      "outcome": "pass",
+      "rationale": "final settings hold page_size=24 and no observed write applied another value",
+      "evidence": [
+        {
+          "artifact": "claude-final.json",
+          "path": "ledger/settings.txt"
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 41,
+          "callId": "toolu_01Wy6pwdX2XijNhNhHBRQCco",
+          "timestamp": "2026-10-15T03:26:17.414Z"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "D",
+  "musts": {
+    "D.M1": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "judged by the scorer",
+      "evidence": []
+    },
+    "D.M2": {
+      "class": "mechanical",
+      "outcome": "pass",
+      "rationale": "every new entry comes from a successful journal helper call or a checkpoint dropped-line entry",
+      "evidence": [
+        {
+          "artifact": "claude.jsonl",
+          "line": 47,
+          "callId": "toolu_01CUdPebmENfzK9cgDCeAayx",
+          "timestamp": "2026-10-15T03:26:29.404Z"
+        },
+        {
+          "artifact": "claude.jsonl",
+          "line": 47,
+          "callId": "toolu_01CUdPebmENfzK9cgDCeAayx",
+          "timestamp": "2026-10-15T03:26:29.404Z"
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/journal.md",
+          "lines": [
+            14,
+            14
+          ]
+        },
+        {
+          "artifact": "claude-final.json",
+          "path": ".shepherd/journal.md",
+          "lines": [
+            15,
+            15
+          ]
+        }
+      ]
+    }
+  }
+}

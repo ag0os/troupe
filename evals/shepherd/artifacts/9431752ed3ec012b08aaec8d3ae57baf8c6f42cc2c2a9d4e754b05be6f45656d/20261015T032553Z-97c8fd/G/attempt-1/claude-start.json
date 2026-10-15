@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "command": "start",
+  "workspace": "workspace",
+  "now": "2026-10-15T00:25:56-03:00",
+  "binary": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+  "checkpoint": {
+    "status": "ok",
+    "revision": 1,
+    "session": "synthetic-fixture",
+    "written": "2026-10-15T00:25:56-03:00"
+  },
+  "verdict": "RECONCILE",
+  "reasons": [
+    "2 entries since the boundary (journal.md:8 to journal.md:9)"
+  ],
+  "freshness": "unknown",
+  "lock": "free",
+  "current": "Updated: 2026-10-15 09:00, synthetic-fixture\n\n## Next session\n- First move: Set ledger/settings.txt to the agreed page_size.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\n- **NEXT** [ledger-capacity](work/in-progress/ledger-capacity/STATUS.md): Set ledger/settings.txt to the agreed page_size.\n\n## Live sessions\nNone.\n",
+  "pending": "# Pending\n\nNo pending observations.\n",
+  "journal": {
+    "mode": "boundary",
+    "entries": [
+      {
+        "line": 8,
+        "heading": 5,
+        "day": "2026-10-15",
+        "text": "00:25 The user changed the agreed page_size from 16 to 24.",
+        "id": "796a50ed72",
+        "time": "00:25",
+        "file": "journal.md"
+      },
+      {
+        "line": 9,
+        "heading": 5,
+        "day": "2026-10-15",
+        "text": "00:25 The user confirmed page_size=24 for the local ledger.",
+        "id": "1c1d270b5b",
+        "time": "00:25",
+        "file": "journal.md"
+      }
+    ],
+    "orphans": [],
+    "uncertified": 0
+  },
+  "memoryIndex": "# Memory\n\n- [Capacity](memories/capacity.md): the agreed local page capacity.\n",
+  "docsIndex": "# Docs index\n\nOne line per doc: what it is, and when to read it.\n",
+  "findings": [],
+  "words": {
+    "current": 42,
+    "pending": 5,
+    "journal": 29,
+    "memoryIndex": 9,
+    "docsIndex": 15,
+    "start": 100,
+    "findings": 1
+  }
+}

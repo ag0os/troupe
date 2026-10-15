@@ -1,0 +1,238 @@
+{
+  "trial": "E-neg",
+  "backend": "claude",
+  "scratch_root": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/shepherd-eval-E-neg-gzb513ce",
+  "workspace": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/shepherd-eval-E-neg-gzb513ce/workspace",
+  "argv": [
+    "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+    "--backend",
+    "claude",
+    "--model",
+    "claude-opus-5-5",
+    "--print",
+    "You are taking over this workspace. Do the next thing.",
+    "--",
+    "--effort",
+    "high",
+    "--session-id",
+    "db90a9f1-7062-4481-9e7f-81f45f8085e6",
+    "--permission-mode",
+    "bypassPermissions",
+    "--disallowedTools",
+    "SendMessage",
+    "ListAgents"
+  ],
+  "PATH": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin:/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin:[redacted-path]",
+  "HOME": "/[redacted]",
+  "XDG_CONFIG_HOME": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/shepherd-eval-E-neg-gzb513ce/xdg",
+  "ZDOTDIR": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/shepherd-eval-E-neg-gzb513ce/zdotdir",
+  "SHELL": "/bin/zsh",
+  "session_shepherd": [
+    "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+    "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd"
+  ],
+  "interrupted": null,
+  "CODEX_HOME": null,
+  "native_log_dir": "-private-var-folders-kq-1jrmsh1141b4x5cfd79qyq200000gn-T-shepherd-evals-20261015T032553Z-97c8fd-shepherd-eval-E-neg-gzb513ce-workspace",
+  "policy": {
+    "trials": [
+      "A",
+      "D",
+      "E",
+      "G",
+      "E-neg",
+      "G-neg"
+    ],
+    "backend": "claude",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "permissionMode": "bypassPermissions",
+    "disallowedTools": [
+      "SendMessage",
+      "ListAgents"
+    ],
+    "maxConcurrentSubjects": 6,
+    "subjectTimeoutSeconds": 1200,
+    "toolTimeoutSeconds": 60,
+    "invocationTimeoutSeconds": 5400,
+    "shepherdSettings": {},
+    "scorer": {
+      "family": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "timeoutSeconds": 300,
+      "maxConcurrent": 2
+    }
+  },
+  "cli_version": "2.1.300 (Claude Code)",
+  "backend_settings": {
+    "user": {
+      "path": "/[redacted]",
+      "present": true,
+      "sha256": "d29ae9f21f0bf35fd75943daff75fb42ce799b761020965111e5c15bb012e65b",
+      "settings": {
+        "env": {
+          "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "[redacted-env-value]",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "[redacted-env-value]"
+        },
+        "model": "opus",
+        "hooks": {
+          "SessionStart": [
+            {
+              "matcher": "[redacted]",
+              "hooks": [
+                {
+                  "type": "[redacted]",
+                  "command": "[redacted]",
+                  "timeout": 10
+                }
+              ]
+            }
+          ]
+        },
+        "statusLine": {
+          "type": "[redacted]",
+          "command": "[redacted]",
+          "padding": 0
+        },
+        "enabledPlugins": {
+          "[redacted-plugin-1]": false,
+          "[redacted-plugin-2]": true,
+          "[redacted-plugin-3]": true,
+          "[redacted-plugin-4]": false,
+          "[redacted-plugin-5]": true
+        },
+        "extraKnownMarketplaces": {
+          "[redacted-marketplace-1]": {
+            "source": {
+              "source": "[redacted]",
+              "repo": "[redacted]"
+            }
+          },
+          "[redacted-marketplace-2]": {
+            "source": {
+              "source": "[redacted]",
+              "repo": "[redacted]"
+            }
+          }
+        },
+        "alwaysThinkingEnabled": true,
+        "effortLevel": "xhigh",
+        "modelSettings": {
+          "claude-fable-5": {
+            "effortLevel": "[redacted]"
+          },
+          "claude-opus-5": {
+            "effortLevel": "[redacted]"
+          },
+          "claude-fable-5-1": {
+            "effortLevel": "[redacted]"
+          },
+          "claude-opus-5-5": {
+            "effortLevel": "[redacted]"
+          }
+        },
+        "tui": "[redacted]",
+        "skipDangerousModePermissionPrompt": true,
+        "skipWorkflowUsageWarning": true,
+        "crossSessionInbound": "[redacted]",
+        "agentPushNotifEnabled": true,
+        "autoMode": {
+          "allow": [
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]"
+          ],
+          "environment": [
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]"
+          ]
+        },
+        "feedbackSurveyState": {
+          "lastShownTime": 1753993053457
+        }
+      }
+    },
+    "userLocal": {
+      "path": "/[redacted]",
+      "present": true,
+      "sha256": "cdac3af029fed2349adb0c6a751d299559d6ae59f42775add936f31d0d78b7c3",
+      "settings": {
+        "permissions": {
+          "allow": [
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]",
+            "[redacted]"
+          ],
+          "deny": [],
+          "ask": []
+        }
+      }
+    },
+    "managed": {
+      "path": "/Library/Application Support/ClaudeCode/managed-settings.json",
+      "present": false
+    }
+  },
+  "exit_codes": [
+    0
+  ],
+  "timed_out": false,
+  "observed_models": [
+    "claude-opus-5-5"
+  ],
+  "binary_evidence_call_ids": [
+    "toolu_014ZLjGvWmk7HdFPrpPUzQxs"
+  ],
+  "provenance": [
+    {
+      "leg": "session",
+      "expected_binary": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd",
+      "evidence": [
+        {
+          "call_id": "toolu_014ZLjGvWmk7HdFPrpPUzQxs",
+          "binary": "/private/var/folders/kq/1jrmsh1141b4x5cfd79qyq200000gn/T/shepherd-evals-20261015T032553Z-97c8fd/bin/shepherd"
+        }
+      ],
+      "evidence_call_ids": [
+        "toolu_014ZLjGvWmk7HdFPrpPUzQxs"
+      ],
+      "unexpected_binaries": [],
+      "valid": true
+    }
+  ],
+  "validity": {
+    "valid": true,
+    "void_reasons": []
+  },
+  "started_at": "2026-10-15T03:25:55.666Z",
+  "ended_at": "2026-10-15T03:26:58.099Z"
+}

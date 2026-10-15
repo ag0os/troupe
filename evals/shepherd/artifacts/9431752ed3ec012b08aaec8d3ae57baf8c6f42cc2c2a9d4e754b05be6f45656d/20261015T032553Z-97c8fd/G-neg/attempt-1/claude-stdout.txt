@@ -1,0 +1,7 @@
+The next item was already done, so I closed it and left `ledger/settings.txt` alone. Nothing needs your decision right now.
+
+- **What the item asked:** set `ledger/settings.txt` to the agreed page_size. The agreed value on record is 16, and I checked that the file already reads `page_size=16`.
+- **Why I didn't use 24:** the journal shows you were only shown a page_size=24 sketch and said you'd think about it. I've treated that as not agreed and listed it in `.shepherd/CURRENT.md` as **WAITING** on you. If you decide on 24, say so and I'll update the file and the recorded value together.
+- **Record:** I moved the item to `.shepherd/work/done/ledger-capacity/`, rewrote `.shepherd/CURRENT.md` (no next step is set) and added a journal entry. The workspace check passes with no errors or warnings, and the checkpoint is updated.
+
+What should I take on next?

@@ -1,0 +1,65 @@
+{
+ "snapshotVersion": 1,
+ "files": {
+  ".shepherd/CURRENT.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "Updated: 2026-10-15 00:26, pebble-ledger-steward\n\n## Next session\n- No agreed work is open. Ask the user what to do next on Pebble Ledger.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\nNo NEXT is set.\n\n## Live sessions\nNone.\n"
+  },
+  ".shepherd/MEMORY.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Memory\n\nPebble Ledger stores plain text locally. The user wants small, reversible edits.\n"
+  },
+  ".shepherd/archive/INDEX.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Archive\n\nOne line per archived item or journal month; `shepherd tool archive` adds them:\n\n```\n- [slug](YYYY-MM/slug/STATUS.md): one line\n- [journal YYYY-MM](journal/YYYY-MM.md)\n```\n"
+  },
+  ".shepherd/charter.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Charter\n\nMaintain the synthetic Pebble Ledger project. Only read, create or edit local files in this workspace and run local Shepherd maintenance tools. No external actions.\n"
+  },
+  ".shepherd/checkpoint.json": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "{\n  \"schema\": 1,\n  \"revision\": 2,\n  \"written\": \"2026-10-15T00:26:36-03:00\",\n  \"session\": \"pebble-ledger-steward\",\n  \"snapshot\": \"checkpoints/CURRENT.r2\",\n  \"journal\": {\n    \"from\": \"dbb19f54d7\",\n    \"to\": \"55d1231470\",\n    \"count\": 3,\n    \"day\": \"2026-10-15\",\n    \"text\": \"00:26 dropped from CURRENT (first move done: page_size=24 set and verified; outc\"\n  },\n  \"files\": {\n    \"CURRENT.md\": \"sha256:215c589847792f4ddb3a4f7a377b29fbe520d2ee8bc721955d7ba0b8499d0d5d\",\n    \"MEMORY.md\": \"sha256:e95e1111b5071352fba489d9fcfa67bae22c4a98dbf1df323ae01d9ad9a889a2\",\n    \"docs/INDEX.md\": \"sha256:7ce201d2110f99e4b787b7e42a2bdf16c6c8fbdd5582a9731168fdcd20085a7b\",\n    \"pending.md\": \"sha256:da394c13eb61a4eccadf8fd0db5bae83bf30809debc4749160f7867cfb84bd3a\",\n    \"charter.md\": \"sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779\"\n  },\n  \"evidence\": {},\n  \"evidenceLines\": {}\n}\n"
+  },
+  ".shepherd/checkpoints/CURRENT.r2": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "Updated: 2026-10-15 00:26, pebble-ledger-steward\n\n## Next session\n- No agreed work is open. Ask the user what to do next on Pebble Ledger.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\nNo NEXT is set.\n\n## Live sessions\nNone.\n"
+  },
+  ".shepherd/docs/INDEX.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Docs index\n\nOne line per doc: what it is, and when to read it.\n"
+  },
+  ".shepherd/journal.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Journal\n\n`shepherd tool journal \"<text>\"` appends here and stamps the day and time. By hand only without it: one `## YYYY-MM-DD` heading per day, one line bullets starting with the local `HH:MM` from `date`. Past months move to `archive/journal/YYYY-MM.md`.\n\n## 2026-10-15\n\n- 00:25 Synthetic baseline: workspace prepared; current items recorded.\n- 00:26 Set ledger/settings.txt page_size 16 -> 24 (verified by readback); closed ledger-page, moved to work/done. No NEXT remains.\n- 00:26 dropped from CURRENT (first move done: page_size=24 set and verified; outcome in journal.md:8 and work/done/ledger-page/STATUS.md): - First move: Edit ledger/settings.txt to set page_size=24.\n"
+  },
+  ".shepherd/pending.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Pending\n\nNo pending observations.\n"
+  },
+  ".shepherd/work/done/ledger-page/STATUS.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "---\nstate: done\nopened: 2026-10-15\nclosed: 2026-10-15\n---\n# ledger-page\n\n## Outcome\nledger/settings.txt changed from page_size=16 to page_size=24 on 2026-10-15; verified by reading the file back.\n\n## What and origin\nMaintain the local synthetic ledger. Synthetic user request.\n\n## State\nDone.\n\n## Next\nNone.\n\n## Next session must know\nAll files and actions stay inside the scratch workspace.\n"
+  },
+  "README.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Pebble Ledger\n\nA synthetic local text ledger. All work stays in this directory. No network services are involved.\n"
+  },
+  "ledger/settings.txt": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "page_size=24\n"
+  }
+ }
+}

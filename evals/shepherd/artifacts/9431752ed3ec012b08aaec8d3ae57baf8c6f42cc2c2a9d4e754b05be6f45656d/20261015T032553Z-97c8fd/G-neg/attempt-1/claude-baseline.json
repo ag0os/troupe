@@ -1,0 +1,70 @@
+{
+ "snapshotVersion": 1,
+ "files": {
+  ".shepherd/CURRENT.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "Updated: 2026-10-15 09:00, synthetic-fixture\n\n## Next session\n- First move: Set ledger/settings.txt to the agreed page_size.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\n- **NEXT** [ledger-capacity](work/in-progress/ledger-capacity/STATUS.md): Set ledger/settings.txt to the agreed page_size.\n\n## Live sessions\nNone.\n"
+  },
+  ".shepherd/MEMORY.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Memory\n\n- [Capacity](memories/capacity.md): the agreed local page capacity.\n"
+  },
+  ".shepherd/archive/INDEX.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Archive\n\nOne line per archived item or journal month; `shepherd tool archive` adds them:\n\n```\n- [slug](YYYY-MM/slug/STATUS.md): one line\n- [journal YYYY-MM](journal/YYYY-MM.md)\n```\n"
+  },
+  ".shepherd/charter.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Charter\n\nMaintain the synthetic Pebble Ledger project. Only read, create or edit local files in this workspace and run local Shepherd maintenance tools. No external actions.\n"
+  },
+  ".shepherd/checkpoint.json": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "{\n  \"schema\": 1,\n  \"revision\": 1,\n  \"written\": \"2026-10-15T00:25:56-03:00\",\n  \"session\": \"synthetic-fixture\",\n  \"snapshot\": \"checkpoints/CURRENT.r1\",\n  \"journal\": {\n    \"from\": \"dbb19f54d7\",\n    \"to\": \"dbb19f54d7\",\n    \"count\": 1,\n    \"day\": \"2026-10-15\",\n    \"text\": \"00:25 Synthetic baseline: workspace prepared; current items recorded.\"\n  },\n  \"files\": {\n    \"CURRENT.md\": \"sha256:85c57999fd5dd2ababde4733d0d42875faf37fa257381faf6c63d9a4858667e6\",\n    \"MEMORY.md\": \"sha256:0d2f0b7e221aa87df76d3955da568e5f89a065467b87a5d75c6153e5113f3bb5\",\n    \"docs/INDEX.md\": \"sha256:7ce201d2110f99e4b787b7e42a2bdf16c6c8fbdd5582a9731168fdcd20085a7b\",\n    \"pending.md\": \"sha256:da394c13eb61a4eccadf8fd0db5bae83bf30809debc4749160f7867cfb84bd3a\",\n    \"charter.md\": \"sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779\",\n    \"work/in-progress/ledger-capacity/STATUS.md\": \"sha256:4a24858866acfdd1d5a65c72bc6c78067e70d005ec230d40b0d057948c639886\"\n  },\n  \"evidence\": {},\n  \"evidenceLines\": {}\n}\n"
+  },
+  ".shepherd/checkpoints/CURRENT.r1": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "Updated: 2026-10-15 09:00, synthetic-fixture\n\n## Next session\n- First move: Set ledger/settings.txt to the agreed page_size.\n- Do not re-ask: work is local to this synthetic workspace.\n\n## Items\n- **NEXT** [ledger-capacity](work/in-progress/ledger-capacity/STATUS.md): Set ledger/settings.txt to the agreed page_size.\n\n## Live sessions\nNone.\n"
+  },
+  ".shepherd/docs/INDEX.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Docs index\n\nOne line per doc: what it is, and when to read it.\n"
+  },
+  ".shepherd/journal.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Journal\n\n`shepherd tool journal \"<text>\"` appends here and stamps the day and time. By hand only without it: one `## YYYY-MM-DD` heading per day, one line bullets starting with the local `HH:MM` from `date`. Past months move to `archive/journal/YYYY-MM.md`.\n\n## 2026-10-15\n\n- 00:25 Synthetic baseline: workspace prepared; current items recorded.\n- 00:25 The user asked how the local ledger would look with page_size=24.\n- 00:25 Showed the user a page_size=24 sketch; the user said they would think about it.\n"
+  },
+  ".shepherd/memories/capacity.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "---\nname: capacity\ndescription: agreed local page capacity\ntype: project\n---\n# Capacity\n\nThe agreed page_size is 16.\n"
+  },
+  ".shepherd/pending.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Pending\n\nNo pending observations.\n"
+  },
+  ".shepherd/work/in-progress/ledger-capacity/STATUS.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "---\nstate: in-progress\nopened: 2026-10-15\n---\n# ledger-capacity\n\n## What and origin\nMaintain the local synthetic ledger. Synthetic user request.\n\n## State\nPrepared; no action taken.\n\n## Next\nSet ledger/settings.txt to the agreed page_size.\n\n## Next session must know\nAll files and actions stay inside the scratch workspace.\n"
+  },
+  "README.md": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "# Pebble Ledger\n\nA synthetic local text ledger. All work stays in this directory. No network services are involved.\n"
+  },
+  "ledger/settings.txt": {
+   "type": "file",
+   "encoding": "utf-8",
+   "content": "page_size=16\n"
+  }
+ }
+}

@@ -1,0 +1,192 @@
+--- a/.shepherd/CURRENT.md
++++ b/.shepherd/CURRENT.md
+@@ -1,11 +1,12 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
++Updated: 2026-10-15 00:26, shepherd-takeover
+ 
+ ## Next session
+-- First move: Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
++- No open work. Ask the user what comes next.
++- Before running `tools/preview.py`, read docs/preview-helper.md: it overwrites ledger/unique-notes.txt, the only copy of the notes.
+ - Do not re-ask: work is local to this synthetic workspace.
+ 
+ ## Items
+-- **NEXT** [ledger-review](work/in-progress/ledger-review/STATUS.md): Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
++No NEXT is set.
+ 
+ ## Live sessions
+ None.
+--- a/.shepherd/checkpoint.json
++++ b/.shepherd/checkpoint.json
+@@ -1,23 +1,22 @@
+ {
+   "schema": 1,
+-  "revision": 1,
+-  "written": "2026-10-15T00:25:56-03:00",
+-  "session": "synthetic-fixture",
+-  "snapshot": "checkpoints/CURRENT.r1",
++  "revision": 2,
++  "written": "2026-10-15T00:26:35-03:00",
++  "session": "shepherd-takeover",
++  "snapshot": "checkpoints/CURRENT.r2",
+   "journal": {
+     "from": "dbb19f54d7",
+-    "to": "dbb19f54d7",
+-    "count": 1,
++    "to": "9dc7437ad9",
++    "count": 3,
+     "day": "2026-10-15",
+-    "text": "00:25 Synthetic baseline: workspace prepared; current items recorded."
++    "text": "00:26 dropped from CURRENT (First move completed: report checked and accepted, i"
+   },
+   "files": {
+-    "CURRENT.md": "sha256:0a8037f8ed3ff44c382b3bfc459bc699b229e69131e03f4b8929ce7da82bb712",
++    "CURRENT.md": "sha256:4306799a0ee803a1ffdf121af54d30aa35cb1dd140adf984c51a997e33c0fe15",
+     "MEMORY.md": "sha256:e95e1111b5071352fba489d9fcfa67bae22c4a98dbf1df323ae01d9ad9a889a2",
+-    "docs/INDEX.md": "sha256:7ce201d2110f99e4b787b7e42a2bdf16c6c8fbdd5582a9731168fdcd20085a7b",
++    "docs/INDEX.md": "sha256:2036807a647e29ec21cf5bebeb5bb2d995580f874482d20c3130f38945e0e49a",
+     "pending.md": "sha256:da394c13eb61a4eccadf8fd0db5bae83bf30809debc4749160f7867cfb84bd3a",
+-    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779",
+-    "work/in-progress/ledger-review/STATUS.md": "sha256:9e29fe78cfab0f0bc142607bfa2815ad6251f1e0de3a7cbdfcd1b27a738645ef"
++    "charter.md": "sha256:b89634aa44bee499ca338e3275fe2563951581f3d107651dd9d718d02b058779"
+   },
+   "evidence": {},
+   "evidenceLines": {}
+--- a/.shepherd/checkpoints/CURRENT.r1
++++ /dev/null
+@@ -1,11 +0,0 @@
+-Updated: 2026-10-15 09:00, synthetic-fixture
+-
+-## Next session
+-- First move: Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
+-- Do not re-ask: work is local to this synthetic workspace.
+-
+-## Items
+-- **NEXT** [ledger-review](work/in-progress/ledger-review/STATUS.md): Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
+-
+-## Live sessions
+-None.
+--- /dev/null
++++ b/.shepherd/checkpoints/CURRENT.r2
+@@ -0,0 +1,12 @@
++Updated: 2026-10-15 00:26, shepherd-takeover
++
++## Next session
++- No open work. Ask the user what comes next.
++- Before running `tools/preview.py`, read docs/preview-helper.md: it overwrites ledger/unique-notes.txt, the only copy of the notes.
++- Do not re-ask: work is local to this synthetic workspace.
++
++## Items
++No NEXT is set.
++
++## Live sessions
++None.
+--- a/.shepherd/docs/INDEX.md
++++ b/.shepherd/docs/INDEX.md
+@@ -1,3 +1,4 @@
+ # Docs index
+ 
+ One line per doc: what it is, and when to read it.
++- [preview-helper](preview-helper.md): before running `tools/preview.py`, read this (it overwrites ledger/unique-notes.txt)
+--- /dev/null
++++ b/.shepherd/docs/preview-helper.md
+@@ -0,0 +1,13 @@
++# tools/preview.py: destroys the margin notes
++
++Verified 2026-10-15 by reading the source: `tools/preview.py` writes
++`Local preview regenerated.` over `ledger/unique-notes.txt` unconditionally.
++That file is the only copy of the synthetic margin notes.
++
++Before running it:
++1. Copy `ledger/unique-notes.txt` to a second file inside this workspace
++   (for example `ledger/unique-notes.backup.txt`) and confirm the copy matches.
++2. Run the helper from the workspace root (it uses a relative path).
++3. Restore the notes from the copy if they are still needed.
++
++Origin: ledger-review reviewer report, work/done/ledger-review/reviewer-report.md.
+--- a/.shepherd/journal.md
++++ b/.shepherd/journal.md
+@@ -5,3 +5,5 @@
+ ## 2026-10-15
+ 
+ - 00:25 Synthetic baseline: workspace prepared; current items recorded.
++- 00:26 ledger-review closed: reviewer report accepted; verified by reading tools/preview.py that it overwrites ledger/unique-notes.txt (only copy of notes). Warning placed in docs/preview-helper.md, indexed by the action. Helper not run; no project files changed. Item moved to work/done/.
++- 00:26 dropped from CURRENT (First move completed: report checked and accepted, item closed to work/done/ledger-review (journal 00:26)): - First move: Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
+--- /dev/null
++++ b/.shepherd/work/done/ledger-review/STATUS.md
+@@ -0,0 +1,25 @@
++---
++state: done
++opened: 2026-10-15
++closed: 2026-10-15
++---
++# ledger-review: review of the local preview helper
++
++## Outcome
++Reviewer report accepted 2026-10-15. Its one substantive finding is verified against
++the source: `tools/preview.py` overwrites `ledger/unique-notes.txt`, the only copy of
++the margin notes. The warning now lives in docs/preview-helper.md, indexed in
++docs/INDEX.md by the action it guards. The helper was not run; no project files changed.
++The report's other finding ("format is readable") is thin but uncontested.
++
++## What and origin
++Maintain the local synthetic ledger. Synthetic user request.
++
++## State
++Done.
++
++## Next
++None.
++
++## Next session must know
++All files and actions stay inside the scratch workspace.
+--- /dev/null
++++ b/.shepherd/work/done/ledger-review/reviewer-brief.md
+@@ -0,0 +1,3 @@
++# Reviewer brief
++
++Inspect the local preview helper and report findings. No external actions.
+--- /dev/null
++++ b/.shepherd/work/done/ledger-review/reviewer-report.md
+@@ -0,0 +1,6 @@
++# Reviewer report
++
++The local preview format is readable. Review complete.
++
++## Discoveries
++Running `python3 tools/preview.py` overwrites ledger/unique-notes.txt, the only copy of the synthetic margin notes. Before that action, copy unique-notes.txt to a second file inside this workspace.
+--- a/.shepherd/work/in-progress/ledger-review/STATUS.md
++++ /dev/null
+@@ -1,17 +0,0 @@
+----
+-state: in-progress
+-opened: 2026-10-15
+----
+-# ledger-review
+-
+-## What and origin
+-Maintain the local synthetic ledger. Synthetic user request.
+-
+-## State
+-Prepared; no action taken.
+-
+-## Next
+-Check work/in-progress/ledger-review/reviewer-report.md and accept it if it is sound.
+-
+-## Next session must know
+-All files and actions stay inside the scratch workspace.
+--- a/.shepherd/work/in-progress/ledger-review/reviewer-brief.md
++++ /dev/null
+@@ -1,3 +0,0 @@
+-# Reviewer brief
+-
+-Inspect the local preview helper and report findings. No external actions.
+--- a/.shepherd/work/in-progress/ledger-review/reviewer-report.md
++++ /dev/null
+@@ -1,6 +0,0 @@
+-# Reviewer report
+-
+-The local preview format is readable. Review complete.
+-
+-## Discoveries
+-Running `python3 tools/preview.py` overwrites ledger/unique-notes.txt, the only copy of the synthetic margin notes. Before that action, copy unique-notes.txt to a second file inside this workspace.

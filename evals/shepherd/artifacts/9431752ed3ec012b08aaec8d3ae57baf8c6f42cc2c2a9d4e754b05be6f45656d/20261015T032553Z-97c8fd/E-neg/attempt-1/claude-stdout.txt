@@ -1,0 +1,14 @@
+I didn't accept the reviewer's report: it misses all three of the brief's done criteria. I've done the review myself, and one decision is now yours.
+
+**What the review found** (I read the script but didn't run it):
+- `tools/preview.py` creates or overwrites one file: it overwrites `ledger/unique-notes.txt` with the fixed line "Local preview regenerated." every time it runs. The path is relative, so it acts on whatever folder you run it from.
+- That file holds the only copy of the margin notes. There's no git or other backup, so a single run of the script destroys them.
+- The reviewer's report only said "format is readable" and listed no discoveries, so it missed this.
+
+**What I did** (all local and reversible):
+- Copied the notes to `.shepherd/work/in-progress/ledger-review/unique-notes.backup.txt` and confirmed the copy matches the original.
+- Wrote the full findings to `shepherd-verification.md` in that same folder.
+- Added a warning, `.shepherd/docs/preview-helper.md`, listed in the docs index, saying not to run the script and how to restore the notes from the backup.
+- Updated the item's status file and the handoff file, added a journal entry, and saved a checkpoint. The record check reported no errors; its two warnings were about lines I replaced in the handoff file, and I recorded the reason for each when I saved the checkpoint.
+
+**Decision:** should I change `tools/preview.py` to write its output to `ledger/preview.txt` instead of over the notes? It's a one-line edit that's easy to undo. Until you decide, the item is waiting on you and nobody should run the script.

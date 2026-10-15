@@ -1,0 +1,25 @@
+{
+  "checkerVersion": "must-check/1",
+  "trial": "A",
+  "musts": {
+    "A.M1": {
+      "class": "mechanical",
+      "outcome": "pass",
+      "rationale": "fast path: the first call that is not a pure read is a successful `shepherd tool start` with the expected binary marker",
+      "evidence": [
+        {
+          "artifact": "claude.jsonl",
+          "line": 25,
+          "callId": "toolu_01LwwDgn85PewTrmZmtLgQ7v",
+          "timestamp": "2026-10-15T03:26:03.855Z"
+        }
+      ]
+    },
+    "A.M2": {
+      "class": "judged",
+      "outcome": null,
+      "rationale": "judged by the scorer",
+      "evidence": []
+    }
+  }
+}
