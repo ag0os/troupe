@@ -2290,6 +2290,69 @@ describe("tool query stability", () => {
 	});
 });
 
+type Allowed = (relative: string, call: FsCall) => boolean;
+
+const JOURNAL_FILES = /^(journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
+const CHAIN =
+	/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
+const COVERED =
+	/^(CURRENT\.md|MEMORY\.md|docs\/INDEX\.md|pending\.md|charter\.md|work\/(todo|in-progress)\/[^/]+\/STATUS\.md)$/;
+
+function chainReads(records: RegExp): Allowed {
+	return (path, call) => {
+		if (call.fn === "readdirSync") return path === "archive/journal";
+		if (call.fn === "readFileSync") return records.test(path);
+		return (
+			call.fn === "lstatSync" &&
+			(records.test(path) || /^archive(\/journal)?$/.test(path))
+		);
+	};
+}
+
+function ownFiles(...files: string[]): Allowed {
+	return (path, call) =>
+		files.includes(path) &&
+		(call.fn === "lstatSync" || call.fn === "readFileSync");
+}
+
+/** The paths under .shepherd/ each query may touch, by call. */
+const ALLOWED = {
+	items: (path, call) =>
+		call.fn === "readFileSync"
+			? path === "CURRENT.md"
+			: call.fn === "lstatSync" &&
+				(path === "CURRENT.md" ||
+					/^work(\/(in-progress|todo)(\/(evals|lock)(\/STATUS\.md)?)?)?$/.test(
+						path,
+					)),
+	item: (path, call) =>
+		call.fn === "readFileSync"
+			? path === "CURRENT.md" || path === "work/in-progress/evals/STATUS.md"
+			: call.fn === "lstatSync" &&
+				(path === "CURRENT.md" ||
+					/^work(\/(in-progress|todo|done)(\/(evals|lock|missing)(\/STATUS\.md)?)?)?$/.test(
+						path,
+					)),
+	autonomy: ownFiles("config.json"),
+	sessions: ownFiles("CURRENT.md", "config.json"),
+	journal: chainReads(CHAIN),
+	"journal --since": chainReads(JOURNAL_FILES),
+	checkpoint: (path, call) => {
+		if (call.fn === "readdirSync") {
+			return /^(work\/(todo|in-progress)|archive\/journal)$/.test(path);
+		}
+		const record = CHAIN.test(path) || COVERED.test(path);
+		if (call.fn === "readFileSync") return record;
+		return (
+			call.fn === "lstatSync" &&
+			(record ||
+				/^(docs|archive(\/journal)?|work(\/(todo|in-progress)(\/[^/]+)?)?)$/.test(
+					path,
+				))
+		);
+	},
+} satisfies Record<string, Allowed>;
+
 describe("tool query read contract", () => {
 	test("items reads the user config and only CURRENT and link targets", async () => {
 		const fixture = contractTree();
@@ -2297,15 +2360,7 @@ describe("tool query read contract", () => {
 			query(["items"], fixture.env(fixture.a)),
 		);
 		expect(value.code).toBe(0);
-		expectContract(calls, fixture, fixture.a, (path, call) =>
-			call.fn === "readFileSync"
-				? path === "CURRENT.md"
-				: call.fn === "lstatSync" &&
-					(path === "CURRENT.md" ||
-						/^work(\/(in-progress|todo)(\/(evals|lock)(\/STATUS\.md)?)?)?$/.test(
-							path,
-						)),
-		);
+		expectContract(calls, fixture, fixture.a, ALLOWED.items);
 		expect(calls.some(({ path }) => path === fixture.userConfig)).toBeTrue();
 	});
 
@@ -2315,17 +2370,10 @@ describe("tool query read contract", () => {
 			const { calls } = await spyFs(() =>
 				query(["item", slug], fixture.env(fixture.a)),
 			);
-			expectContract(calls, fixture, fixture.a, (path, call) =>
-				call.fn === "readFileSync"
-					? path === "CURRENT.md" || path === "work/in-progress/evals/STATUS.md"
-					: call.fn === "lstatSync" &&
-						(path === "CURRENT.md" ||
-							/^work(\/(in-progress|todo|done)(\/(evals|lock|missing)(\/STATUS\.md)?)?)?$/.test(
-								path,
-							)),
-			);
+			expectContract(calls, fixture, fixture.a, ALLOWED.item);
 		}
 	});
+
 	test("autonomy reads the user config and only its own config", async () => {
 		const fixture = contractTree({
 			"root/.shepherd/config.json": '{"autonomy":{"enabled":true}}',
@@ -2334,14 +2382,7 @@ describe("tool query read contract", () => {
 			query(["autonomy"], fixture.env(fixture.a)),
 		);
 		expect(value.code).toBe(0);
-		expectContract(
-			calls,
-			fixture,
-			fixture.a,
-			(path, call) =>
-				path === "config.json" &&
-				(call.fn === "lstatSync" || call.fn === "readFileSync"),
-		);
+		expectContract(calls, fixture, fixture.a, ALLOWED.autonomy);
 		expect(calls).toContainEqual({
 			fn: "readFileSync",
 			path: join(fixture.a, ".shepherd", "config.json"),
@@ -2355,52 +2396,34 @@ describe("tool query read contract", () => {
 			query(["checkpoint"], fixture.env(fixture.a)),
 		);
 		expect(value.code).toBe(0);
-		const records =
-			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md|CURRENT\.md|MEMORY\.md|docs\/INDEX\.md|pending\.md|charter\.md|work\/(todo|in-progress)\/[^/]+\/STATUS\.md)$/;
-		expectContract(calls, fixture, fixture.a, (path, call) => {
-			if (call.fn === "readdirSync") {
-				return /^(work\/(todo|in-progress)|archive\/journal)$/.test(path);
-			}
-			if (call.fn === "readFileSync") return records.test(path);
-			return (
-				call.fn === "lstatSync" &&
-				(records.test(path) ||
-					/^(docs|archive(\/journal)?|work(\/(todo|in-progress)(\/[^/]+)?)?)$/.test(
-						path,
-					))
-			);
-		});
+		expectContract(calls, fixture, fixture.a, ALLOWED.checkpoint);
 		expect(calls).toContainEqual({
 			fn: "readFileSync",
 			path: join(fixture.a, ".shepherd", "charter.md"),
 		});
 	});
 
-	test("journal reads the checkpoint and the journal chain only", async () => {
+	test("journal reads the checkpoint and the journal chain only, and with --since never the checkpoint", async () => {
 		const fixture = checkpointTree();
 		fixture.certify(BOUNDARY);
-		const records =
-			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
-		for (const flags of [{}, { since: "2026-10-01" }] as Record<
-			string,
-			string
-		>[]) {
+		const checkpoint = join(fixture.a, ".shepherd", "checkpoint.json");
+		for (const [flags, allowed] of [
+			[{}, ALLOWED.journal],
+			[{ since: "2026-10-01" }, ALLOWED["journal --since"]],
+			[{ since: "0123456789" }, ALLOWED["journal --since"]],
+		] as const) {
 			const { value, calls } = await spyFs(() =>
 				query(["journal"], fixture.env(fixture.a), flags),
 			);
-			expect(value.code).toBe(0);
-			expectContract(calls, fixture, fixture.a, (path, call) => {
-				if (call.fn === "readdirSync") return path === "archive/journal";
-				if (call.fn === "readFileSync") return records.test(path);
-				return (
-					call.fn === "lstatSync" &&
-					(records.test(path) || /^archive(\/journal)?$/.test(path))
-				);
-			});
+			expect(value.code).toBe(flags.since === "0123456789" ? 1 : 0);
+			expectContract(calls, fixture, fixture.a, allowed);
 			expect(calls).toContainEqual({
 				fn: "readFileSync",
 				path: join(fixture.a, ".shepherd", "journal.md"),
 			});
+			expect(calls.some(({ path }) => path === checkpoint)).toBe(
+				flags.since === undefined,
+			);
 		}
 	});
 
@@ -2445,14 +2468,7 @@ describe("tool query read contract", () => {
 					!call.path.startsWith(`${claude}${sep}`) &&
 					!(codex && codexCalls(call)),
 			);
-			expectContract(
-				outside,
-				fixture,
-				fixture.a,
-				(path, call) =>
-					(path === "CURRENT.md" || path === "config.json") &&
-					(call.fn === "lstatSync" || call.fn === "readFileSync"),
-			);
+			expectContract(outside, fixture, fixture.a, ALLOWED.sessions);
 			expect(calls).toContainEqual({
 				fn: "readFileSync",
 				path: join(fixture.a, ".shepherd", "config.json"),
@@ -2475,48 +2491,19 @@ describe("tool query read contract", () => {
 	test("--all from the root reads each workspace's records and nothing beyond", async () => {
 		const fixture = checkpointTree();
 		fixture.certify(BOUNDARY);
-		const chain =
-			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
-		const covered =
-			/^(CURRENT\.md|MEMORY\.md|docs\/INDEX\.md|pending\.md|charter\.md|work\/(todo|in-progress)\/[^/]+\/STATUS\.md)$/;
-		const reads: Record<string, (path: string, call: FsCall) => boolean> = {
-			items: (path, call) =>
-				call.fn === "readFileSync"
-					? path === "CURRENT.md"
-					: call.fn === "lstatSync" &&
-						(path === "CURRENT.md" ||
-							/^work(\/(in-progress|todo)(\/(evals|lock)(\/STATUS\.md)?)?)?$/.test(
-								path,
-							)),
-			autonomy: (path, call) =>
-				path === "config.json" &&
-				(call.fn === "lstatSync" || call.fn === "readFileSync"),
-			journal: (path, call) => {
-				if (call.fn === "readdirSync") return path === "archive/journal";
-				if (call.fn === "readFileSync") return chain.test(path);
-				return (
-					call.fn === "lstatSync" &&
-					(chain.test(path) || /^archive(\/journal)?$/.test(path))
-				);
-			},
-			checkpoint: (path, call) => {
-				if (call.fn === "readdirSync") {
-					return /^(work\/(todo|in-progress)|archive\/journal)$/.test(path);
-				}
-				const record = chain.test(path) || covered.test(path);
-				if (call.fn === "readFileSync") return record;
-				return (
-					call.fn === "lstatSync" &&
-					(record ||
-						/^(docs|archive(\/journal)?|work(\/(todo|in-progress)(\/[^/]+)?)?)$/.test(
-							path,
-						))
-				);
-			},
-		};
-		for (const [name, allowed] of Object.entries(reads)) {
+		for (const [name, flags] of [
+			["items", {}],
+			["autonomy", {}],
+			["journal", {}],
+			["journal --since", { since: "2026-10-01" }],
+			["checkpoint", {}],
+		] as const) {
+			const allowed = ALLOWED[name];
 			const { value, calls } = await spyFs(() =>
-				query([name], fixture.env(fixture.root), { all: true }),
+				query([name.split(" ")[0] as string], fixture.env(fixture.root), {
+					all: true,
+					...flags,
+				}),
 			);
 			expect({ name, code: value.code }).toEqual({ name, code: 0 });
 			expect(
@@ -2607,9 +2594,244 @@ describe("tool query read contract", () => {
 					!(call.path === fixture.home && call.fn === "readdirSync"),
 			),
 			fixture,
-			(path, call) =>
-				(path === "CURRENT.md" || path === "config.json") &&
-				(call.fn === "lstatSync" || call.fn === "readFileSync"),
+			ALLOWED.sessions,
 		);
+	});
+});
+
+const FORGE_CURRENT = `Updated: 2026-10-13 17:26, forge-1013b
+
+## Next session
+- First move: read the query-tool branch review.
+
+## Legend
+- **NEXT**: agreed, start
+- **WAITING**: blocked outside the workspace
+- **ASK**: needs the user
+
+## Items
+- **NEXT** [shepherd-evals](work/in-progress/shepherd-evals/STATUS.md): forge order (2), the trials
+  in Troupe as a merge gate; agreed 17:41
+- **WAITING** [query-tool](./work/in-progress/query-tool/STATUS.md): branch review by two readers
+- **ASK:** whether the nightly sweep stays
+- **SCHEDULED**: 2026-10-20 rotate the journal
+- **CANDIDATE** [heartbeat](work/todo/heartbeat/STATUS.md): the scheduled tick
+
+## Live sessions
+- forge-1013b: Claude Code, Opus 5.5, Shepherd (Herdr w9:p1M)
+- forge-1012 retired at 16:00
+`;
+
+const FORGE_STATUS = `---
+state: in-progress
+opened: 2026-10-13
+closed: 2026-10-20        # once done
+blocked_on: "review #2"   # while blocked
+---
+# shepherd-evals: the Shepherd trials in Troupe as a merge gate
+
+## What and origin
+The user, 2026-10-13: trials before merge.
+
+## State
+- trial one green
+- trial two open
+
+## Next
+Run trial two.
+
+## Next session must know
+Nothing yet.
+`;
+
+describe("tool query acceptance", () => {
+	test("answers all six queries on a forge-shaped workspace", async () => {
+		const tree = makeTree({
+			"xdg/shepherd/config.json": "{}",
+			"forge/.shepherd/CURRENT.md": FORGE_CURRENT,
+			"forge/.shepherd/charter.md": "# forge\n\nThe charter.\n",
+			"forge/.shepherd/MEMORY.md": "# Memory\n",
+			"forge/.shepherd/docs/INDEX.md": "# Docs\n",
+			"forge/.shepherd/pending.md": "# Pending\n",
+			"forge/.shepherd/config.json": JSON.stringify({
+				sessionPrefix: "forge",
+				autonomy: { enabled: true, until: "2026-10-20" },
+			}),
+			"forge/.shepherd/archive/journal/2026-09.md": ARCHIVE,
+			"forge/.shepherd/journal.md": `${JOURNAL}- 13:00 after the checkpoint\n`,
+			"forge/.shepherd/work/in-progress/shepherd-evals/STATUS.md": FORGE_STATUS,
+			"forge/.shepherd/work/in-progress/query-tool/STATUS.md":
+				FORGE_STATUS.replaceAll("shepherd-evals", "query-tool"),
+			"forge/.shepherd/work/todo/heartbeat/STATUS.md": FORGE_STATUS.replace(
+				"state: in-progress",
+				"state: todo",
+			),
+			"forge/.shepherd/work/done/old/STATUS.md": FORGE_STATUS,
+		});
+		cleanups.push(tree.cleanup);
+		const dir = join(tree.root, "forge");
+		const state = join(dir, ".shepherd");
+		const ids = journalChain(state).entries.map(({ id }) => id);
+		const to = ids.at(-3) as string;
+		fs.writeFileSync(
+			join(state, "checkpoint.json"),
+			JSON.stringify({
+				schema: 1,
+				revision: 6,
+				written: "2026-10-13T15:25:02-03:00",
+				session: "forge-1013b",
+				snapshot: "checkpoints/CURRENT.r6",
+				journal: { from: ids[0], to, count: ids.length - 2 },
+				files: hashPaths({ name: "forge", dir, state }, coveredPaths(state)),
+				evidence: {},
+			}),
+		);
+		const home = join(tree.root, "home");
+		fs.mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+		fs.writeFileSync(
+			join(home, ".claude", "sessions", "48213.json"),
+			JSON.stringify({
+				pid: 48213,
+				name: "forge-1013b",
+				cwd: dir,
+				status: "idle",
+			}),
+		);
+		const env = fakeToolEnv({
+			home,
+			cwd: dir,
+			env: { XDG_CONFIG_HOME: join(tree.root, "xdg") },
+			alivePids: [48213],
+		});
+
+		const answers: Record<string, Awaited<ReturnType<typeof query>>> = {};
+		for (const args of [
+			["items"],
+			["item", "query-tool"],
+			["sessions"],
+			["autonomy"],
+			["journal"],
+			["checkpoint"],
+		]) {
+			const answer = await query(args, env);
+			answers[args[0] as string] = answer;
+			const nonSource = answer.json.problems.filter(
+				({ code }: { code: string }) => code !== "source-unavailable",
+			);
+			expect({ args, code: answer.code, problems: nonSource }).toEqual({
+				args,
+				code: 0,
+				problems: [],
+			});
+			const text = await runTool(["query", ...args], {}, env);
+			expect({ args, code: text.code }).toEqual({ args, code: 0 });
+		}
+
+		const { items, item, sessions, autonomy, journal, checkpoint } = answers;
+		expect(
+			items?.json.items.map(
+				({
+					word,
+					slug,
+					status,
+				}: {
+					word: string;
+					slug: string | null;
+					status: { exists: boolean } | null;
+				}) => [word, slug, status?.exists ?? null],
+			),
+		).toEqual([
+			["NEXT", "shepherd-evals", true],
+			["WAITING", "query-tool", true],
+			["ASK", null, null],
+			["SCHEDULED", null, null],
+			["CANDIDATE", "heartbeat", true],
+		]);
+		expect(item?.json).toMatchObject({
+			resolved: "link",
+			dir: "work/in-progress/query-tool",
+			state: "in-progress",
+			status: {
+				frontmatter: {
+					fields: { closed: "2026-10-20", blocked_on: "review #2" },
+				},
+				title: "query-tool: the Shepherd trials in Troupe as a merge gate",
+			},
+		});
+		expect(
+			item?.json.status.sections.map(
+				({ heading }: { heading: string }) => heading,
+			),
+		).toEqual(["What and origin", "State", "Next", "Next session must know"]);
+		expect(sessions?.json).toMatchObject({
+			prefix: "forge",
+			listed: [
+				{ name: "forge-1013b", retired: false },
+				{ name: "forge-1012", retired: true },
+			],
+			claude: {
+				available: true,
+				sessions: [
+					{
+						name: "forge-1013b",
+						pid: 48213,
+						listed: { retired: false },
+						prefixMatch: true,
+					},
+				],
+			},
+			herdr: { available: false },
+		});
+		expect(autonomy?.json).toMatchObject({
+			present: true,
+			active: true,
+			expired: false,
+		});
+		expect(journal?.json).toMatchObject({
+			since: { kind: "checkpoint", id: to, found: true },
+			count: 2,
+		});
+		expect(
+			journal?.json.entries.map(({ text }: { text: string }) => text),
+		).toEqual(["12:00 last", "13:00 after the checkpoint"]);
+		expect(checkpoint?.json).toMatchObject({
+			status: "ok",
+			revision: 6,
+			boundary: { state: "found" },
+			entriesSince: 2,
+			changed: [],
+		});
+	});
+
+	test("tool check accepts a workspace config with an autonomy key", async () => {
+		const tree = makeTree({ "xdg/shepherd/config.json": "{}" });
+		cleanups.push(tree.cleanup);
+		const dir = join(tree.root, "ws");
+		fs.mkdirSync(dir);
+		const env = fakeToolEnv({
+			home: join(tree.root, "home"),
+			cwd: dir,
+			env: { XDG_CONFIG_HOME: join(tree.root, "xdg") },
+		});
+		expect((await runTool(["init"], {}, env)).code).toBe(0);
+		const configFile = join(dir, ".shepherd", "config.json");
+		const configFindings = async (config: unknown) => {
+			fs.writeFileSync(configFile, JSON.stringify(config));
+			const output = await runTool(["check"], { json: true }, env);
+			expect(output.code).not.toBe(2);
+			return JSON.parse(output.text).workspaces.flatMap(
+				({ findings }: { findings: { code: string; message: string }[] }) =>
+					findings.filter(({ code }) => code === "config-invalid"),
+			);
+		};
+
+		expect(
+			await configFindings({
+				autonomy: { enabled: true, until: "2026-10-20T18:00-03:00" },
+			}),
+		).toEqual([]);
+		expect(await configFindings({ autonomy: { enabled: "yes" } })).toEqual([
+			expect.objectContaining({ code: "config-invalid" }),
+		]);
 	});
 });
