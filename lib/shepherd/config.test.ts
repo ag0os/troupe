@@ -312,6 +312,103 @@ describe("loadConfig", () => {
 	});
 });
 
+describe("autonomy", () => {
+	test("accepts an autonomy grant in the workspace file", () => {
+		const home = fixture();
+		const workspace = join(home, "project");
+		writeJson(workspaceFile(workspace), {
+			autonomy: { enabled: true, until: "2026-10-20" },
+		});
+
+		const config = loadConfig({ home, env: {}, workspaceChain: [workspace] });
+
+		expect(config.problems).toEqual([]);
+		expect(config.autonomy).toEqual({ enabled: true, until: "2026-10-20" });
+	});
+
+	test("accepts enabled alone and both until forms", () => {
+		const home = fixture();
+		const workspace = join(home, "project");
+		for (const autonomy of [
+			{ enabled: false },
+			{ enabled: true, until: "2026-10-20T10:00Z" },
+			{ enabled: true, until: "2026-10-20T10:00:59-03:00" },
+			{ enabled: true, until: "2026-10-20T23:59+14:00" },
+		]) {
+			writeJson(workspaceFile(workspace), { autonomy });
+			const config = loadConfig({
+				home,
+				env: {},
+				workspaceChain: [workspace],
+			});
+			expect(config.problems).toEqual([]);
+			expect(config.autonomy).toEqual(autonomy);
+		}
+	});
+
+	for (const [label, autonomy] of [
+		["an invalid month and day", { enabled: true, until: "2026-13-40" }],
+		["a day the month lacks", { enabled: true, until: "2026-02-30" }],
+		["hour 24", { enabled: true, until: "2026-10-20T24:00Z" }],
+		[
+			"an offset past 14 hours",
+			{ enabled: true, until: "2026-10-20T10:00+15:00" },
+		],
+		[
+			"an instant without an offset",
+			{ enabled: true, until: "2026-10-20T10:00" },
+		],
+		["a string enabled", { enabled: "yes" }],
+		["an extra subkey", { enabled: true, notify: "herdr" }],
+	] as const) {
+		test(`reports ${label} as one problem and skips the file`, () => {
+			const home = fixture();
+			const workspace = join(home, "project");
+			writeJson(workspaceFile(workspace), { autonomy });
+
+			const config = loadConfig({
+				home,
+				env: {},
+				workspaceChain: [workspace],
+			});
+
+			expect(config.problems).toHaveLength(1);
+			expect(config.problems[0]?.key).toStartWith("autonomy");
+			expect(config.autonomy).toBeUndefined();
+		});
+	}
+
+	test("rejects autonomy in the user file", () => {
+		const home = fixture();
+		const userFile = join(home, ".config", "shepherd", "config.json");
+		writeJson(userFile, { autonomy: { enabled: true } });
+
+		const config = loadConfig({ home, env: {}, workspaceChain: [] });
+
+		expect(config.problems).toEqual([
+			{ file: userFile, key: "autonomy", problem: "unknown key" },
+		]);
+		expect(config.autonomy).toBeUndefined();
+	});
+
+	test("does not inherit autonomy from an enclosing workspace", () => {
+		const home = fixture();
+		const outer = join(home, "outer");
+		const target = join(outer, "target");
+		writeJson(workspaceFile(outer), { autonomy: { enabled: true } });
+		writeJson(workspaceFile(target), { marks: { current: 2_000 } });
+
+		const config = loadConfig({
+			home,
+			env: {},
+			workspaceChain: [outer, target],
+		});
+
+		expect(config.problems).toEqual([]);
+		expect(config.autonomy).toBeUndefined();
+	});
+});
+
 describe("handoff ceilings", () => {
 	test("layers individual model ceilings without losing other entries", () => {
 		const home = fixture();
