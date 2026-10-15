@@ -32,6 +32,7 @@ const CURRENT = `Updated: 2026-10-13 17:26, forge-1013b
 
 ### Detail inside Items
 - **WAITING** (on review) [lock](work/todo/lock/STATUS.md)
+- **ASK** [Evals item](./work/in-progress/shepherd-evals/STATUS.md): spelled with ./
 
 ## Live sessions
 - **NEXT** outside again
@@ -50,7 +51,7 @@ describe("currentItems", () => {
 
 		expect(parsed.problems).toEqual([]);
 		expect(parsed.updated).toBe("2026-10-13 17:26, forge-1013b");
-		expect(parsed.section).toEqual({ line: 10, endLine: 27 });
+		expect(parsed.section).toEqual({ line: 10, endLine: 28 });
 		expect(
 			parsed.items.map(({ word, known, line, endLine }) => ({
 				word,
@@ -66,6 +67,7 @@ describe("currentItems", () => {
 			{ word: "CANDIDATE", known: true, line: 17, endLine: 17 },
 			{ word: "ODD", known: false, line: 18, endLine: 18 },
 			{ word: "WAITING", known: true, line: 26, endLine: 26 },
+			{ word: "ASK", known: true, line: 27, endLine: 27 },
 		]);
 		for (const item of parsed.items) {
 			expect(item.raw).toBe(lines(CURRENT, item.line, item.endLine));
@@ -73,7 +75,7 @@ describe("currentItems", () => {
 	});
 
 	test("projects text whole and takes slug and link from the STATUS link", () => {
-		const [next, ask, , , candidate, odd, waiting] =
+		const [next, ask, , , candidate, odd, waiting, dotted] =
 			currentItems(CURRENT).items;
 
 		expect(next).toMatchObject({
@@ -98,6 +100,11 @@ describe("currentItems", () => {
 			slug: "lock",
 			link: "work/todo/lock/STATUS.md",
 			text: "(on review) lock",
+		});
+		expect(dotted).toMatchObject({
+			slug: "shepherd-evals",
+			link: "./work/in-progress/shepherd-evals/STATUS.md",
+			text: "Evals item: spelled with ./",
 		});
 	});
 

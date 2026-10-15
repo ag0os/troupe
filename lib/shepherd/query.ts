@@ -266,31 +266,42 @@ function checkLink(state: string, link: string): LinkCheck {
 	return { path, exists: checked.status === "ok" };
 }
 
+type ItemElement = CurrentItem & {
+	status: { path: string; exists: boolean } | null;
+};
+
+/** An items element: the entry with its link checked, link-unsafe reported. */
+function itemElement(
+	state: string,
+	item: CurrentItem,
+	problems: QueryProblem[],
+): ItemElement {
+	let status: ItemElement["status"] = null;
+	if (item.link !== null) {
+		const checked = checkLink(state, item.link);
+		if ("unsafe" in checked) {
+			problems.push(
+				problem(
+					"link-unsafe",
+					"CURRENT.md",
+					`link ${item.link}: ${checked.unsafe}`,
+					item.line,
+				),
+			);
+		} else {
+			status = checked;
+		}
+	}
+	const { word, known, slug, link, text, raw, line, endLine } = item;
+	return { word, known, slug, link, status, text, raw, line, endLine };
+}
+
 function collectItems({ request, target }: QueryContext): Collected {
 	const current = readCurrent(target.state);
 	const problems = [...current.problems];
 	const items = (current.parsed?.items ?? [])
 		.filter(({ word }) => request.word === undefined || word === request.word)
-		.map((item) => {
-			let status: { path: string; exists: boolean } | null = null;
-			if (item.link !== null) {
-				const checked = checkLink(target.state, item.link);
-				if ("unsafe" in checked) {
-					problems.push(
-						problem(
-							"link-unsafe",
-							"CURRENT.md",
-							`link ${item.link}: ${checked.unsafe}`,
-							item.line,
-						),
-					);
-				} else {
-					status = checked;
-				}
-			}
-			const { word, known, slug, link, text, raw, line, endLine } = item;
-			return { word, known, slug, link, status, text, raw, line, endLine };
-		});
+		.map((item) => itemElement(target.state, item, problems));
 	const parsed = current.parsed;
 	const noNext = parsed?.noNext ?? null;
 	const text = items.map(
@@ -323,16 +334,18 @@ function collectItem({ request, target }: QueryContext): Collected {
 	const slug = request.slug as string;
 	const current = readCurrent(target.state);
 	const problems = [...current.problems];
-	const entries: CurrentItem[] = (current.parsed?.items ?? []).filter(
-		(item) => item.slug === slug,
-	);
-	const links = [...new Set(entries.map(({ link }) => link as string))];
+	const entries = (current.parsed?.items ?? [])
+		.filter((item) => item.slug === slug)
+		.map((item) => itemElement(target.state, item, problems));
+	const links = [
+		...new Set(entries.map(({ link }) => posix.normalize(link as string))),
+	];
 	let resolved: "link" | "directory" | null = null;
 	let dir: string | null = null;
 	let candidates: string[] = [];
 
 	if (links.length > 1) {
-		candidates = links.map((link) => posix.dirname(posix.normalize(link)));
+		candidates = links.map((link) => posix.dirname(link));
 		problems.push(
 			problem(
 				"item-duplicate",
@@ -341,19 +354,9 @@ function collectItem({ request, target }: QueryContext): Collected {
 			),
 		);
 	} else if (links.length === 1) {
-		const checked = checkLink(target.state, links[0] as string);
-		if ("unsafe" in checked) {
-			problems.push(
-				problem(
-					"link-unsafe",
-					"CURRENT.md",
-					`link ${links[0]}: ${checked.unsafe}`,
-					entries[0]?.line,
-				),
-			);
-		} else {
+		if (entries.every(({ status }) => status !== null)) {
 			resolved = "link";
-			dir = posix.dirname(checked.path);
+			dir = posix.dirname(links[0] as string);
 			candidates = [dir];
 		}
 	} else {

@@ -474,6 +474,40 @@ describe("tool query item", () => {
 		expect(json.resolved).toBe("link");
 	});
 
+	test("joins two spellings of one link and gives each entry its status", async () => {
+		const fixture = contractTree();
+		fs.writeFileSync(
+			join(fixture.a, ".shepherd", "CURRENT.md"),
+			"## Items\n- **NEXT** [Evals item](./work/in-progress/evals/STATUS.md): one\n- **ASK** [evals](work/in-progress/evals/STATUS.md): two\n",
+		);
+		const { code, json } = await query(
+			["item", "evals"],
+			fixture.env(fixture.a),
+		);
+		expect(code).toBe(0);
+		expect(codes(json)).toEqual([]);
+		expect(json).toMatchObject({
+			resolved: "link",
+			dir: "work/in-progress/evals",
+			candidates: ["work/in-progress/evals"],
+		});
+		const status = { path: "work/in-progress/evals/STATUS.md", exists: true };
+		expect(json.entries).toEqual([
+			expect.objectContaining({
+				slug: "evals",
+				link: "./work/in-progress/evals/STATUS.md",
+				status,
+				line: 2,
+			}),
+			expect.objectContaining({
+				slug: "evals",
+				link: "work/in-progress/evals/STATUS.md",
+				status,
+				line: 3,
+			}),
+		]);
+	});
+
 	test("reports entries with different links as duplicates", async () => {
 		const fixture = contractTree();
 		fs.writeFileSync(

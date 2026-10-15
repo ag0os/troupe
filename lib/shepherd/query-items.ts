@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { noNext, STATUS_WORDS } from "./status-parse";
 import { journalFenceProblem, proseLines } from "./text";
 
@@ -80,7 +81,7 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 		if (!target?.endsWith("/STATUS.md")) continue;
 		return {
 			link: target,
-			slug: target.match(WORK_STATUS)?.[1] ?? label ?? "",
+			slug: posix.normalize(target).match(WORK_STATUS)?.[1] ?? label ?? "",
 		};
 	}
 	return undefined;
