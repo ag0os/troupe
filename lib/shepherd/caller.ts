@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "./config";
 import { sessionPrefixFor } from "./session-name";
-import { codexIndex, type ToolEnv } from "./sessions";
+import { claudeRegistry, codexIndex, type ToolEnv } from "./sessions";
 import { ownsDirectory } from "./status";
 import type { Workspace } from "./tree";
 import { findChildWorkspaces } from "./workspace";
@@ -16,7 +14,7 @@ export type Caller = {
 	reason?: string;
 };
 
-export const AMBIGUOUS_CALLER =
+const AMBIGUOUS_CALLER =
 	"both CLAUDE_PID and CODEX_THREAD_ID are set; pass --session";
 
 type ClaudeCaller = {
@@ -31,30 +29,24 @@ function claudeCaller(toolEnv: ToolEnv): ClaudeCaller | undefined {
 	const pid = toolEnv.env.CLAUDE_PID;
 	const id = toolEnv.env.CLAUDE_CODE_SESSION_ID;
 	if (!pid || !/^\d+$/.test(pid) || !id) return undefined;
-	let entry: Record<string, unknown>;
-	try {
-		entry = JSON.parse(
-			readFileSync(
-				join(toolEnv.home, ".claude", "sessions", `${pid}.json`),
-				"utf8",
-			),
-		) as Record<string, unknown>;
-	} catch {
-		return undefined;
-	}
-	if (entry.sessionId !== id || !toolEnv.pidAlive(Number(pid)))
-		return undefined;
-	const cwd = typeof entry.cwd === "string" ? entry.cwd : null;
-	if (typeof entry.name !== "string" || !entry.name)
+	const registry = claudeRegistry(toolEnv);
+	const entry = registry.available
+		? registry.sessions.find(
+				({ file, sessionId }) => file === `${pid}.json` && sessionId === id,
+			)
+		: undefined;
+	if (!entry) return undefined;
+	const { name, cwd, nameSource } = entry;
+	if (!name)
 		return { id, name: null, cwd, reason: "Claude session has no name" };
-	if (entry.nameSource === "derived")
+	if (nameSource === "derived")
 		return {
 			id,
 			name: null,
 			cwd,
 			reason: "name derived by Claude Code; name the session",
 		};
-	return { id, name: entry.name, cwd };
+	return { id, name, cwd };
 }
 
 /**

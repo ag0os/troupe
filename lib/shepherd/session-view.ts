@@ -57,7 +57,8 @@ export function sessionView(input: SessionViewInput): SessionView {
 	};
 	const checked = active.filter((session) => !unavailable(session));
 	const shepherds = running.filter(
-		(session) => owns(session.cwd) && prefixed(session.name),
+		(session) =>
+			!session.derived && owns(session.cwd) && prefixed(session.name),
 	);
 	const scope = input.unlistedScope ?? {
 		listedNames: new Set(listed.map(({ name }) => name)),

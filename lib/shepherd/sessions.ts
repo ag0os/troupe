@@ -8,6 +8,8 @@ export type Running = {
 	cwd: string;
 	status: string;
 	harness: "claude" | "codex";
+	/** Claude Code made the name up; nobody gave it. */
+	derived?: true;
 };
 
 export type AdapterResult =
@@ -119,10 +121,19 @@ export function namedSessions(registry: RegistryResult): AdapterResult {
 	if (!registry.available) return registry;
 	return {
 		available: true,
-		sessions: registry.sessions.flatMap(({ name, cwd, status }) =>
-			name === null
-				? []
-				: [{ name, cwd: cwd ?? "", status: status ?? "?", harness: "claude" }],
+		sessions: registry.sessions.flatMap(
+			({ name, cwd, status, nameSource }): Running[] =>
+				name === null
+					? []
+					: [
+							{
+								name,
+								cwd: cwd ?? "",
+								status: status ?? "?",
+								harness: "claude",
+								...(nameSource === "derived" ? { derived: true } : {}),
+							},
+						],
 		),
 	};
 }

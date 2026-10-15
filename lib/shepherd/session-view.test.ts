@@ -68,6 +68,34 @@ describe("sessionView", () => {
 		).toEqual([]);
 	});
 
+	test("a session with a name Claude derived is not a running Shepherd", () => {
+		const result = view({
+			listed: [listed("forge-1015")],
+			running: [
+				running("forge-1015"),
+				{ ...running("forge-84"), derived: true },
+			],
+			writer: "forge-1015",
+		});
+		expect(result.drift).toEqual([]);
+		expect(result.shepherds.map(({ name }) => name)).toEqual(["forge-1015"]);
+		expect(
+			view({
+				listed: [listed("forge-1014")],
+				running: [{ ...running("forge-84"), derived: true }],
+				writer: "forge-1014",
+			}).drift,
+		).toEqual([
+			{
+				code: "session-gone",
+				name: "forge-1014",
+				line: 9,
+				message:
+					"forge-1014 is listed live (CURRENT.md:9) but not running; running Shepherd: none",
+			},
+		]);
+	});
+
 	test("a running delegate without the prefix is unlisted, not drift", () => {
 		const result = view({
 			listed: [listed("forge-1015")],
