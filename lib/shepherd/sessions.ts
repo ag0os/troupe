@@ -57,7 +57,8 @@ function expandHome(path: string, home: string): string {
 }
 
 export type RegistryEntry = {
-	name: string;
+	name: string | null;
+	sessionId: string | null;
 	pid: number;
 	file: string;
 	cwd: string | null;
@@ -68,7 +69,7 @@ export type RegistryResult =
 	| { available: true; sessions: RegistryEntry[] }
 	| { available: false; reason: string };
 
-/** Named entries of the Claude session registry whose process is alive. */
+/** Entries of the Claude session registry whose process is alive, named or not. */
 export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 	const dir = join(toolEnv.home, ".claude", "sessions");
 	if (!existsSync(dir)) {
@@ -93,11 +94,10 @@ export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 				unknown
 			>;
 			const pid = Number(entry.pid);
-			if (!entry.name || !Number.isFinite(pid) || !toolEnv.pidAlive(pid)) {
-				continue;
-			}
+			if (!Number.isFinite(pid) || !toolEnv.pidAlive(pid)) continue;
 			sessions.push({
-				name: String(entry.name),
+				name: entry.name ? String(entry.name) : null,
+				sessionId: typeof entry.sessionId === "string" ? entry.sessionId : null,
 				pid,
 				file,
 				cwd: typeof entry.cwd === "string" ? entry.cwd : null,
@@ -116,12 +116,11 @@ export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
 	if (!registry.available) return registry;
 	return {
 		available: true,
-		sessions: registry.sessions.map(({ name, cwd, status }) => ({
-			name,
-			cwd: cwd ?? "",
-			status: status ?? "?",
-			harness: "claude",
-		})),
+		sessions: registry.sessions.flatMap(({ name, cwd, status }) =>
+			name === null
+				? []
+				: [{ name, cwd: cwd ?? "", status: status ?? "?", harness: "claude" }],
+		),
 	};
 }
 

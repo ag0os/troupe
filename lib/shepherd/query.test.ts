@@ -921,7 +921,27 @@ const SESSIONS = `Updated: 2026-10-13 17:26, ws-1013
 - delegate-cdx-1: Codex delegate for evals
 `;
 
-type Registered = { pid: number; name: string; cwd: string; status?: string };
+type Registered = {
+	pid: number;
+	name?: string;
+	sessionId?: string;
+	cwd: string;
+	status?: string;
+};
+
+/** A Claude agent as Herdr lists it: no label, the registry holds its name. */
+function herdrClaude(
+	sessionId: string,
+	cwd: string,
+	extra: Record<string, unknown> = {},
+) {
+	return {
+		agent: "claude",
+		agent_session: { value: sessionId },
+		cwd,
+		...extra,
+	};
+}
 
 /** A with the sessions CURRENT and a Codex home file naming ~/.codex-fake. */
 function sessionsTree(
@@ -1039,7 +1059,13 @@ describe("tool query sessions", () => {
 	test("keeps the registry entries the workspace owns, by the exact-directory rule", async () => {
 		const fixture = sessionsTree({ "root/notes/x.md": "x" });
 		fixture.register([
-			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+			{
+				pid: 201,
+				name: "ws-1013",
+				sessionId: "c-1",
+				cwd: fixture.a,
+				status: "idle",
+			},
 			{ pid: 202, name: "ws-1013", cwd: join(fixture.a, "notes") },
 			{ pid: 203, name: "root-1013", cwd: fixture.root, status: "busy" },
 			{ pid: 204, name: "deep-1013", cwd: join(fixture.root, "notes") },
@@ -1047,8 +1073,9 @@ describe("tool query sessions", () => {
 			{ pid: 206, name: "ws-1012b", cwd: fixture.a, status: "idle" },
 			{ pid: 207, name: "other-1013", cwd: fixture.a, status: "idle" },
 			{ pid: 208, name: "dead-1013", cwd: fixture.a },
+			{ pid: 209, sessionId: "c-9", cwd: fixture.a, status: "busy" },
 		]);
-		const alive = [201, 202, 203, 204, 205, 206, 207];
+		const alive = [201, 202, 203, 204, 205, 206, 207, 209];
 		const child = await query(
 			["sessions"],
 			fixture.sessionsEnv(fixture.a, { alive }).env,
@@ -1061,6 +1088,7 @@ describe("tool query sessions", () => {
 			sessions: [
 				{
 					name: "ws-1013",
+					sessionId: "c-1",
 					pid: 201,
 					file: "201.json",
 					cwd: fixture.a,
@@ -1070,6 +1098,7 @@ describe("tool query sessions", () => {
 				},
 				{
 					name: "ws-1013",
+					sessionId: null,
 					pid: 202,
 					file: "202.json",
 					cwd: join(fixture.a, "notes"),
@@ -1079,6 +1108,7 @@ describe("tool query sessions", () => {
 				},
 				{
 					name: "ws-1012b",
+					sessionId: null,
 					pid: 206,
 					file: "206.json",
 					cwd: fixture.a,
@@ -1088,10 +1118,21 @@ describe("tool query sessions", () => {
 				},
 				{
 					name: "other-1013",
+					sessionId: null,
 					pid: 207,
 					file: "207.json",
 					cwd: fixture.a,
 					status: "idle",
+					listed: null,
+					prefixMatch: false,
+				},
+				{
+					name: null,
+					sessionId: "c-9",
+					pid: 209,
+					file: "209.json",
+					cwd: fixture.a,
+					status: "busy",
 					listed: null,
 					prefixMatch: false,
 				},
@@ -1106,6 +1147,7 @@ describe("tool query sessions", () => {
 		expect(root.json.claude.sessions).toEqual([
 			{
 				name: "root-1013",
+				sessionId: null,
 				pid: 203,
 				file: "203.json",
 				cwd: fixture.root,
@@ -1183,23 +1225,25 @@ describe("tool query sessions", () => {
 		).toEqual([]);
 	});
 
-	test("keeps Herdr's Claude agents beside the registry and reads no Codex index without a Codex agent", async () => {
+	test("keeps Herdr's Claude agents beside the registry, named from it, and reads no Codex index without a Codex agent", async () => {
 		const fixture = sessionsTree({
 			"home/.codex-fake/session_index.jsonl": "",
 		});
 		fixture.register([
-			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+			{
+				pid: 201,
+				name: "ws-1013",
+				sessionId: "c-1",
+				cwd: fixture.a,
+				status: "idle",
+			},
+			{ pid: 202, sessionId: "c-4", cwd: fixture.a },
 		]);
 		const { env, calls: commands } = fixture.sessionsEnv(fixture.a, {
-			alive: [201],
+			alive: [201, 202],
 			agents: [
-				{
-					agent: "claude",
-					agent_session: { value: "c-1" },
-					name: "ws-1013",
-					cwd: fixture.a,
-					agent_status: "idle",
-				},
+				herdrClaude("c-1", fixture.a, { agent_status: "idle" }),
+				herdrClaude("c-4", fixture.a),
 				{
 					agent: "claude",
 					agent_session: { value: "c-2" },
@@ -1222,7 +1266,7 @@ describe("tool query sessions", () => {
 		expect(value.json.problems).toEqual([]);
 		expect(
 			value.json.claude.sessions.map(({ pid }: { pid: number }) => pid),
-		).toEqual([201]);
+		).toEqual([201, 202]);
 		expect(value.json.herdr).toEqual({
 			available: true,
 			reason: null,
@@ -1230,12 +1274,22 @@ describe("tool query sessions", () => {
 				{
 					agent: "claude",
 					sessionId: "c-1",
-					label: "ws-1013",
+					label: null,
 					cwd: fixture.a,
 					status: "idle",
 					name: "ws-1013",
 					listed: { line: 7, retired: false },
 					prefixMatch: true,
+				},
+				{
+					agent: "claude",
+					sessionId: "c-4",
+					label: null,
+					cwd: fixture.a,
+					status: null,
+					name: null,
+					listed: null,
+					prefixMatch: false,
 				},
 				{
 					agent: "claude",
@@ -1328,18 +1382,19 @@ describe("tool query sessions", () => {
 			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
 		});
 		fixture.register([
-			{ pid: 201, name: "ws-1013", cwd: fixture.a, status: "idle" },
+			{
+				pid: 201,
+				name: "ws-1013",
+				sessionId: "c-1",
+				cwd: fixture.a,
+				status: "idle",
+			},
+			{ pid: 202, cwd: fixture.a },
 		]);
 		const { env } = fixture.sessionsEnv(fixture.a, {
-			alive: [201],
+			alive: [201, 202],
 			agents: [
-				{
-					agent: "claude",
-					agent_session: { value: "c-1" },
-					name: "ws-1013",
-					cwd: fixture.a,
-					agent_status: "idle",
-				},
+				herdrClaude("c-1", fixture.a, { agent_status: "idle" }),
 				{
 					agent: "codex",
 					agent_session: { value: "x-1" },
@@ -1355,9 +1410,10 @@ describe("tool query sessions", () => {
 				"listed ws-1012b (retired)  CURRENT.md:8",
 				"listed delegate-cdx-1 (codex)  CURRENT.md:9",
 				`claude ws-1013 pid 201 idle ${fixture.a}  (listed, prefix)`,
+				`claude (unnamed) pid 202 ? ${fixture.a}  (unlisted, no prefix)`,
 				`herdr claude ws-1013 idle ${fixture.a}  (listed, prefix)`,
 				`herdr codex delegate-cdx-1 working ${join(fixture.a, "sub")}  (listed, no prefix)`,
-				"claude registry: 1 session",
+				"claude registry: 2 sessions",
 				"herdr: 2 agents",
 				"codex names: 1 index read",
 				"",
@@ -2431,7 +2487,9 @@ describe("tool query read contract", () => {
 		const fixture = sessionsTree({
 			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
 		});
-		fixture.register([{ pid: 201, name: "ws-1013", cwd: fixture.a }]);
+		fixture.register([
+			{ pid: 201, name: "ws-1013", sessionId: "c-1", cwd: fixture.a },
+		]);
 		const claude = join(fixture.home, ".claude");
 		const codexHome = join(fixture.home, ".codex-fake");
 		const homeFile = join(fixture.home, ".codex-active");
@@ -2439,12 +2497,7 @@ describe("tool query read contract", () => {
 			(call.path === homeFile && call.fn === "readFileSync") ||
 			(call.path === fixture.home && call.fn === "readdirSync") ||
 			call.path.startsWith(`${codexHome}${sep}`);
-		const claudeAgent = {
-			agent: "claude",
-			agent_session: { value: "c-1" },
-			name: "ws-1013",
-			cwd: fixture.a,
-		};
+		const claudeAgent = herdrClaude("c-1", fixture.a);
 		const codexAgent = {
 			agent: "codex",
 			agent_session: { value: "x-1" },
@@ -2529,7 +2582,7 @@ describe("tool query read contract", () => {
 			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
 		});
 		fixture.register([
-			{ pid: 201, name: "ws-1013", cwd: fixture.a },
+			{ pid: 201, name: "ws-1013", sessionId: "c-1", cwd: fixture.a },
 			{ pid: 202, name: "ws-1001", cwd: fixture.root },
 			{ pid: 203, name: "ws-1002", cwd: fixture.b },
 		]);
@@ -2538,12 +2591,7 @@ describe("tool query read contract", () => {
 		const { env, calls: commands } = fixture.sessionsEnv(fixture.root, {
 			alive: [201, 202, 203],
 			agents: [
-				{
-					agent: "claude",
-					agent_session: { value: "c-1" },
-					name: "ws-1013",
-					cwd: fixture.a,
-				},
+				herdrClaude("c-1", fixture.a),
 				{ agent: "codex", agent_session: { value: "x-1" }, cwd: fixture.b },
 			],
 		});
@@ -2577,6 +2625,9 @@ describe("tool query read contract", () => {
 			["root", [202]],
 			["a", [201]],
 			["b", [203]],
+		]);
+		expect(answers[1].herdr.agents).toMatchObject([
+			{ agent: "claude", label: null, name: "ws-1013" },
 		]);
 		expect(answers[2].herdr.agents).toMatchObject([
 			{ agent: "codex", name: "delegate-cdx-1" },

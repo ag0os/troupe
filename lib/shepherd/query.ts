@@ -562,12 +562,19 @@ function sessionsFrom(
 		prefix === null ? null : name?.startsWith(`${prefix}-`) === true;
 
 	const { claude, herdr, codex } = sources;
+	const registryNames = new Map<string, string>();
+	for (const { sessionId, name } of claude.available ? claude.sessions : []) {
+		if (sessionId !== null && name !== null && !registryNames.has(sessionId)) {
+			registryNames.set(sessionId, name);
+		}
+	}
 	const registry = claude.available
 		? claude.sessions
 				.filter(({ cwd }) => owned(cwd))
 				.sort((left, right) => left.pid - right.pid)
-				.map(({ name, pid, file, cwd, status }) => ({
+				.map(({ name, sessionId, pid, file, cwd, status }) => ({
 					name,
+					sessionId,
 					pid,
 					file,
 					cwd,
@@ -587,7 +594,11 @@ function sessionsFrom(
 					kind === "codex" && sessionId !== null
 						? codex?.names.get(sessionId)
 						: undefined;
-				const name = threadName ?? label;
+				const registryName =
+					kind === "claude" && sessionId !== null
+						? registryNames.get(sessionId)
+						: undefined;
+				const name = threadName ?? label ?? registryName ?? null;
 				return [
 					{
 						agent: kind,
@@ -664,7 +675,7 @@ function sessionsFrom(
 		}),
 		...registry.map(
 			(entry) =>
-				`claude ${entry.name} pid ${entry.pid} ${entry.status ?? "?"} ${entry.cwd}  ${marks(entry.name)}`,
+				`claude ${entry.name ?? "(unnamed)"} pid ${entry.pid} ${entry.status ?? "?"} ${entry.cwd}  ${marks(entry.name)}`,
 		),
 		...agents.map(
 			(agent) =>
