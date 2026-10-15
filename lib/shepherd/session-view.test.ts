@@ -96,6 +96,22 @@ describe("sessionView", () => {
 		]);
 	});
 
+	test("a retired predecessor still running is retired, not unrecorded", () => {
+		const result = view({
+			listed: [
+				listed("forge-1015"),
+				listed("forge-1014", { line: 10, retired: true }),
+			],
+			running: [running("forge-1015"), running("forge-1014")],
+			writer: "forge-1015",
+			updatedName: "forge-1015",
+		});
+		expect(result.drift).toEqual([]);
+		expect(result.retiredButRunning.map(({ name }) => name)).toEqual([
+			"forge-1014",
+		]);
+	});
+
 	test("a running delegate without the prefix is unlisted, not drift", () => {
 		const result = view({
 			listed: [listed("forge-1015")],

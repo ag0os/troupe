@@ -60,17 +60,15 @@ export function sessionView(input: SessionViewInput): SessionView {
 		(session) =>
 			!session.derived && owns(session.cwd) && prefixed(session.name),
 	);
-	const scope = input.unlistedScope ?? {
-		listedNames: new Set(listed.map(({ name }) => name)),
-		owner: owns,
-	};
+	const listedNames = new Set(listed.map(({ name }) => name));
+	const scope = input.unlistedScope ?? { listedNames, owner: owns };
 	const listedLive = [...new Set(active.map(({ name }) => name))];
 	const shepherdNames = shepherds.map(({ name }) => name).join(", ") || "none";
 	const drift: Drift[] = [
 		...shepherds
 			.filter(
 				({ name }) =>
-					name !== writer && name !== updatedName && !listedLive.includes(name),
+					name !== writer && name !== updatedName && !listedNames.has(name),
 			)
 			.map(
 				({ name }): Drift => ({
