@@ -33,6 +33,7 @@ import { runStart } from "./start";
 import { renderStatus, statusJson, statusReport } from "./status-render";
 import {
 	discoverTree,
+	hasChildWorkspace,
 	selectWorkspaces,
 	type Workspace,
 	type WorkspaceTree,
@@ -334,6 +335,7 @@ async function runCheck(
 			tree,
 			await runningSessions(toolEnv, config),
 			toolEnv.home,
+			configs,
 		);
 		return flags.json === true
 			? result(
@@ -560,9 +562,20 @@ export async function runTool(
 			};
 		}
 		if (command === "checkpoint") {
+			const config = configForWorkspace(homeWorkspace, tree, toolEnv);
+			const userProblems = splitConfigProblems(config.problems, toolEnv).user;
+			if (userProblems.length > 0) {
+				return result(
+					userProblems.map(configProblemLine).join("\n"),
+					2,
+					"stderr",
+				);
+			}
 			const checkpoint = await runCheckpoint(
 				homeWorkspace,
 				toolEnv,
+				config,
+				hasChildWorkspace(tree, homeWorkspace),
 				{
 					apply: flags.apply === true,
 					token: typeof flags.token === "string" ? flags.token : undefined,

@@ -61,6 +61,7 @@ describe("liveReports", () => {
 				session("codex-one", tree.root.dir, "codex"),
 			]),
 			result.root,
+			new Map(),
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.ok).toEqual(["ok-one", "duplicate-one", "codex-one"]);
@@ -91,6 +92,7 @@ describe("liveReports", () => {
 				session("between-one", join(tree.root.dir, "other")),
 			]),
 			result.root,
+			new Map(),
 		);
 
 		expect(
@@ -136,6 +138,7 @@ describe("liveReports", () => {
 				session("inside-root-reference", join(insideRoot, "repo")),
 			]),
 			home,
+			new Map(),
 		);
 
 		expect(
@@ -158,6 +161,7 @@ describe("liveReports", () => {
 			tree,
 			running([session("delegate-one", tree.root.dir, "claude")]),
 			result.root,
+			new Map(),
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.ok).toEqual(["delegate-one"]);
@@ -178,6 +182,7 @@ describe("liveReports", () => {
 				{ available: false, reason: "not inside Herdr" },
 			),
 			result.root,
+			new Map(),
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.gone).toEqual([]);
@@ -198,6 +203,7 @@ describe("liveReports", () => {
 			tree,
 			running([session("delegate-one", join(result.root, "external", "repo"))]),
 			result.root,
+			new Map(),
 		).byWorkspace.get(tree.root.name);
 
 		expect(report?.ok).toEqual(["delegate-one"]);

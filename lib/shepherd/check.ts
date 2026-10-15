@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { checkLinks, decodedLinkTarget } from "./check-links";
 import { checkModules } from "./check-modules";
 import { checkWork } from "./check-work";
@@ -9,8 +9,11 @@ import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
 import { lockStatus } from "./lock";
-import type { ToolEnv } from "./sessions";
-import { statusItems } from "./status-parse";
+import { currentItems, updatedName } from "./query-items";
+import { sessionPrefixFor } from "./session-name";
+import { sessionView } from "./session-view";
+import { claudeRegistry, namedSessions, type ToolEnv } from "./sessions";
+import { listedSessions } from "./status-parse";
 import {
 	frontmatter,
 	journalChain,
@@ -19,7 +22,12 @@ import {
 	read,
 	words,
 } from "./text";
-import type { Workspace, WorkspaceTree } from "./tree";
+import {
+	hasChildWorkspace,
+	isBeneath,
+	type Workspace,
+	type WorkspaceTree,
+} from "./tree";
 
 const MEMORY_TYPES = new Set(["user", "preference", "project", "reference"]);
 
@@ -92,11 +100,6 @@ function withoutInlineCode(line: string): string {
 
 function referenceLabel(label: string): string {
 	return label.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function isBeneath(parent: string, child: string): boolean {
-	const path = relative(parent, child);
-	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
 }
 
 /** Check one workspace's state files, modules, memories and docs. */
@@ -301,7 +304,45 @@ export function checkWorkspace(
 			}
 		}
 
-		for (const item of statusItems(text)) {
+		const claude = namedSessions(claudeRegistry(probe));
+		if (claude.available) {
+			const hasChildren = hasChildWorkspace(tree, workspace);
+			const view = sessionView({
+				listed: listedSessions(text),
+				running: claude.sessions,
+				sources: { claude: { available: true } },
+				workspace: {
+					dir: workspace.dir,
+					hasChildren,
+					prefix: sessionPrefixFor(
+						workspace.dir,
+						config.sessionPrefix,
+						hasChildren,
+					),
+				},
+				writer:
+					checkpoint.status === "ok"
+						? (checkpoint.checkpoint.session ?? null)
+						: null,
+				updatedName: updatedName(text),
+			});
+			for (const drift of view.drift)
+				add("warn", drift.code, current, drift.message, drift.line);
+		}
+		const entries = currentItems(text);
+		for (const problem of entries.problems) {
+			if (problem.code === "entry-off-shape")
+				add(
+					"warn",
+					"status-entry-off-shape",
+					current,
+					problem.message,
+					problem.line,
+				);
+			if (problem.code === "items-section-missing")
+				add("warn", "items-section-missing", current, problem.message);
+		}
+		for (const item of entries.items) {
 			if (!item.known) {
 				add(
 					"warn",

@@ -8,6 +8,8 @@ export type Running = {
 	cwd: string;
 	status: string;
 	harness: "claude" | "codex";
+	/** Claude Code made the name up; nobody gave it. */
+	derived?: true;
 };
 
 export type AdapterResult =
@@ -63,6 +65,8 @@ export type RegistryEntry = {
 	file: string;
 	cwd: string | null;
 	status: string | null;
+	/** How Claude Code named the session; "derived" names were made up, not given. */
+	nameSource: string | null;
 };
 
 export type RegistryResult =
@@ -102,6 +106,8 @@ export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 				file,
 				cwd: typeof entry.cwd === "string" ? entry.cwd : null,
 				status: typeof entry.status === "string" ? entry.status : null,
+				nameSource:
+					typeof entry.nameSource === "string" ? entry.nameSource : null,
 			});
 		} catch {
 			// A malformed entry or a dead process does not invalidate the registry.
@@ -110,18 +116,31 @@ export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 	return { available: true, sessions };
 }
 
-/** Live Claude sessions from the harness registry. */
-export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
-	const registry = claudeRegistry(toolEnv);
+/** The named registry entries as running Claude sessions. */
+export function namedSessions(registry: RegistryResult): AdapterResult {
 	if (!registry.available) return registry;
 	return {
 		available: true,
-		sessions: registry.sessions.flatMap(({ name, cwd, status }) =>
-			name === null
-				? []
-				: [{ name, cwd: cwd ?? "", status: status ?? "?", harness: "claude" }],
+		sessions: registry.sessions.flatMap(
+			({ name, cwd, status, nameSource }): Running[] =>
+				name === null
+					? []
+					: [
+							{
+								name,
+								cwd: cwd ?? "",
+								status: status ?? "?",
+								harness: "claude",
+								...(nameSource === "derived" ? { derived: true } : {}),
+							},
+						],
 		),
 	};
+}
+
+/** Live Claude sessions from the harness registry. */
+export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
+	return namedSessions(claudeRegistry(toolEnv));
 }
 
 /** Newest Claude transcript modification time for sessions launched in cwd. */
@@ -336,13 +355,12 @@ export function codexThreadNames(
 	return codexIndex(toolEnv, config).names;
 }
 
-function codexSessions(
-	toolEnv: ToolEnv,
-	config: Config,
+/** Herdr's Codex agents as running sessions, named from the Codex index. */
+export function codexAgents(
 	herdr: HerdrResult,
+	names: ReadonlyMap<string, string>,
 ): AdapterResult {
 	if (!herdr.available) return { available: false, reason: herdr.reason };
-	const names = codexThreadNames(toolEnv, config);
 	const sessions = (herdr.agents ?? [])
 		.filter((agent) => agent.agent === "codex")
 		.map((agent): Running => {
@@ -359,6 +377,15 @@ function codexSessions(
 			};
 		});
 	return { available: true, sessions };
+}
+
+function codexSessions(
+	toolEnv: ToolEnv,
+	config: Config,
+	herdr: HerdrResult,
+): AdapterResult {
+	if (!herdr.available) return { available: false, reason: herdr.reason };
+	return codexAgents(herdr, codexThreadNames(toolEnv, config));
 }
 
 /** Collect running sessions and the availability of all three sources. */

@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { coveredPaths, hashPaths } from "./checkpoint";
+import { assessCheckpoint, coveredPaths, hashPaths } from "./checkpoint";
 import type { ToolEnv } from "./sessions";
 import {
 	fakeToolEnv,
 	jsonCommandResult,
 	type MakeTreeOptions,
 	makeTree,
+	OFF_SHAPE_CURRENT,
 } from "./test-support";
 import { journalChain } from "./text";
 import { runTool } from "./tool";
@@ -1364,7 +1365,7 @@ describe("tool query sessions", () => {
 		]);
 	});
 
-	test("keeps a Herdr label over a differently named registry twin", async () => {
+	test("names a Herdr Claude agent from its registry twin over its label", async () => {
 		const fixture = sessionsTree();
 		fixture.register([
 			{
@@ -1391,7 +1392,7 @@ describe("tool query sessions", () => {
 			expect.objectContaining({
 				sessionId: "c-2",
 				label: "ws-1014",
-				name: "ws-1014",
+				name: "other-name",
 			}),
 		]);
 	});
@@ -1518,6 +1519,7 @@ describe("tool query sessions", () => {
 		expect(await runTool(["query", "sessions"], {}, env)).toEqual({
 			text: [
 				"prefix: ws",
+				"caller: none (none)",
 				"listed ws-1013  CURRENT.md:7",
 				"listed ws-1012b (retired)  CURRENT.md:8",
 				"listed delegate-cdx-1 (codex)  CURRENT.md:9",
@@ -2502,7 +2504,7 @@ const ALLOWED = {
 						path,
 					)),
 	autonomy: ownFiles("config.json"),
-	sessions: ownFiles("CURRENT.md", "config.json"),
+	sessions: ownFiles("CURRENT.md", "config.json", "checkpoint.json"),
 	journal: chainReads(CHAIN),
 	"journal --since": chainReads(JOURNAL_FILES),
 	checkpoint: (path, call) => {
@@ -2991,6 +2993,139 @@ describe("tool query acceptance", () => {
 		).toEqual([]);
 		expect(await configFindings({ autonomy: { enabled: "yes" } })).toEqual([
 			expect.objectContaining({ code: "config-invalid" }),
+		]);
+	});
+});
+
+describe("F16: one boundary and one change classifier", () => {
+	function certified(
+		cursors: (ids: string[]) => { from: string | null; to: string | null },
+		extra: Record<string, string> = {},
+	) {
+		const fixture = checkpointTree(extra);
+		const { snapshot } = fixture.certify(cursors);
+		fs.mkdirSync(join(fixture.state, "checkpoints"));
+		fs.copyFileSync(
+			join(fixture.state, "CURRENT.md"),
+			join(fixture.state, snapshot),
+		);
+		return fixture;
+	}
+	function assessed(fixture: ReturnType<typeof checkpointTree>) {
+		return assessCheckpoint(
+			{ name: "a", dir: fixture.a, state: fixture.state },
+			fixture.env(fixture.a),
+		);
+	}
+
+	const cases: [
+		string,
+		(ids: string[]) => { from: string | null; to: string | null },
+		((state: string) => void)?,
+	][] = [
+		["found across an archive month", BOUNDARY],
+		[
+			"lost from an edited certified entry",
+			BOUNDARY,
+			(state) =>
+				fs.writeFileSync(
+					join(state, "journal.md"),
+					JOURNAL.replace("10:00 started", "10:00 started, edited"),
+				),
+		],
+		["both cursors null", () => ({ from: null, to: null })],
+	];
+	for (const [name, cursors, change] of cases) {
+		test(`assessCheckpoint and query checkpoint give one boundary: ${name}`, async () => {
+			const fixture = certified(cursors);
+			change?.(fixture.state);
+			const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+			expect(assessed(fixture).boundary).toEqual(json.boundary);
+		});
+	}
+
+	test("regression guard: assessCheckpoint, query checkpoint and the dry run list the same changes with work/todo symlinked", async () => {
+		const fixture = certified(BOUNDARY, {
+			"outside/work/todo/lock/STATUS.md": STATUS,
+		});
+		const { state } = fixture;
+		fs.appendFileSync(join(state, "CURRENT.md"), "- **ASK** more\n");
+		fs.mkdirSync(join(state, "work", "in-progress", "new"));
+		fs.writeFileSync(
+			join(state, "work", "in-progress", "new", "STATUS.md"),
+			STATUS,
+		);
+		fs.rmSync(join(state, "MEMORY.md"));
+		fs.rmSync(join(state, "work", "todo"), { recursive: true });
+		fs.symlinkSync(
+			join(fixture.base, "outside", "work", "todo"),
+			join(state, "work", "todo"),
+		);
+		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(json.changed).toContainEqual({
+			path: "work/todo",
+			kind: "unsafe",
+			reason: "is a symlink",
+		});
+		expect(assessed(fixture).changed).toEqual(json.changed);
+		const dry = await runTool(
+			["checkpoint"],
+			{ json: true },
+			fixture.env(fixture.a),
+		);
+		expect(
+			JSON.parse(dry.text).changed.map(
+				({ path, kind }: { path: string; kind: string }) => ({ path, kind }),
+			),
+		).toEqual(
+			json.changed.map(({ path, kind }: { path: string; kind: string }) => ({
+				path,
+				kind,
+			})),
+		);
+	});
+
+	test("assessCheckpoint and query checkpoint agree on a symlinked work", async () => {
+		const fixture = certified(BOUNDARY, {
+			"outside/work/todo/lock/STATUS.md": STATUS,
+			"outside/work/todo/other/STATUS.md": STATUS,
+			"outside/work/in-progress/evals/STATUS.md": STATUS,
+		});
+		fs.rmSync(join(fixture.state, "work"), { recursive: true });
+		fs.symlinkSync(
+			join(fixture.base, "outside", "work"),
+			join(fixture.state, "work"),
+		);
+		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(assessed(fixture).changed).toEqual(json.changed);
+	});
+});
+
+describe("acceptance 3: one entry shape", () => {
+	test("check --status and query items count the same entries; query skips off-shape lines with exit 0", async () => {
+		const fixture = contractTree({
+			"root/a/.shepherd/CURRENT.md": OFF_SHAPE_CURRENT,
+		});
+		const env = fixture.env(fixture.a);
+		const items = await query(["items"], env);
+		expect(items.code).toBe(0);
+		expect(items.json.items.map(({ line }: { line: number }) => line)).toEqual([
+			7, 10, 11,
+		]);
+		expect(
+			items.json.problems.map(
+				({ code, line }: { code: string; line: number }) => ({ code, line }),
+			),
+		).toEqual([
+			{ code: "entry-off-shape", line: 8 },
+			{ code: "entry-off-shape", line: 9 },
+		]);
+		const status = await runTool(["check"], { status: true, json: true }, env);
+		const report = JSON.parse(status.text).workspaces.find(
+			({ name }: { name: string }) => name === "a",
+		);
+		expect(report.items.map(({ line }: { line: number }) => line)).toEqual([
+			7, 10, 11,
 		]);
 	});
 });

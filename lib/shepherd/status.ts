@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readCheckpoint } from "./checkpoint";
+import type { Config } from "./config";
+import { updatedName } from "./query-items";
+import { sessionPrefixFor } from "./session-name";
+import { type Drift, sessionView } from "./session-view";
 import {
 	latestClaudeTranscriptMtime,
 	type Running,
@@ -7,7 +12,7 @@ import {
 	type ToolEnv,
 } from "./sessions";
 import { type ListedSession, listedSessions } from "./status-parse";
-import type { Workspace, WorkspaceTree } from "./tree";
+import { hasChildWorkspace, type Workspace, type WorkspaceTree } from "./tree";
 
 export type UncheckedSession = ListedSession & { reason: string };
 
@@ -18,6 +23,7 @@ export type LiveReport = {
 	unchecked: UncheckedSession[];
 	retiredButRunning: Running[];
 	unlisted: Running[];
+	drift: Drift[];
 };
 
 export type LiveReports = {
@@ -78,9 +84,14 @@ function mentionedPaths(
 	return [...paths];
 }
 
-function currentSessions(workspace: Workspace): ListedSession[] {
+function currentText(workspace: Workspace): string {
 	const path = join(workspace.state, "CURRENT.md");
-	return existsSync(path) ? listedSessions(read(path)) : [];
+	return existsSync(path) ? read(path) : "";
+}
+
+function checkpointWriter(workspace: Workspace): string | null {
+	const read = readCheckpoint(workspace.state);
+	return read.status === "ok" ? (read.checkpoint.session ?? null) : null;
 }
 
 /** Classify listed and running sessions for the selected workspaces. */
@@ -89,27 +100,26 @@ export function liveReports(
 	tree: WorkspaceTree,
 	running: RunningSessionsResult,
 	home: string,
+	configs: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
 ): LiveReports {
+	const texts = new Map(
+		tree.workspaces.map((workspace) => [
+			workspace.name,
+			currentText(workspace),
+		]),
+	);
 	const allListed = new Map(
 		tree.workspaces.map((workspace) => [
 			workspace.name,
-			currentSessions(workspace),
+			listedSessions(texts.get(workspace.name) ?? ""),
 		]),
 	);
 	const listedNames = new Set(
 		[...allListed.values()].flat().map((session) => session.name),
 	);
-	const runningByName = new Map(
-		running.sessions.map((session) => [session.name, session]),
-	);
 	const hasChildren = new Set(
 		tree.workspaces
-			.filter((workspace) =>
-				tree.workspaces.some(
-					(candidate) =>
-						candidate !== workspace && within(workspace.dir, candidate.dir),
-				),
-			)
+			.filter((workspace) => hasChildWorkspace(tree, workspace))
 			.map((workspace) => workspace.name),
 	);
 	const owns = (workspace: Workspace, cwd: string) =>
@@ -138,45 +148,41 @@ export function liveReports(
 		}
 		return best?.workspace;
 	};
-	const unavailableReason = (session: ListedSession): string | undefined => {
-		if (session.subagent) return "subagent";
-		const adapter = session.codex ? running.codex : running.claude;
-		return adapter.available ? undefined : adapter.reason;
-	};
-
 	const byWorkspace = new Map<string, LiveReport>();
 	for (const workspace of workspaces) {
-		const mine = allListed.get(workspace.name) ?? [];
-		const active = mine.filter((session) => !session.retired);
-		const checked = active.filter((session) => !unavailableReason(session));
+		const text = texts.get(workspace.name) ?? "";
+		const children = hasChildren.has(workspace.name);
+		const { ok, gone, unchecked, retiredButRunning, unlisted, drift } =
+			sessionView({
+				listed: allListed.get(workspace.name) ?? [],
+				running: running.sessions,
+				sources: { claude: running.claude, codex: running.codex },
+				workspace: {
+					dir: workspace.dir,
+					hasChildren: children,
+					prefix: sessionPrefixFor(
+						workspace.dir,
+						configs.get(workspace.dir)?.sessionPrefix,
+						children,
+					),
+				},
+				writer: checkpointWriter(workspace),
+				updatedName: updatedName(text),
+				unlistedScope: {
+					listedNames,
+					owner: (cwd) => owner(cwd) === workspace,
+				},
+			});
 		byWorkspace.set(workspace.name, {
 			shepherd: running.sessions.filter((session) =>
 				owns(workspace, session.cwd),
 			),
-			ok: checked
-				.filter((session) => runningByName.has(session.name))
-				.map((session) => session.name),
-			gone: checked.filter((session) => !runningByName.has(session.name)),
-			unchecked: active.flatMap((session) => {
-				const reason = unavailableReason(session);
-				return reason ? [{ ...session, reason }] : [];
-			}),
-			retiredButRunning: mine.flatMap((session) => {
-				if (
-					!session.retired ||
-					active.some((candidate) => candidate.name === session.name)
-				) {
-					return [];
-				}
-				const found = running.sessions.find(
-					(candidate) => candidate.name === session.name,
-				);
-				return found ? [found] : [];
-			}),
-			unlisted: running.sessions.filter(
-				(session) =>
-					!listedNames.has(session.name) && owner(session.cwd) === workspace,
-			),
+			ok,
+			gone,
+			unchecked,
+			retiredButRunning,
+			unlisted,
+			drift,
 		});
 	}
 	const unattributed = running.sessions.filter(

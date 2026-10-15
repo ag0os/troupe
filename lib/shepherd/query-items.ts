@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { noNext, STATUS_WORDS } from "./status-parse";
+import { noNext, STATUS_WORDS, type StatusItem } from "./status-parse";
 import { journalFenceProblem, proseLines } from "./text";
 
 export type ParseProblem = {
@@ -47,6 +47,7 @@ export type StatusProjection = {
 
 const KNOWN = new Set<string>(STATUS_WORDS);
 const ENTRY = /^[-*][ \t]+\*\*([A-Z]{3,}):?\*\*/;
+const BOLD_START = /^[-*][ \t]+(\*\*([A-Z]+)\b[^*]*\*\*)/;
 const LINK = /\[([^\]]*)\]\(([^)\s]+)\)/g;
 const WORK_STATUS = /^work\/[^/]+\/([^/]+)\/STATUS\.md$/;
 
@@ -87,16 +88,54 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 	return undefined;
 }
 
+const UPDATED_SHAPE =
+	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,[ \t]*(.*?))?[ \t]*(\r?)$/;
+
+/** CURRENT's first `Updated:` line outside a fence and above `## Items`. */
+function updatedLine(text: string): { line: number; text: string } | null {
+	for (const { n, line } of proseLines(text)) {
+		if (/^##\s+Items\b/i.test(line)) return null;
+		if (/^Updated:/.test(line)) return { line: n, text: line };
+	}
+	return null;
+}
+
+/** The session name on CURRENT's `Updated:` line, when the line has the standard shape. */
+export function updatedName(text: string): string | null {
+	const found = updatedLine(text);
+	return found?.text.match(UPDATED_SHAPE)?.[2] || null;
+}
+
+/**
+ * CURRENT with the `Updated:` line's session name set to writer, nothing else
+ * changed, or why the line was left alone.
+ */
+export function withUpdatedName(
+	text: string,
+	writer: string,
+):
+	| { status: "rewritten"; text: string; before: string | null }
+	| { status: "same" }
+	| { status: "skipped"; reason: "missing" | "not in the standard shape" } {
+	const found = updatedLine(text);
+	if (!found) return { status: "skipped", reason: "missing" };
+	const match = found.text.match(UPDATED_SHAPE);
+	if (!match?.[1])
+		return { status: "skipped", reason: "not in the standard shape" };
+	const before = match[2] || null;
+	if (before === writer) return { status: "same" };
+	const lines = text.split("\n");
+	lines[found.line - 1] = `Updated: ${match[1]}, ${writer}${match[3]}`;
+	return { status: "rewritten", text: lines.join("\n"), before };
+}
+
 /** CURRENT's Items entries, scoped to the Items section and lossless. */
 export function currentItems(text: string): CurrentItems {
 	const all = sourceLines(text);
 	const prose = proseLines(text);
 	const start = prose.findIndex(({ line }) => /^##\s+Items\b/i.test(line));
 	const updated =
-		prose
-			.slice(0, start < 0 ? undefined : start)
-			.map(({ line }) => line.match(/^Updated:\s*(.+?)\s*$/)?.[1])
-			.find((value) => value !== undefined) ?? null;
+		updatedLine(text)?.text.slice("Updated:".length).trim() || null;
 	const result: CurrentItems = {
 		updated,
 		noNext: noNext(text),
@@ -152,7 +191,16 @@ export function currentItems(text: string): CurrentItems {
 		}
 		finish();
 		const word = line.match(ENTRY)?.[1];
-		if (!word) continue;
+		if (!word) {
+			const bold = line.match(BOLD_START);
+			if (bold?.[1] && bold[2] && KNOWN.has(bold[2]))
+				result.problems.push({
+					code: "entry-off-shape",
+					line: n,
+					message: `entry starts with ${bold[1]}; core's shape is "- **WORD** text"; query items skips it`,
+				});
+			continue;
+		}
 		current = {
 			item: {
 				word,
@@ -169,6 +217,19 @@ export function currentItems(text: string): CurrentItems {
 	}
 	finish();
 	return result;
+}
+
+/** CURRENT's entries as status shows them: the word, its text cut to 150 characters, and its line. */
+export function statusItems(text: string): StatusItem[] {
+	return currentItems(text).items.map(({ word, known, text, line }) => {
+		const clean = text.replace(/\*\*/g, "");
+		return {
+			word,
+			known,
+			text: clean.length > 150 ? `${clean.slice(0, 147)}...` : clean,
+			line,
+		};
+	});
 }
 
 function frontmatterValue(rest: string): string {

@@ -137,6 +137,17 @@ describe("runTool usage and validation", () => {
 			code: 2,
 			stream: "stderr",
 		});
+		expect(
+			await runTool(
+				["checkpoint"],
+				{},
+				{ ...env, env: { XDG_CONFIG_HOME: xdg } },
+			),
+		).toEqual({
+			text: `shepherd: ${configFile}: extra: unknown key\n`,
+			code: 2,
+			stream: "stderr",
+		});
 	});
 });
 
@@ -1227,7 +1238,7 @@ test("checkpoint passes the hyphenated accept-dropped reason to certification", 
 	const dry = await runTool(["checkpoint"], { json: true }, env);
 	await runTool(
 		["checkpoint"],
-		{ apply: true, token: JSON.parse(dry.text).token },
+		{ apply: true, token: JSON.parse(dry.text).token, session: "test-session" },
 		env,
 	);
 	writeFileSync(
@@ -1237,11 +1248,22 @@ test("checkpoint passes the hyphenated accept-dropped reason to certification", 
 	const next = await runTool(["checkpoint"], { json: true }, env);
 	const token = JSON.parse(next.text).token;
 	expect(
-		(await runTool(["checkpoint"], { apply: true, token }, env)).code,
+		(
+			await runTool(
+				["checkpoint"],
+				{ apply: true, token, session: "test-session" },
+				env,
+			)
+		).code,
 	).toBe(1);
 	const output = await runTool(
 		["checkpoint"],
-		{ apply: true, token, "accept-dropped": "completed" },
+		{
+			apply: true,
+			token,
+			session: "test-session",
+			"accept-dropped": "completed",
+		},
 		env,
 	);
 	expect(output.code).toBe(0);

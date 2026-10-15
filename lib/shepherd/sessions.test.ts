@@ -3,10 +3,12 @@ import { utimesSync } from "node:fs";
 import { join } from "node:path";
 import { type Config, DEFAULT_HANDOFF_CEILINGS, DEFAULT_START } from "./config";
 import {
+	claudeRegistry,
 	claudeSessions,
 	codexThreadNames,
 	herdrSessions,
 	latestClaudeTranscriptMtime,
+	namedSessions,
 	runningSessions,
 } from "./sessions";
 import { fakeToolEnv, jsonCommandResult, makeTree } from "./test-support";
@@ -319,5 +321,51 @@ describe("Codex adapter", () => {
 			reason: "not inside Herdr",
 		});
 		expect(result.codex).toEqual(result.herdr);
+	});
+});
+
+describe("claudeRegistry", () => {
+	test("keeps nameSource, null when the entry has none, and namedSessions marks only a derived name", () => {
+		const home = fixture({
+			".claude/sessions/101.json": JSON.stringify({
+				pid: 101,
+				sessionId: "a",
+				name: "forge-1015",
+				nameSource: "derived",
+				cwd: "/w",
+			}),
+			".claude/sessions/102.json": JSON.stringify({
+				pid: 102,
+				sessionId: "b",
+				name: "forge-1016",
+				cwd: "/w",
+			}),
+		});
+		const registry = claudeRegistry(
+			fakeToolEnv({ home, alivePids: [101, 102] }),
+		);
+		if (!registry.available) throw new Error("registry unavailable");
+		expect(
+			registry.sessions
+				.map(({ pid, nameSource }) => ({ pid, nameSource }))
+				.sort((left, right) => left.pid - right.pid),
+		).toEqual([
+			{ pid: 101, nameSource: "derived" },
+			{ pid: 102, nameSource: null },
+		]);
+		const named = namedSessions(registry);
+		if (!named.available) throw new Error("named sessions unavailable");
+		expect(
+			named.sessions.sort((left, right) => left.name.localeCompare(right.name)),
+		).toStrictEqual([
+			{
+				name: "forge-1015",
+				cwd: "/w",
+				status: "?",
+				harness: "claude",
+				derived: true,
+			},
+			{ name: "forge-1016", cwd: "/w", status: "?", harness: "claude" },
+		]);
 	});
 });

@@ -12,6 +12,7 @@ import { join, relative, resolve } from "node:path";
 import {
 	type Checkpoint,
 	carriedEvidence,
+	checkpointBoundary,
 	coveredPaths,
 	FIXED_PATHS,
 	fallbackSections,
@@ -284,15 +285,15 @@ export function certifyRange(
 	const from = chain.findIndex(
 		(entry) => entry.id === checkpoint?.journal.from,
 	);
-	const to = chain.findIndex((entry) => entry.id === checkpoint?.journal.to);
-	const found =
-		held.status === "ok" &&
-		checkpoint !== undefined &&
-		((checkpoint.journal.from === null && checkpoint.journal.to === null) ||
-			(from >= 0 && to >= from));
+	const position =
+		held.status === "ok" && checkpoint
+			? checkpointBoundary(chain, checkpoint.journal).position
+			: null;
+	const found = position !== null;
 	const sections = fallbackSections("", chain, []);
 	const first = sections[0]?.entries[0];
-	const start = found ? to + 1 : first ? chain.indexOf(first) : chain.length;
+	const start =
+		position !== null ? position : first ? chain.indexOf(first) : chain.length;
 	const orphans = chain.filter(
 		(entry, index) =>
 			entry.day === undefined && (index >= start || sections.length === 0),

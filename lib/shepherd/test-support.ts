@@ -9,6 +9,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CommandResult } from "../agent-format/types";
+import {
+	type Config,
+	DEFAULT_HANDOFF_CEILINGS,
+	DEFAULT_MARKS,
+	DEFAULT_START,
+	DEFAULT_WINDOWS,
+} from "./config";
 import type { ToolEnv } from "./sessions";
 
 export interface MakeTreeOptions {
@@ -92,5 +99,32 @@ export function makeTree(
 	return {
 		root,
 		cleanup: () => rmSync(root, { recursive: true, force: true }),
+	};
+}
+
+/** A CURRENT with two off-shape entries (lines 8 and 9) and an unknown word (line 11). */
+export const OFF_SHAPE_CURRENT = `# Current
+Updated: 2026-10-15 09:00, forge-1014
+
+Some line.
+
+## Items
+- **NEXT** [session-identity](work/in-progress/session-identity/STATUS.md): step 3, the spec
+- **ASK: consulting**, the user decides on PR #13
+- **WAITING forge** (PR #13 gates)
+- **CANDIDATE** tool friction, standing
+- **BLOCKED** no access
+`;
+
+/** A valid config with the defaults, and the given fields over them. */
+export function testConfig(overrides: Partial<Config> = {}): Config {
+	return {
+		marks: { ...DEFAULT_MARKS },
+		windows: { ...DEFAULT_WINDOWS },
+		start: { ...DEFAULT_START },
+		handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
+		codex: {},
+		problems: [],
+		...overrides,
 	};
 }

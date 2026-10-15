@@ -44,16 +44,25 @@ export type JournalSection = {
 	headingLine: number;
 	entries: ChainEntry[];
 };
+/** Where the certified journal ends in the chain. */
+export type Boundary = {
+	state: "found" | "null" | "lost";
+	position: number | null;
+	file: string | null;
+	line: number | null;
+};
+export type Changed = {
+	path: string;
+	kind: "changed" | "appeared" | "removed" | "unsafe";
+	reason?: string;
+};
 export type Assessment = {
 	status: "none" | "invalid" | "ok";
 	reason?: string;
 	checkpoint?: Checkpoint;
 	chain: ChainEntry[];
 	unreadable: { file: string; reason: string }[];
-	boundary:
-		| { state: "found"; position: number; file?: string; line?: number }
-		| { state: "lost" }
-		| { state: "none" };
+	boundary: Boundary | { state: "none" };
 	unreviewed: {
 		mode: "boundary" | "fallback";
 		entries: ChainEntry[];
@@ -61,10 +70,7 @@ export type Assessment = {
 	};
 	orphans: ChainEntry[];
 	uncertified: number;
-	changed: (
-		| { path: string; kind: "changed" | "appeared" | "removed" }
-		| { path: string; kind: "unsafe"; reason: string }
-	)[];
+	changed: Changed[];
 	evidenceLost: { path: string; kind: "changed" | "missing" }[];
 	dropped?: DroppedResult;
 	freshness: string;
@@ -202,6 +208,12 @@ export function parseCheckpoint(text: string): CheckpointRead {
 /** Fixed records followed by the sorted live item STATUS paths. */
 export function coveredPaths(state: string): string[] {
 	const statuses: string[] = [];
+	try {
+		if (lstatSync(join(state, "work")).isSymbolicLink())
+			return [...FIXED_PATHS, "work"];
+	} catch {
+		// A missing or unreadable work/ is reported through its buckets.
+	}
 	for (const bucket of ["todo", "in-progress"]) {
 		const dir = join(state, "work", bucket);
 		try {
@@ -318,6 +330,55 @@ export function fallbackSections(
 	return selected.reverse();
 }
 
+/**
+ * Where the certified journal ends in the chain: found only when both cursors
+ * are in the chain, in order; both cursors null certify from the start.
+ */
+export function checkpointBoundary(
+	entries: readonly ChainEntry[],
+	journal: Checkpoint["journal"],
+): Boundary {
+	const { from, to } = journal;
+	if (from === null && to === null) {
+		return { state: "null", position: 0, file: null, line: null };
+	}
+	const fromIndex = entries.findIndex(({ id }) => id === from);
+	const toIndex = entries.findIndex(({ id }) => id === to);
+	const certified = entries[toIndex];
+	if (from !== null && fromIndex >= 0 && certified && toIndex >= fromIndex) {
+		return {
+			state: "found",
+			position: toIndex + 1,
+			file: certified.file,
+			line: certified.line,
+		};
+	}
+	return { state: "lost", position: null, file: null, line: null };
+}
+
+/** Covered paths whose hash differs, over both sides, an unsafe hash giving its reason. */
+export function classifyChanges(
+	before: Readonly<Record<string, string | null>>,
+	after: Readonly<Record<string, string | null>>,
+): Changed[] {
+	return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+		.sort()
+		.flatMap((path): Changed[] => {
+			const was = before[path] ?? null;
+			const now = after[path] ?? null;
+			if (now?.startsWith("unsafe:"))
+				return [{ path, kind: "unsafe", reason: now.slice("unsafe:".length) }];
+			if (was === now) return [];
+			return [
+				{
+					path,
+					kind:
+						now === null ? "removed" : was === null ? "appeared" : "changed",
+				},
+			];
+		});
+}
+
 /** Assess certification, journal history, covered records and preservation evidence. */
 export function assessCheckpoint(
 	workspace: Workspace,
@@ -338,36 +399,22 @@ export function assessCheckpoint(
 	let boundary: Assessment["boundary"] = { state: "none" };
 	let fromIndex = 0;
 	if (read.status === "ok") {
-		const { from, to } = read.checkpoint.journal;
-		const toIndex = chain.findIndex((entry) => entry.id === to);
+		boundary = checkpointBoundary(chain, read.checkpoint.journal);
+		const { from } = read.checkpoint.journal;
 		fromIndex = chain.findIndex((entry) => entry.id === from);
-		if (from === null && to === null)
-			boundary = { state: "found", position: 0 };
-		else if (
-			from !== null &&
-			to !== null &&
-			fromIndex >= 0 &&
-			toIndex >= fromIndex
-		) {
-			const entry = chain[toIndex];
-			boundary = {
-				state: "found",
-				position: toIndex + 1,
-				file: entry?.file,
-				line: entry?.line,
-			};
-		} else boundary = { state: "lost" };
 	}
+	const position =
+		boundary.state === "none" ? null : (boundary.position ?? null);
 	const sections =
-		boundary.state === "found"
+		position !== null
 			? undefined
 			: fallbackSections(workspace.state, chain, files);
 	const unreviewed: Assessment["unreviewed"] =
-		boundary.state === "found"
+		position !== null
 			? {
 					mode: "boundary",
 					entries: chain
-						.slice(boundary.position)
+						.slice(position)
 						.filter((entry) => entry.day !== undefined),
 				}
 			: {
@@ -377,7 +424,7 @@ export function assessCheckpoint(
 				};
 	const orphans = chain.filter((entry) => entry.day === undefined);
 	const uncertified =
-		boundary.state === "found"
+		position !== null
 			? Math.max(0, fromIndex)
 			: unreviewed.entries.length
 				? chain.indexOf(unreviewed.entries[0] as ChainEntry)
@@ -392,27 +439,9 @@ export function assessCheckpoint(
 				...coveredPaths(workspace.state),
 			]),
 		].sort();
-		const hashes = hashPaths(workspace, paths);
-		for (const path of paths) {
-			const before = read.checkpoint.files[path] ?? null;
-			const after = hashes[path] ?? null;
-			if (after?.startsWith("unsafe:")) {
-				changed.push({
-					path,
-					kind: "unsafe",
-					reason: after.slice("unsafe:".length),
-				});
-			} else if (before !== after)
-				changed.push({
-					path,
-					kind:
-						after === null
-							? "removed"
-							: before === null
-								? "appeared"
-								: "changed",
-				});
-		}
+		changed.push(
+			...classifyChanges(read.checkpoint.files, hashPaths(workspace, paths)),
+		);
 	}
 	if (checkpoint) {
 		evidenceHashes = hashPaths(workspace, Object.keys(checkpoint.evidence));
@@ -473,8 +502,7 @@ export function assessCheckpoint(
 		);
 	const orphanGroups = new Map<string, ChainEntry[]>();
 	for (const entry of orphans) {
-		if (boundary.state === "found" && chain.indexOf(entry) < boundary.position)
-			continue;
+		if (position !== null && chain.indexOf(entry) < position) continue;
 		const group = orphanGroups.get(entry.file) ?? [];
 		group.push(entry);
 		orphanGroups.set(entry.file, group);

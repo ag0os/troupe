@@ -1,6 +1,10 @@
 import { basename, join, posix, relative, resolve, sep } from "node:path";
+import { callerSession } from "./caller";
 import {
-	type Checkpoint,
+	type Changed,
+	type Boundary as CheckpointBoundary,
+	checkpointBoundary,
+	classifyChanges,
 	FIXED_PATHS,
 	hashPaths,
 	localPath,
@@ -21,6 +25,7 @@ import {
 	type ParseProblem,
 	type StatusProjection,
 	statusProjection,
+	updatedName,
 } from "./query-items";
 import {
 	changedPaths,
@@ -30,12 +35,15 @@ import {
 	recordPath,
 } from "./query-read";
 import { sessionPrefixFor } from "./session-name";
+import { sessionView } from "./session-view";
 import {
 	type CodexIndex,
 	claudeRegistry,
+	codexAgents,
 	codexIndex,
 	type HerdrResult,
 	herdrSessions,
+	namedSessions,
 	type RegistryResult,
 	type ToolEnv,
 } from "./sessions";
@@ -500,11 +508,12 @@ function listedEntries(text: string): ListedEntry[] {
 
 /** The sessions query for one workspace, from sources already read. */
 function sessionsFrom(
-	{ toolEnv, target }: QueryContext,
+	{ toolEnv, target, config }: QueryContext,
 	sources: SessionSources,
 ): Collected {
 	const problems: QueryProblem[] = [];
 	let listed: ListedEntry[] = [];
+	let currentText = "";
 	const current = readRecord(target.state, "CURRENT.md");
 	if (current.status === "missing") {
 		problems.push(
@@ -520,6 +529,7 @@ function sessionsFrom(
 			);
 		}
 		listed = listedEntries(current.text);
+		currentText = current.text;
 	}
 
 	const own = workspaceConfig(toolEnv, target);
@@ -582,7 +592,8 @@ function sessionsFrom(
 					kind === "claude" && sessionId !== null
 						? registryNames.get(sessionId)
 						: undefined;
-				const name = threadName ?? label ?? registryName ?? null;
+				const name =
+					(kind === "claude" ? registryName : threadName) ?? label ?? null;
 				return [
 					{
 						agent: kind,
@@ -637,6 +648,35 @@ function sessionsFrom(
 		}
 	}
 
+	const caller = callerSession(
+		toolEnv,
+		target,
+		{
+			...config,
+			sessionPrefix:
+				own.status === "ok" ? own.config?.sessionPrefix : config.sessionPrefix,
+		},
+		hasChildren,
+	);
+	const claudeRunning = namedSessions(claude);
+	const codexRunning = codexAgents(herdr, codex?.names ?? new Map());
+	const { read } = checkpointRecord(target.state);
+	const drift =
+		prefix === null
+			? []
+			: sessionView({
+					listed,
+					running: [
+						...(claudeRunning.available ? claudeRunning.sessions : []),
+						...(codexRunning.available ? codexRunning.sessions : []),
+					],
+					sources: { claude: claudeRunning, codex: codexRunning },
+					workspace: { dir: target.dir, hasChildren, prefix },
+					writer:
+						read.status === "ok" ? (read.checkpoint.session ?? null) : null,
+					updatedName: updatedName(currentText),
+				}).drift;
+
 	const marks = (name: string | null) => {
 		const entry = listedAs(name);
 		const match = prefixMatch(name);
@@ -651,6 +691,7 @@ function sessionsFrom(
 	};
 	const text = [
 		`prefix: ${prefix ?? "unknown"}`,
+		`caller: ${caller.name ?? "none"} (${caller.role})`,
 		...listed.map((entry) => {
 			const flags = (["retired", "subagent", "codex"] as const).filter(
 				(flag) => entry[flag],
@@ -674,11 +715,14 @@ function sessionsFrom(
 		codex
 			? `codex names: ${plural(codex.homes.length, "index", "indexes")} read${codex.failures.length > 0 ? `, ${codex.failures.length} failed` : ""}`
 			: "codex names: not consulted",
+		...drift.map(({ code, message }) => `drift ${code} ${message}`),
 	];
 	return {
 		fields: {
 			prefix,
 			hasChildren,
+			caller,
+			drift,
 			listed,
 			claude: {
 				available: claude.available,
@@ -756,18 +800,9 @@ function collectAutonomy({
 	return { fields, problems: [], text: [text] };
 }
 
-type Boundary = {
-	state: "found" | "lost" | "null" | "none";
-	position: number | null;
-	file: string | null;
-	line: number | null;
-};
-
-type Changed = {
-	path: string;
-	kind: "changed" | "appeared" | "removed" | "unsafe";
-	reason?: string;
-};
+type Boundary =
+	| CheckpointBoundary
+	| { state: "none"; position: null; file: null; line: null };
 
 /** Live covered paths, enumerating the buckets through the checked helper. */
 function livePaths(state: string): {
@@ -852,32 +887,6 @@ function chainProblems(chain: Chain): QueryProblem[] {
 	);
 }
 
-/**
- * Where the certified journal ends in the chain, by the assessCheckpoint
- * rule: found only when both cursors are in the chain, in order.
- */
-function checkpointBoundary(
-	entries: Chain["entries"],
-	journal: Checkpoint["journal"],
-): Boundary {
-	const { from, to } = journal;
-	if (from === null && to === null) {
-		return { state: "null", position: 0, file: null, line: null };
-	}
-	const fromIndex = entries.findIndex(({ id }) => id === from);
-	const toIndex = entries.findIndex(({ id }) => id === to);
-	const certified = entries[toIndex];
-	if (from !== null && fromIndex >= 0 && certified && toIndex >= fromIndex) {
-		return {
-			state: "found",
-			position: toIndex + 1,
-			file: certified.file,
-			line: certified.line,
-		};
-	}
-	return { state: "lost", position: null, file: null, line: null };
-}
-
 function collectCheckpoint({ target }: QueryContext): Collected {
 	const { read, problems } = checkpointRecord(target.state);
 	const checkpoint = read.status === "ok" ? read.checkpoint : undefined;
@@ -908,33 +917,10 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 		];
 		for (const path of hashed) recordPath(target.state, path);
 		const hashes = hashPaths(target, hashed);
-		const paths = [...new Set([...hashed, ...live.refused.keys()])].sort();
-		compared = paths.length;
-		changed = paths.flatMap((path): Changed[] => {
-			const refused = live.refused.get(path);
-			if (refused !== undefined) {
-				return [{ path, kind: "unsafe", reason: refused }];
-			}
-			const before = checkpoint.files[path] ?? null;
-			const after = hashes[path] ?? null;
-			if (after?.startsWith("unsafe:")) {
-				return [
-					{ path, kind: "unsafe", reason: after.slice("unsafe:".length) },
-				];
-			}
-			if (before === after) return [];
-			return [
-				{
-					path,
-					kind:
-						after === null
-							? "removed"
-							: before === null
-								? "appeared"
-								: "changed",
-				},
-			];
-		});
+		for (const [path, reason] of live.refused)
+			hashes[path] = `unsafe:${reason}`;
+		compared = Object.keys(hashes).length;
+		changed = classifyChanges(checkpoint.files, hashes);
 	}
 
 	const text = [
@@ -1167,7 +1153,11 @@ function unique(problems: QueryProblem[]): QueryProblem[] {
 }
 
 function exitCode(problems: readonly QueryProblem[]): number {
-	return problems.some(({ code }) => code !== "source-unavailable") ? 1 : 0;
+	return problems.some(
+		({ code }) => code !== "source-unavailable" && code !== "entry-off-shape",
+	)
+		? 1
+		: 0;
 }
 
 function problemLine(entry: QueryProblem, workspace?: string): string {

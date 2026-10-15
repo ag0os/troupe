@@ -50,7 +50,7 @@ No NEXT is set
 	};
 
 	const text = renderStatus(
-		statusReport(tree.workspaces, tree, running, home),
+		statusReport(tree.workspaces, tree, running, home, new Map()),
 		home,
 	);
 
@@ -73,7 +73,7 @@ source: Claude registry; Codex through Herdr: unchecked (not inside Herdr); suba
 test("returns the status JSON shape", () => {
 	const fixture = makeTree({
 		"home/root/.shepherd/CURRENT.md":
-			"Updated: today\n- **NEXT**: ship it\n## Live sessions\n- missing-one",
+			"Updated: today\n## Items\n- **NEXT**: ship it\n## Live sessions\n- missing-one",
 	});
 	cleanups.push(fixture.cleanup);
 	const home = join(fixture.root, "home");
@@ -89,7 +89,9 @@ test("returns the status JSON shape", () => {
 		codex: unavailable,
 	};
 
-	const json = statusJson(statusReport(tree.workspaces, tree, running, home));
+	const json = statusJson(
+		statusReport(tree.workspaces, tree, running, home, new Map()),
+	);
 
 	expect(json).toEqual({
 		workspaces: [
@@ -102,7 +104,7 @@ test("returns the status JSON shape", () => {
 						word: "NEXT",
 						known: true,
 						text: "ship it",
-						line: 2,
+						line: 3,
 					},
 				],
 				live: {
@@ -112,7 +114,7 @@ test("returns the status JSON shape", () => {
 					unchecked: [
 						{
 							name: "missing-one",
-							line: 4,
+							line: 5,
 							retired: false,
 							subagent: false,
 							codex: false,
@@ -121,6 +123,7 @@ test("returns the status JSON shape", () => {
 					],
 					retiredButRunning: [],
 					unlisted: [],
+					drift: [],
 					record: null,
 				},
 			},
@@ -155,6 +158,7 @@ test("aligns record freshness labels without changing the stored value", () => {
 			codex: unavailable,
 		},
 		home,
+		new Map(),
 	);
 	const live = base.workspaces[0]?.live;
 	if (!live) throw new Error("workspace report missing");

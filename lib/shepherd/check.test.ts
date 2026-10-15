@@ -25,7 +25,8 @@ Text
 `;
 const cleanFiles = {
 	"root/.shepherd/charter.md": "A charter",
-	"root/.shepherd/CURRENT.md": "Updated: 2026-10-05\nCurrent work",
+	"root/.shepherd/CURRENT.md":
+		"Updated: 2026-10-05\nCurrent work\n\n## Items\n- **NEXT** keep going\n",
 };
 const cleanups: Array<() => void> = [];
 
