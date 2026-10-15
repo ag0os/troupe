@@ -12,7 +12,7 @@ import {
 	type ToolEnv,
 } from "./sessions";
 import { type ListedSession, listedSessions } from "./status-parse";
-import type { Workspace, WorkspaceTree } from "./tree";
+import { hasChildWorkspace, type Workspace, type WorkspaceTree } from "./tree";
 
 export type UncheckedSession = ListedSession & { reason: string };
 
@@ -119,12 +119,7 @@ export function liveReports(
 	);
 	const hasChildren = new Set(
 		tree.workspaces
-			.filter((workspace) =>
-				tree.workspaces.some(
-					(candidate) =>
-						candidate !== workspace && within(workspace.dir, candidate.dir),
-				),
-			)
+			.filter((workspace) => hasChildWorkspace(tree, workspace))
 			.map((workspace) => workspace.name),
 	);
 	const owns = (workspace: Workspace, cwd: string) =>

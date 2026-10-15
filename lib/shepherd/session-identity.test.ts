@@ -249,3 +249,28 @@ describe("acceptance 1: a handoff with no name typed", () => {
 		expect(identityFindings(f)).toEqual([]);
 	});
 });
+
+describe("a workspace with a child workspace beneath it", () => {
+	test("does not own a subdirectory, so a caller there is not its Shepherd", async () => {
+		const f = await fixture({ ...PREDECESSOR, listed: "fg-1015" });
+		mkdirSync(join(f.dir, "kid", ".shepherd"), { recursive: true });
+		writeFileSync(join(f.dir, "kid", ".shepherd", "charter.md"), "# kid\n");
+		const sub = join(f.dir, "sub");
+		mkdirSync(sub);
+		writeFileSync(
+			join(f.home, ".claude", "sessions", "4242.json"),
+			JSON.stringify({
+				pid: 4242,
+				name: "fg-1015",
+				nameSource: "user",
+				sessionId: IDENTITY_SESSION,
+				cwd: sub,
+				status: "idle",
+			}),
+		);
+		const dry = await runTool(["checkpoint"], {}, f.env);
+		expect(dry.text).toContain(
+			"writer: none (fg-1015 is not this workspace's Shepherd (prefix fg-);",
+		);
+	});
+});

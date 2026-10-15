@@ -22,15 +22,18 @@ export interface WorkspaceTree {
 	workspaces: Workspace[];
 }
 
+/** Whether child lies strictly beneath parent. */
+export function isBeneath(parent: string, child: string): boolean {
+	const path = relative(parent, child);
+	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
+}
+
 /** Whether another workspace of the tree lies beneath this one. */
 export function hasChildWorkspace(
 	tree: WorkspaceTree,
 	workspace: Workspace,
 ): boolean {
-	return tree.workspaces.some((other) => {
-		const path = relative(workspace.dir, other.dir);
-		return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
-	});
+	return tree.workspaces.some((other) => isBeneath(workspace.dir, other.dir));
 }
 
 export type WorkspaceScope = "check" | "archive" | "archive-recursive";

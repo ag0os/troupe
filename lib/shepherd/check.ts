@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { checkLinks, decodedLinkTarget } from "./check-links";
 import { checkModules } from "./check-modules";
 import { checkWork } from "./check-work";
@@ -22,7 +22,12 @@ import {
 	read,
 	words,
 } from "./text";
-import { hasChildWorkspace, type Workspace, type WorkspaceTree } from "./tree";
+import {
+	hasChildWorkspace,
+	isBeneath,
+	type Workspace,
+	type WorkspaceTree,
+} from "./tree";
 
 const MEMORY_TYPES = new Set(["user", "preference", "project", "reference"]);
 
@@ -95,11 +100,6 @@ function withoutInlineCode(line: string): string {
 
 function referenceLabel(label: string): string {
 	return label.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function isBeneath(parent: string, child: string): boolean {
-	const path = relative(parent, child);
-	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
 }
 
 /** Check one workspace's state files, modules, memories and docs. */
