@@ -542,6 +542,24 @@ describe("tool query item", () => {
 		});
 	});
 
+	test("reports one link-unsafe per entry sharing an unsafe link", async () => {
+		const fixture = contractTree();
+		fs.writeFileSync(
+			join(fixture.a, ".shepherd", "CURRENT.md"),
+			"## Items\n- **NEXT** [x](../../x/STATUS.md): one\n- **ASK** [x](../../x/STATUS.md): two\n",
+		);
+		const { code, json } = await query(["item", "x"], fixture.env(fixture.a));
+		expect(code).toBe(1);
+		expect(json.problems).toEqual([
+			expect.objectContaining({ code: "link-unsafe", line: 2 }),
+			expect.objectContaining({ code: "link-unsafe", line: 3 }),
+		]);
+		expect(
+			json.entries.map(({ status }: { status: unknown }) => status),
+		).toEqual([null, null]);
+		expect(json).toMatchObject({ resolved: null, dir: null, status: null });
+	});
+
 	test("reports a linked item whose directory is gone", async () => {
 		const fixture = contractTree();
 		fs.rmSync(join(fixture.a, ".shepherd", "work", "todo", "lock"), {
@@ -1324,6 +1342,85 @@ describe("tool query sessions", () => {
 			failures: [],
 		});
 		expect(calls.filter(({ path }) => path.includes(".codex"))).toEqual([]);
+	});
+
+	test("names a Herdr Claude agent from its lowest-pid registry twin", async () => {
+		const fixture = sessionsTree();
+		fixture.register([
+			{ pid: 302, name: "ws-high", sessionId: "c-1", cwd: fixture.a },
+			{ pid: 301, name: "ws-low", sessionId: "c-1", cwd: fixture.a },
+		]);
+		const { env } = fixture.sessionsEnv(fixture.a, {
+			alive: [301, 302],
+			agents: [herdrClaude("c-1", fixture.a)],
+		});
+		const { code, json } = await query(["sessions"], env);
+		expect(code).toBe(0);
+		expect(json.claude.sessions.map(({ pid }: { pid: number }) => pid)).toEqual(
+			[301, 302],
+		);
+		expect(json.herdr.agents).toEqual([
+			expect.objectContaining({ sessionId: "c-1", name: "ws-low" }),
+		]);
+	});
+
+	test("keeps a Herdr label over a differently named registry twin", async () => {
+		const fixture = sessionsTree();
+		fixture.register([
+			{
+				pid: 203,
+				name: "other-name",
+				sessionId: "c-2",
+				cwd: join(fixture.base, "elsewhere"),
+			},
+		]);
+		const { env } = fixture.sessionsEnv(fixture.a, {
+			alive: [203],
+			agents: [
+				{
+					agent: "claude",
+					agent_session: { value: "c-2" },
+					name: "ws-1014",
+					cwd: fixture.a,
+				},
+			],
+		});
+		const { code, json } = await query(["sessions"], env);
+		expect(code).toBe(0);
+		expect(json.herdr.agents).toEqual([
+			expect.objectContaining({
+				sessionId: "c-2",
+				label: "ws-1014",
+				name: "ws-1014",
+			}),
+		]);
+	});
+
+	test("names an unlabelled Herdr Claude agent from a twin the workspace does not own", async () => {
+		const fixture = sessionsTree();
+		fixture.register([
+			{
+				pid: 204,
+				name: "ws-1015",
+				sessionId: "c-5",
+				cwd: join(fixture.base, "elsewhere"),
+			},
+		]);
+		const { env } = fixture.sessionsEnv(fixture.a, {
+			alive: [204],
+			agents: [herdrClaude("c-5", fixture.a)],
+		});
+		const { code, json } = await query(["sessions"], env);
+		expect(code).toBe(0);
+		expect(json.claude.sessions).toEqual([]);
+		expect(json.herdr.agents).toEqual([
+			expect.objectContaining({
+				sessionId: "c-5",
+				label: null,
+				name: "ws-1015",
+				prefixMatch: true,
+			}),
+		]);
 	});
 
 	test("names Codex agents from the indexes and reports a home it cannot read", async () => {
@@ -2719,10 +2816,6 @@ describe("tool query acceptance", () => {
 			"forge/.shepherd/MEMORY.md": "# Memory\n",
 			"forge/.shepherd/docs/INDEX.md": "# Docs\n",
 			"forge/.shepherd/pending.md": "# Pending\n",
-			"forge/.shepherd/config.json": JSON.stringify({
-				sessionPrefix: "forge",
-				autonomy: { enabled: true, until: "2026-10-20" },
-			}),
 			"forge/.shepherd/archive/journal/2026-09.md": ARCHIVE,
 			"forge/.shepherd/journal.md": `${JOURNAL}- 13:00 after the checkpoint\n`,
 			"forge/.shepherd/work/in-progress/shepherd-evals/STATUS.md": FORGE_STATUS,
@@ -2771,14 +2864,17 @@ describe("tool query acceptance", () => {
 		});
 
 		const answers: Record<string, Awaited<ReturnType<typeof query>>> = {};
-		for (const args of [
-			["items"],
-			["item", "query-tool"],
-			["sessions"],
-			["autonomy"],
-			["journal"],
-			["checkpoint"],
-		]) {
+		for (const [args, line] of [
+			[
+				["items"],
+				"CURRENT.md:14 WAITING query-tool  query-tool: branch review by two readers",
+			],
+			[["item", "query-tool"], "work/in-progress/query-tool/STATUS.md"],
+			[["sessions"], "prefix: forge"],
+			[["autonomy"], "autonomy: off (not set)"],
+			[["journal"], `[since checkpoint ${to}]`],
+			[["checkpoint"], "entries since: 2; compared: 8; changed: 0"],
+		] as [string[], string][]) {
 			const answer = await query(args, env);
 			answers[args[0] as string] = answer;
 			const nonSource = answer.json.problems.filter(
@@ -2791,6 +2887,7 @@ describe("tool query acceptance", () => {
 			});
 			const text = await runTool(["query", ...args], {}, env);
 			expect({ args, code: text.code }).toEqual({ args, code: 0 });
+			expect(text.text.split("\n")).toContain(line);
 		}
 
 		const { items, item, sessions, autonomy, journal, checkpoint } = answers;
@@ -2848,11 +2945,7 @@ describe("tool query acceptance", () => {
 			},
 			herdr: { available: false },
 		});
-		expect(autonomy?.json).toMatchObject({
-			present: true,
-			active: true,
-			expired: false,
-		});
+		expect(autonomy?.json).toMatchObject({ present: false, active: false });
 		expect(journal?.json).toMatchObject({
 			since: { kind: "checkpoint", id: to, found: true },
 			count: 2,

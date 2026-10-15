@@ -546,27 +546,27 @@ function sessionsFrom(
 		prefix === null ? null : name?.startsWith(`${prefix}-`) === true;
 
 	const { claude, herdr, codex } = sources;
+	const byPid = claude.available
+		? [...claude.sessions].sort((left, right) => left.pid - right.pid)
+		: [];
 	const registryNames = new Map<string, string>();
-	for (const { sessionId, name } of claude.available ? claude.sessions : []) {
+	for (const { sessionId, name } of byPid) {
 		if (sessionId !== null && name !== null && !registryNames.has(sessionId)) {
 			registryNames.set(sessionId, name);
 		}
 	}
-	const registry = claude.available
-		? claude.sessions
-				.filter(({ cwd }) => owned(cwd))
-				.sort((left, right) => left.pid - right.pid)
-				.map(({ name, sessionId, pid, file, cwd, status }) => ({
-					name,
-					sessionId,
-					pid,
-					file,
-					cwd,
-					status,
-					listed: listedAs(name),
-					prefixMatch: prefixMatch(name),
-				}))
-		: [];
+	const registry = byPid
+		.filter(({ cwd }) => owned(cwd))
+		.map(({ name, sessionId, pid, file, cwd, status }) => ({
+			name,
+			sessionId,
+			pid,
+			file,
+			cwd,
+			status,
+			listed: listedAs(name),
+			prefixMatch: prefixMatch(name),
+		}));
 	const agents = herdr.available
 		? (herdr.agents ?? []).flatMap((agent) => {
 				const cwd = stringOrNull(agent.cwd);
