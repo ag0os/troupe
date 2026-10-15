@@ -74,6 +74,18 @@ describe("runTool usage and validation", () => {
 		}
 	});
 
+	test("keeps --all for check and names both of its owners", async () => {
+		const { env } = fixture();
+		const check = await runTool(["check"], { all: true }, env);
+		expect(check.code).not.toBe(2);
+		expect(check.text).toContain("2 workspaces");
+		expect(await runTool(["start"], { all: true }, env)).toEqual({
+			text: "shepherd: --all applies only to tool check and tool query\n",
+			code: 2,
+			stream: "stderr",
+		});
+	});
+
 	test("rejects command-specific flags and conflicting check modes", async () => {
 		const { env } = fixture();
 		expect(await runTool(["check"], { apply: true }, env)).toMatchObject({
@@ -181,7 +193,7 @@ describe("runTool guide", () => {
 				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query",
 			],
 			["today", "2026-13-40", "tool check and tool archive"],
-			["all", true, "tool check"],
+			["all", true, "tool check and tool query"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
 			["apply", true, "tool archive and tool checkpoint"],
@@ -387,7 +399,7 @@ describe("runTool init", () => {
 		});
 		for (const [name, value, owner] of [
 			["today", "invalid", "tool check and tool archive"],
-			["all", true, "tool check"],
+			["all", true, "tool check and tool query"],
 			["status", true, "tool check"],
 			["context", true, "tool check"],
 			["apply", true, "tool archive and tool checkpoint"],

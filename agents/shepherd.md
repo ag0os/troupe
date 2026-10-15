@@ -4,7 +4,7 @@ backends: [claude, codex]
 flags:
   all:
     type: boolean
-    description: "tool check: also show info findings"
+    description: "tool check: also show info findings; tool query: answer for every workspace, from the root only"
   status:
     type: boolean
     description: "tool check: show work and live session status"

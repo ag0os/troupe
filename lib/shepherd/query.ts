@@ -23,7 +23,13 @@ import {
 	type StatusProjection,
 	statusProjection,
 } from "./query-items";
-import { readRecord, readRecordDir, recordPath } from "./query-read";
+import {
+	changedPaths,
+	readRecord,
+	readRecordDir,
+	recorded,
+	recordPath,
+} from "./query-read";
 import { sessionPrefixFor } from "./session-name";
 import {
 	type CodexIndex,
@@ -42,7 +48,12 @@ import {
 } from "./status-parse";
 import { journalChain, journalFenceProblem } from "./text";
 import { type ToolResult, treeError, usage } from "./tool";
-import { enclosingWorkspace, type Workspace, WorkspaceTreeError } from "./tree";
+import {
+	discoverTree,
+	enclosingWorkspace,
+	type Workspace,
+	WorkspaceTreeError,
+} from "./tree";
 import { findChildWorkspaces, STATE_DIR } from "./workspace";
 
 type ToolFlags = Readonly<Record<string, string | boolean>>;
@@ -72,6 +83,7 @@ type QueryRequest = {
 	slug?: string;
 	since?: Since;
 	max: number | "all";
+	all: boolean;
 	json: boolean;
 };
 
@@ -81,6 +93,7 @@ type QueryContext = {
 	config: Config;
 	target: Workspace;
 	observedAt: Date;
+	sources?: SessionSources;
 };
 
 type Collected = {
@@ -135,9 +148,15 @@ function validate(
 			return refuse(`--${flag} applies only to tool query journal`);
 		}
 	}
+	if (query === "item" && flags.all === true) {
+		return refuse(
+			"tool query item takes no --all; a slug names one workspace's item",
+		);
+	}
 	const request: QueryRequest = {
 		query,
 		max: DEFAULT_MAX,
+		all: flags.all === true,
 		json: flags.json === true,
 	};
 	if (query === "items") {
@@ -681,9 +700,10 @@ function sessionsFrom(
 	};
 }
 
-async function collectSessions(context: QueryContext): Promise<Collected> {
-	const sources = await readSessionSources(context.toolEnv, context.config);
-	return sessionsFrom(context, sources);
+function collectSessions(context: QueryContext): Collected {
+	if (!context.sources)
+		throw new Error("sessions collected before its sources");
+	return sessionsFrom(context, context.sources);
 }
 
 function collectAutonomy({
@@ -803,6 +823,23 @@ function checkpointRecord(state: string): CheckpointRecord {
 
 type Chain = ReturnType<typeof journalChain>;
 
+/**
+ * The journal chain through journalChain, after recordPath has seen the
+ * archive listing, each month and journal.md, so the pass records them.
+ */
+function readChain(state: string): Chain {
+	const archive = readRecordDir(state, "archive/journal");
+	if (archive.status === "ok") {
+		for (const { name } of archive.entries) {
+			if (/^\d{4}-\d{2}\.md$/.test(name)) {
+				recordPath(state, `archive/journal/${name}`);
+			}
+		}
+	}
+	recordPath(state, "journal.md");
+	return journalChain(state);
+}
+
 function chainProblems(chain: Chain): QueryProblem[] {
 	return chain.unreadable.map((entry) =>
 		problem(
@@ -854,7 +891,7 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 	let changed: Changed[] | null = null;
 	let compared: number | null = null;
 	if (checkpoint) {
-		chain = journalChain(target.state);
+		chain = readChain(target.state);
 		problems.push(...chainProblems(chain));
 		const { entries } = chain;
 		boundary = checkpointBoundary(entries, checkpoint.journal);
@@ -868,6 +905,7 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 		const hashed = [
 			...new Set([...Object.keys(checkpoint.files), ...live.paths]),
 		];
+		for (const path of hashed) recordPath(target.state, path);
 		const hashes = hashPaths(target, hashed);
 		const paths = [...new Set([...hashed, ...live.refused.keys()])].sort();
 		compared = paths.length;
@@ -998,7 +1036,7 @@ function sinceLine({ kind, id, day, found }: SinceField): string {
 
 function collectJournal({ request, target }: QueryContext): Collected {
 	const problems: QueryProblem[] = [];
-	const chain = journalChain(target.state);
+	const chain = readChain(target.state);
 	const { entries } = chain;
 	const missing =
 		!chain.files.includes("journal.md") &&
@@ -1108,9 +1146,7 @@ function collectJournal({ request, target }: QueryContext): Collected {
 	};
 }
 
-const COLLECTORS: Partial<
-	Record<QueryName, (context: QueryContext) => Collected | Promise<Collected>>
-> = {
+const COLLECTORS: Record<QueryName, (context: QueryContext) => Collected> = {
 	items: collectItems,
 	item: collectItem,
 	sessions: collectSessions,
@@ -1133,11 +1169,50 @@ function exitCode(problems: readonly QueryProblem[]): number {
 	return problems.some(({ code }) => code !== "source-unavailable") ? 1 : 0;
 }
 
-function problemLine(entry: QueryProblem): string {
-	return `shepherd: ${entry.file}${entry.line === undefined ? "" : `:${entry.line}`}: ${entry.message}`;
+function problemLine(entry: QueryProblem, workspace?: string): string {
+	return `shepherd: ${workspace === undefined ? "" : `${workspace}: `}${entry.file}${entry.line === undefined ? "" : `:${entry.line}`}: ${entry.message}`;
 }
 
-/** Answer one read-only query about the launch workspace. */
+type Answer = Collected & { retried: boolean };
+
+/**
+ * Collect, then compare every recorded path; on a difference collect once
+ * more, and report what changed again as collection-unstable.
+ */
+function collectStable(
+	collect: (context: QueryContext) => Collected,
+	context: QueryContext,
+): Answer {
+	const first = recorded(() => collect(context));
+	if (changedPaths(first.marks).length === 0) {
+		return { ...first.value, retried: false };
+	}
+	const second = recorded(() => collect(context));
+	return {
+		...second.value,
+		problems: [
+			...second.value.problems,
+			...changedPaths(second.marks).map((path) =>
+				problem(
+					"collection-unstable",
+					path,
+					`${path} changed during collection, twice`,
+				),
+			),
+		],
+		retried: true,
+	};
+}
+
+function observedNow(toolEnv: ToolEnv): Date {
+	return new Date(Math.floor(toolEnv.clock().getTime() / 1000) * 1000);
+}
+
+function workspaceFields({ name, dir, state }: Workspace) {
+	return { name, dir, state };
+}
+
+/** Answer one read-only query about the launch workspace, or the tree. */
 export async function runQuery(
 	args: readonly string[],
 	flags: ToolFlags,
@@ -1164,59 +1239,100 @@ export async function runQuery(
 		);
 	}
 
-	let resolved: { target: Workspace; root: string };
+	let targets: Workspace[];
+	let root: string;
 	try {
-		resolved = resolveWorkspace(toolEnv.cwd);
+		const resolved = resolveWorkspace(toolEnv.cwd);
+		root = resolved.root;
+		targets = [resolved.target];
+		if (request.all) {
+			if (root !== resolved.target.dir) {
+				return refuse(
+					`--all is allowed only from the root workspace; this one sits under ${root}`,
+				);
+			}
+			targets = discoverTree(toolEnv.cwd).workspaces;
+		}
 	} catch (error) {
 		if (error instanceof WorkspaceTreeError)
 			return treeError(toolEnv.cwd, error);
 		throw error;
 	}
 	const collect = COLLECTORS[request.query];
-	if (!collect) return usage();
 
-	const { target, root } = resolved;
-	const clock = toolEnv.clock().getTime();
-	const observedAt = new Date(Math.floor(clock / 1000) * 1000);
-	const observed = localTimestamp(observedAt);
-	const collected = await collect({
-		request,
-		toolEnv,
-		config,
-		target,
-		observedAt,
+	const sourcesAt =
+		request.query === "sessions" ? observedNow(toolEnv) : undefined;
+	const sources = sourcesAt
+		? await readSessionSources(toolEnv, config)
+		: undefined;
+	const answers = targets.map((target) => {
+		const observedAt = sourcesAt ?? observedNow(toolEnv);
+		const answer = collectStable(collect, {
+			request,
+			toolEnv,
+			config,
+			target,
+			observedAt,
+			sources,
+		});
+		const problems = unique(answer.problems);
+		return {
+			target,
+			observed: localTimestamp(observedAt),
+			answer: { ...answer, problems },
+			code: exitCode(problems),
+		};
 	});
-	const problems = unique(collected.problems);
-	const code = exitCode(problems);
+	const code = Math.max(...answers.map((entry) => entry.code));
+
 	if (request.json) {
-		return output(
-			JSON.stringify(
-				{
-					schema: 1,
-					command: "query",
-					query: request.query,
-					root,
-					observed,
-					retried: false,
-					scope: "workspace",
-					workspace: {
-						name: target.name,
-						dir: target.dir,
-						state: target.state,
-					},
-					problems,
-					...collected.fields,
-				},
-				null,
-				2,
-			),
-			code,
-		);
+		const results = answers.map(({ target, observed, answer }) => ({
+			workspace: workspaceFields(target),
+			observed,
+			retried: answer.retried,
+			problems: answer.problems,
+			...answer.fields,
+		}));
+		const head = { schema: 1, command: "query", query: request.query, root };
+		const [only] = results;
+		let json: Record<string, unknown> = {
+			...head,
+			scope: "all",
+			workspaces: results,
+		};
+		if (!request.all && only) {
+			const { workspace, observed, retried, ...rest } = only;
+			json = {
+				...head,
+				observed,
+				retried,
+				scope: "workspace",
+				workspace,
+				...rest,
+			};
+		}
+		return output(JSON.stringify(json, null, 2), code);
 	}
+
+	const notices = answers.flatMap(({ target, answer }) =>
+		answer.problems.map((entry) =>
+			problemLine(entry, request.all ? target.name : undefined),
+		),
+	);
+	const text = request.all
+		? answers
+				.map(({ target, answer }) =>
+					[
+						target.name,
+						...answer.text.flatMap((line) =>
+							line.split("\n").map((part) => `  ${part}`),
+						),
+					].join("\n"),
+				)
+				.join("\n\n")
+		: (answers[0]?.answer.text ?? []).join("\n");
 	return {
-		...output(collected.text.join("\n"), code),
-		...(problems.length > 0
-			? { notice: problems.map(problemLine).join("\n") }
-			: {}),
+		...output(text, code),
+		...(notices.length > 0 ? { notice: notices.join("\n") } : {}),
 	};
 }

@@ -344,7 +344,8 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		expect(agent.spec.flags).toEqual({
 			all: {
 				type: "boolean",
-				description: "tool check: also show info findings",
+				description:
+					"tool check: also show info findings; tool query: answer for every workspace, from the root only",
 			},
 			status: {
 				type: "boolean",
@@ -1937,6 +1938,7 @@ describe("staged context flag refusals", () => {
 		["accept-dropped", "reason", "checkpoint"],
 		["since", "2026-10-01", "query journal"],
 		["max", "5", "query journal"],
+		["all", undefined, "check and tool query"],
 	] as const) {
 		test(`launch refuses --${name} with its owner`, async () => {
 			const { cwd } = build("plain");

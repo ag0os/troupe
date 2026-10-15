@@ -203,7 +203,9 @@ export function prepare(
 												? "tool archive"
 												: name === "since" || name === "max"
 													? "tool query journal"
-													: "tool check";
+													: name === "all"
+														? "tool check and tool query"
+														: "tool check";
 			return {
 				exit: {
 					message: `shepherd: --${name} applies only to ${owner}\n`,

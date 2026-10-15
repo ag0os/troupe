@@ -59,12 +59,12 @@ const USAGE = [
 	"shepherd tool journal    (<text> | --stdin) [--json]",
 	"shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]",
 	"shepherd tool unlock     [--json]",
-	"shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--json]",
+	"shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--all] [--json]",
 	"shepherd tool query item <slug> [--json]",
-	"shepherd tool query sessions [--json]",
-	"shepherd tool query autonomy [--json]",
-	"shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--json]",
-	"shepherd tool query checkpoint [--json]",
+	"shepherd tool query sessions [--all] [--json]",
+	"shepherd tool query autonomy [--all] [--json]",
+	"shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--all] [--json]",
+	"shepherd tool query checkpoint [--all] [--json]",
 ].join("\n");
 
 const CHECK_FLAGS = new Set(["all", "status", "context", "json", "today"]);
@@ -81,11 +81,11 @@ const COMMAND_FLAGS = {
 	journal: new Set(["stdin", "json"]),
 	checkpoint: new Set(["apply", "token", "session", "accept-dropped", "json"]),
 	unlock: new Set(["json"]),
-	query: new Set(["json", "since", "max"]),
+	query: new Set(["json", "since", "max", "all"]),
 };
 type ToolCommand = keyof typeof COMMAND_FLAGS;
 const FLAG_OWNERS: Record<string, string> = {
-	all: "tool check",
+	all: "tool check and tool query",
 	status: "tool check",
 	context: "tool check",
 	master: "tool init",

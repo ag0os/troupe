@@ -181,6 +181,38 @@ function expectContract(
 	expect(stray).toEqual([]);
 }
 
+/**
+ * Assert the --all read contract from the root: the user config, discovery
+ * (lstat, existence checks and listings of directories beneath the root,
+ * outside any state directory), and the per-query paths under each
+ * workspace's .shepherd/.
+ */
+function expectAllContract(
+	calls: FsCall[],
+	fixture: ReturnType<typeof contractTree>,
+	allowed: (relative: string, call: FsCall) => boolean,
+): void {
+	const states = [fixture.root, fixture.a, fixture.b].map((dir) =>
+		join(dir, ".shepherd"),
+	);
+	const stray = calls.filter((call) => {
+		if (call.path === fixture.userConfig) return call.fn !== "readFileSync";
+		const state = states.find((dir) => call.path.startsWith(`${dir}${sep}`));
+		if (state) return !allowed(call.path.slice(state.length + 1), call);
+		if (ancestorWalk(call, fixture.root)) return false;
+		const discovery =
+			call.fn === "lstatSync" ||
+			call.fn === "existsSync" ||
+			(call.fn === "readdirSync" &&
+				!call.path.split(sep).includes(".shepherd"));
+		const beneath =
+			call.path === fixture.root ||
+			call.path.startsWith(`${fixture.root}${sep}`);
+		return !(discovery && beneath);
+	});
+	expect(stray).toEqual([]);
+}
+
 describe("tool query items", () => {
 	test("returns the envelope and every Items entry", async () => {
 		const fixture = contractTree();
@@ -1946,6 +1978,245 @@ describe("tool query journal", () => {
 	});
 });
 
+type Answer = { workspace: { name: string }; problems: { code: string }[] };
+
+describe("tool query --all", () => {
+	test("returns the root and its children, each with its own answer", async () => {
+		const fixture = contractTree({
+			"root/.shepherd/config.json": '{"autonomy":{"enabled":true}}',
+			"root/a/.shepherd/config.json": '{"autonomy":{"enabled":false}}',
+		});
+		const { code, json } = await query(
+			["autonomy"],
+			fixture.env(fixture.root),
+			{ all: true },
+		);
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			schema: 1,
+			command: "query",
+			query: "autonomy",
+			root: fixture.root,
+			scope: "all",
+		});
+		expect(json.workspaces).toHaveLength(3);
+		expect(json.workspaces[1]).toMatchObject({
+			workspace: {
+				name: "a",
+				dir: fixture.a,
+				state: join(fixture.a, ".shepherd"),
+			},
+			observed: expect.any(String),
+			retried: false,
+			problems: [],
+			file: join(fixture.a, ".shepherd", "config.json"),
+		});
+		expect(
+			json.workspaces.map(
+				(answer: Answer & { present: boolean; active: boolean }) => [
+					answer.workspace.name,
+					answer.present,
+					answer.active,
+				],
+			),
+		).toEqual([
+			["root", true, true],
+			["a", true, false],
+			["b", false, false],
+		]);
+	});
+
+	test("returns a standalone root alone", async () => {
+		const fixture = contractTree(workspace("solo"));
+		const solo = join(fixture.base, "solo");
+		const { code, json } = await query(["items"], fixture.env(solo), {
+			all: true,
+		});
+		expect(code).toBe(0);
+		expect(json).toMatchObject({ root: solo, scope: "all" });
+		expect(
+			json.workspaces.map(({ workspace }: Answer) => workspace.name),
+		).toEqual(["solo"]);
+		expect(json.workspaces[0].items).toHaveLength(3);
+	});
+
+	test("refuses --all below the root without enumerating", async () => {
+		const fixture = contractTree(workspace("root/a/one/two"));
+		for (const cwd of [fixture.a, join(fixture.a, "one", "two")]) {
+			const { value, calls } = await spyFs(() =>
+				query(["items"], fixture.env(cwd), { all: true }),
+			);
+			expect(value).toMatchObject({
+				text: `shepherd: --all is allowed only from the root workspace; this one sits under ${fixture.root}\n`,
+				code: 2,
+				stream: "stderr",
+			});
+			expect(calls.filter(({ fn }) => fn === "readdirSync")).toEqual([]);
+		}
+	});
+
+	test("exits with the highest workspace exit", async () => {
+		const fixture = contractTree();
+		fs.rmSync(join(fixture.b, ".shepherd", "CURRENT.md"));
+		const { code, json } = await query(["items"], fixture.env(fixture.root), {
+			all: true,
+		});
+		expect(code).toBe(1);
+		expect(
+			json.workspaces.map((answer: Answer) => [
+				answer.workspace.name,
+				codes(answer),
+			]),
+		).toEqual([
+			["root", []],
+			["a", []],
+			["b", ["current-missing"]],
+		]);
+	});
+
+	test("refuses item with --all before any filesystem call", async () => {
+		const fixture = contractTree();
+		const { value, calls } = await spyFs(() =>
+			query(["item", "evals"], fixture.env(fixture.root), { all: true }),
+		);
+		expect(value).toMatchObject({
+			text: "shepherd: tool query item takes no --all; a slug names one workspace's item\n",
+			code: 2,
+			stream: "stderr",
+		});
+		expect(calls).toEqual([]);
+	});
+
+	test("renders one block per workspace, headed by its name", async () => {
+		const fixture = contractTree({
+			"root/.shepherd/config.json": '{"autonomy":{"enabled":true}}',
+		});
+		fs.writeFileSync(join(fixture.b, ".shepherd", "config.json"), "{");
+		const output = await runTool(
+			["query", "autonomy"],
+			{ all: true },
+			fixture.env(fixture.root),
+		);
+		expect(output).toMatchObject({
+			text: [
+				"root",
+				"  autonomy: active (config.json)",
+				"",
+				"a",
+				"  autonomy: off (not set)",
+				"",
+				"b",
+				"  autonomy: off (config.json is invalid)",
+				"",
+			].join("\n"),
+			code: 1,
+			stream: "stdout",
+		});
+		expect(output.notice).toStartWith(
+			`shepherd: b: ${join(fixture.b, ".shepherd", "config.json")}: `,
+		);
+	});
+});
+
+describe("tool query stability", () => {
+	/** Run with readFileSync or readdirSync calling after on each call for path. */
+	async function withHook<T>(
+		fn: "readFileSync" | "readdirSync",
+		path: string,
+		after: (count: number) => void,
+		run: () => Promise<T>,
+	): Promise<T> {
+		const original = FS_CALLS[fn];
+		let count = 0;
+		const spy = spyOn(fs, fn).mockImplementation(((...args: unknown[]) => {
+			const value = Reflect.apply(original, fs, args);
+			if (String(args[0]) === path) after(++count);
+			return value;
+		}) as never);
+		try {
+			return await run();
+		} finally {
+			spy.mockRestore();
+		}
+	}
+
+	test("reruns once when a read file is rewritten with the same size", async () => {
+		const fixture = contractTree();
+		const current = join(fixture.a, ".shepherd", "CURRENT.md");
+		const past = new Date(2020, 0, 1);
+		fs.utimesSync(current, past, past);
+		const before = fs.lstatSync(current);
+		let reads = 0;
+		const { code, json } = await withHook(
+			"readFileSync",
+			current,
+			(count) => {
+				reads = count;
+				if (count === 1) {
+					fs.writeFileSync(current, ITEMS.replace("the trials", "the trails"));
+				}
+			},
+			() => query(["items"], fixture.env(fixture.a)),
+		);
+		expect({ retried: json.retried, text: json.items[0].text }).toEqual({
+			retried: true,
+			text: "evals: the trails as a merge gate",
+		});
+		expect(code).toBe(0);
+		expect(json.problems).toEqual([]);
+		expect(reads).toBe(2);
+		const after = fs.lstatSync(current);
+		expect([after.size, after.ino]).toEqual([before.size, before.ino]);
+	});
+
+	test("reports collection-unstable when the file changes again", async () => {
+		const fixture = contractTree();
+		const current = join(fixture.a, ".shepherd", "CURRENT.md");
+		const { code, json } = await withHook(
+			"readFileSync",
+			current,
+			(count) => fs.writeFileSync(current, `${ITEMS}${"\n".repeat(count)}`),
+			() => query(["items"], fixture.env(fixture.a)),
+		);
+		expect(json.retried).toBeTrue();
+		expect(code).toBe(1);
+		expect(json.problems).toEqual([
+			{
+				code: "collection-unstable",
+				file: "CURRENT.md",
+				message: "CURRENT.md changed during collection, twice",
+			},
+		]);
+		expect(json.items).toHaveLength(3);
+	});
+
+	test("reruns when a journal month appears after the enumeration", async () => {
+		const fixture = checkpointTree();
+		const archive = join(fixture.state, "archive", "journal");
+		const { code, json } = await withHook(
+			"readdirSync",
+			archive,
+			(count) => {
+				if (count === 1) {
+					fs.writeFileSync(
+						join(archive, "2026-08.md"),
+						"## 2026-08-31\n- 09:00 august\n",
+					);
+				}
+			},
+			() => query(["journal"], fixture.env(fixture.a)),
+		);
+		expect(code).toBe(0);
+		expect(json.retried).toBeTrue();
+		expect(json.files).toEqual([
+			"archive/journal/2026-08.md",
+			"archive/journal/2026-09.md",
+			"journal.md",
+		]);
+		expect(json.count).toBe(6);
+	});
+});
+
 describe("tool query read contract", () => {
 	test("items reads the user config and only CURRENT and link targets", async () => {
 		const fixture = contractTree();
@@ -2126,5 +2397,146 @@ describe("tool query read contract", () => {
 				});
 			}
 		}
+	});
+
+	test("--all from the root reads each workspace's records and nothing beyond", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		const chain =
+			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
+		const covered =
+			/^(CURRENT\.md|MEMORY\.md|docs\/INDEX\.md|pending\.md|charter\.md|work\/(todo|in-progress)\/[^/]+\/STATUS\.md)$/;
+		const reads: Record<string, (path: string, call: FsCall) => boolean> = {
+			items: (path, call) =>
+				call.fn === "readFileSync"
+					? path === "CURRENT.md"
+					: call.fn === "lstatSync" &&
+						(path === "CURRENT.md" ||
+							/^work(\/(in-progress|todo)(\/(evals|lock)(\/STATUS\.md)?)?)?$/.test(
+								path,
+							)),
+			autonomy: (path, call) =>
+				path === "config.json" &&
+				(call.fn === "lstatSync" || call.fn === "readFileSync"),
+			journal: (path, call) => {
+				if (call.fn === "readdirSync") return path === "archive/journal";
+				if (call.fn === "readFileSync") return chain.test(path);
+				return (
+					call.fn === "lstatSync" &&
+					(chain.test(path) || /^archive(\/journal)?$/.test(path))
+				);
+			},
+			checkpoint: (path, call) => {
+				if (call.fn === "readdirSync") {
+					return /^(work\/(todo|in-progress)|archive\/journal)$/.test(path);
+				}
+				const record = chain.test(path) || covered.test(path);
+				if (call.fn === "readFileSync") return record;
+				return (
+					call.fn === "lstatSync" &&
+					(record ||
+						/^(docs|archive(\/journal)?|work(\/(todo|in-progress)(\/[^/]+)?)?)$/.test(
+							path,
+						))
+				);
+			},
+		};
+		for (const [name, allowed] of Object.entries(reads)) {
+			const { value, calls } = await spyFs(() =>
+				query([name], fixture.env(fixture.root), { all: true }),
+			);
+			expect({ name, code: value.code }).toEqual({ name, code: 0 });
+			expect(
+				value.json.workspaces.map(({ workspace }: Answer) => workspace.name),
+			).toEqual(["root", "a", "b"]);
+			expectAllContract(calls, fixture, allowed);
+			for (const dir of [fixture.root, fixture.a, fixture.b]) {
+				expect(
+					calls.some(({ path }) => path.startsWith(join(dir, ".shepherd", ""))),
+				).toBeTrue();
+			}
+			expect(
+				calls.some(
+					({ fn, path }) =>
+						fn === "readFileSync" && path.endsWith("charter.md"),
+				),
+			).toBe(name === "checkpoint");
+		}
+	});
+
+	test("sessions --all reads each session source once", async () => {
+		const fixture = sessionsTree({
+			"home/.codex-fake/session_index.jsonl": `${JSON.stringify({ id: "x-1", thread_name: "delegate-cdx-1" })}\n`,
+		});
+		fixture.register([
+			{ pid: 201, name: "ws-1013", cwd: fixture.a },
+			{ pid: 202, name: "ws-1001", cwd: fixture.root },
+			{ pid: 203, name: "ws-1002", cwd: fixture.b },
+		]);
+		const claude = join(fixture.home, ".claude");
+		const codexHome = join(fixture.home, ".codex-fake");
+		const { env, calls: commands } = fixture.sessionsEnv(fixture.root, {
+			alive: [201, 202, 203],
+			agents: [
+				{
+					agent: "claude",
+					agent_session: { value: "c-1" },
+					name: "ws-1013",
+					cwd: fixture.a,
+				},
+				{ agent: "codex", agent_session: { value: "x-1" }, cwd: fixture.b },
+			],
+		});
+		const { value, calls } = await spyFs(() =>
+			query(["sessions"], env, { all: true }),
+		);
+		expect(value.code).toBe(0);
+		expect(commands).toEqual([["herdr", "agent", "list"]]);
+		expect(
+			calls.filter(
+				({ fn, path }) =>
+					fn === "readdirSync" && path === join(claude, "sessions"),
+			),
+		).toHaveLength(1);
+		expect(
+			calls.filter(
+				({ fn, path }) =>
+					fn === "readFileSync" &&
+					path === join(codexHome, "session_index.jsonl"),
+			),
+		).toHaveLength(1);
+		const answers = value.json.workspaces;
+		expect(
+			answers.map(
+				(answer: Answer & { claude: { sessions: { pid: number }[] } }) => [
+					answer.workspace.name,
+					answer.claude.sessions.map(({ pid }) => pid),
+				],
+			),
+		).toEqual([
+			["root", [202]],
+			["a", [201]],
+			["b", [203]],
+		]);
+		expect(answers[2].herdr.agents).toMatchObject([
+			{ agent: "codex", name: "delegate-cdx-1" },
+		]);
+		expect(
+			new Set(answers.map(({ observed }: { observed: string }) => observed))
+				.size,
+		).toBe(1);
+		expectAllContract(
+			calls.filter(
+				(call) =>
+					!call.path.startsWith(`${claude}${sep}`) &&
+					!call.path.startsWith(`${codexHome}${sep}`) &&
+					!(call.path === join(fixture.home, ".codex-active")) &&
+					!(call.path === fixture.home && call.fn === "readdirSync"),
+			),
+			fixture,
+			(path, call) =>
+				(path === "CURRENT.md" || path === "config.json") &&
+				(call.fn === "lstatSync" || call.fn === "readFileSync"),
+		);
 	});
 });

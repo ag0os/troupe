@@ -198,12 +198,12 @@ shepherd tool start      [--budget <words>] [--json]
 shepherd tool journal    (<text> | --stdin) [--json]
 shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]
 shepherd tool unlock     [--json]
-shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--json]
+shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--all] [--json]
 shepherd tool query item <slug> [--json]
-shepherd tool query sessions [--json]
-shepherd tool query autonomy [--json]
-shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--json]
-shepherd tool query checkpoint [--json]
+shepherd tool query sessions [--all] [--json]
+shepherd tool query autonomy [--all] [--json]
+shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--all] [--json]
+shepherd tool query checkpoint [--all] [--json]
 ```
 
 `tool check` checks this workspace and every workspace beneath it. Name one or more workspaces to limit the check. By default it hides informational findings; `--all` shows them, `--status` reports tracked work and live sessions, `--context` reports words by context tier, and `--json` produces machine readable output. `--status` and `--context` cannot be combined.
@@ -234,18 +234,22 @@ For a fresh machine, follow [SETUP.md](SETUP.md).
 
 It reads under a fixed contract, and nothing else:
 
-1. Directory discovery: one `lstat` of `<cwd>/.shepherd` and of each ancestor's `.shepherd` to find the launch workspace and the root of its tree. It enumerates no sibling workspace.
+1. Directory discovery: one `lstat` of `<cwd>/.shepherd` and of each ancestor's `.shepherd` to find the launch workspace and the root of its tree. It enumerates no sibling workspace. Only `--all` discovers the whole tree, as `tool check` does.
 2. Configuration: the user config file, which every query reads (an invalid one exits 2, as for every tool); and the workspace's own `.shepherd/config.json`, read only by `autonomy` and `sessions`. Enclosing workspace configs are never read.
 3. Record contents under the workspace's `.shepherd/` only. Every path is checked first: no absolute path, no `..`, and each component is `lstat`ed; a symlink anywhere on the path, or a file of the wrong kind, is refused as `record-unsafe` without reading or enumerating its target.
 4. Session sources, machine state outside the record, for `sessions` only.
 
-Every result, with `--json`, carries `schema`, `command`, `query`, `root`, `observed` (the local time when collection started), `retried`, `scope`, `workspace` (`name`, `dir`, `state`) and `problems` (`code`, `file` relative to `.shepherd/` or absolute for a config file, `line` when known, `message`), then the query's own fields. Every documented field is always present, null when unknown. Without `--json` the answer goes to stdout and the problem lines to stderr.
+Every result, with `--json`, carries `schema`, `command`, `query`, `root`, `observed` (the local time when collection started), `retried` (whether the collection ran twice because a file changed), `scope` (`workspace`), `workspace` (`name`, `dir`, `state`) and `problems` (`code`, `file` relative to `.shepherd/` or absolute for a config file, `line` when known, `message`), then the query's own fields. Every documented field is always present, null when unknown. Without `--json` the answer goes to stdout and the problem lines to stderr.
 
 | Situation | Exit |
 |---|---|
 | Answered, possibly empty, a session source unavailable (`source-unavailable`) | 0 |
 | Not answerable from the record: a needed file missing or unreadable, an open fence, a symlinked record, an invalid checkpoint or config, a duplicate or unknown slug, a lost cursor, an unreadable journal chain, files that kept changing | 1, with the full result and the problems that caused it |
-| Usage: unknown query, bad word, slug, `--since` or `--max`, extra arguments, a flag of another command, an invalid user config, not a workspace | 2, nothing on stdout |
+| Usage: unknown query, bad word, slug, `--since` or `--max`, extra arguments, a flag of another command, `--all` with `item` or from a nested workspace, an invalid user config, not a workspace | 2, nothing on stdout |
+
+The scope is the launch workspace (`--cwd` selects another). `--all` answers for every workspace of the tree instead, and is allowed only from its root, the workspace with no `.shepherd/` in any ancestor directory (the master): from a nested workspace it exits 2 naming the root, before any directory is enumerated. A lone workspace is its own root, so `--all` there answers for it alone. `item` takes no `--all`, since a slug names one workspace's item. With `--all` the JSON has `schema`, `command`, `query`, `root`, `"scope": "all"` and `workspaces`, one result per workspace, the root first and then the others by name, each with its own `workspace`, `observed`, `retried`, `problems` and the query's fields. The text form is one block per workspace, headed by its name, and the problem lines name the workspace. The exit is the highest of the workspaces' exits. `sessions --all` reads each session source once and divides what it observed among the workspaces, so its `observed` is the same for all of them.
+
+Observations are not transactional: nothing stops a file from changing while the query reads. The query keeps the size, inode and modification time (in nanoseconds) of every record it reads and the listing of every directory it enumerates, from when it first touches them, and compares them when the collection ends. On any difference it collects once more and says so with `"retried": true`; if something changed again, the second answer comes with one `collection-unstable` problem per changed path, exit 1. Session sources are machine state and are not compared.
 
 `query items [WORD]` lists the entries of CURRENT's `## Items` section, from its heading to the next `#` or `##` heading, outside fenced code. An entry is a bullet whose first content is a bold run of three or more capital letters (`**NEXT**`, `**NEXT:**`), with its indented continuation lines. Each entry has `word`, `known` (one of the five status words), `slug` and `link` (from the first link to a `STATUS.md`; null for a small entry without one), `status` (`path` and `exists`), `text` (the entry without bullet, word and link targets, never cut), `raw` (the source lines unchanged) and `line`/`endLine`. The result also has `file`, `updated` (the `Updated:` value), `noNext` and `section`. A missing section is `items-section-missing` and a link outside `.shepherd/` or through a symlink is `link-unsafe`, both exit 1. The optional word filters the entries.
 
