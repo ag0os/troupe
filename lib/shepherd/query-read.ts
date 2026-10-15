@@ -68,7 +68,9 @@ function checkPath(
 		}
 		if (stat.isSymbolicLink()) return unsafe(component, "is a symlink");
 		const last = index === parts.length - 1;
-		if (!last && !stat.isDirectory()) return absent;
+		if (!last && !stat.isDirectory()) {
+			return unsafe(component, "is not a directory");
+		}
 		if (last && (kind === "file" ? !stat.isFile() : !stat.isDirectory())) {
 			return unsafe(
 				component,
@@ -82,8 +84,8 @@ function checkPath(
 
 /**
  * Check a path below state before anything reads it: a local relative path
- * whose every component is lstat'ed, refusing a symlink anywhere and a final
- * component of the wrong kind.
+ * whose every component is lstat'ed, refusing a symlink anywhere, a middle
+ * component that is not a directory and a final component of the wrong kind.
  */
 export function recordPath(
 	state: string,

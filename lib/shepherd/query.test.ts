@@ -364,6 +364,20 @@ describe("tool query items", () => {
 		expect(linked.json.items[0].status).toBeNull();
 	});
 
+	test("flags links through a regular file where work/ should be", async () => {
+		const fixture = contractTree();
+		const state = join(fixture.a, ".shepherd");
+		fs.rmSync(join(state, "work"), { recursive: true });
+		fs.writeFileSync(join(state, "work"), "not a directory\n");
+		const { code, json } = await query(["items"], fixture.env(fixture.a));
+		expect(code).toBe(1);
+		expect(codes(json)).toEqual(["link-unsafe", "link-unsafe"]);
+		expect(json.problems[0].message).toBe(
+			"link work/in-progress/evals/STATUS.md: work is not a directory",
+		);
+		expect(json.items[0].status).toBeNull();
+	});
+
 	test("renders the text form", async () => {
 		const fixture = contractTree();
 		const output = await runTool(
@@ -1548,6 +1562,19 @@ describe("tool query checkpoint", () => {
 			).toEqual([]);
 		});
 	}
+
+	test("reports a regular file where work/ should be as unsafe", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		fs.rmSync(join(fixture.state, "work"), { recursive: true });
+		fs.writeFileSync(join(fixture.state, "work"), "not a directory\n");
+		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(json.changed).toContainEqual({
+			path: "work",
+			kind: "unsafe",
+			reason: "is not a directory",
+		});
+	});
 
 	test("loses the boundary when the certified entries moved", async () => {
 		const edited = checkpointTree();
