@@ -132,7 +132,7 @@ function writerProblem(caller: Caller, prefix: string): string | undefined {
 		return `${caller.name} is not this workspace's Shepherd (prefix ${prefix}-); the Shepherd certifies, or pass --session <name> on its instruction`;
 	return undefined;
 }
-function writerFacts(caller: Caller) {
+function callerFacts(caller: Caller) {
 	return {
 		name: caller.name,
 		harness: caller.harness,
@@ -141,11 +141,11 @@ function writerFacts(caller: Caller) {
 		reason: caller.reason ?? null,
 	};
 }
-type Writer = { caller: Caller; problem: string | undefined };
+type Resolved = { caller: Caller; problem: string | undefined };
 function dryRun(
 	workspace: Workspace,
 	toolEnv: ToolEnv,
-	resolveWriter: () => Writer,
+	resolveWriter: () => Resolved,
 	json: boolean,
 ): Result {
 	const held = captureState(workspace, toolEnv);
@@ -188,7 +188,7 @@ function dryRun(
 		changed,
 		dropped: held.dropped ?? { candidates: [], accounted: [], unaccounted: [] },
 		lock,
-		writer: writerFacts(caller),
+		writer: callerFacts(caller),
 		...(refused ? { refused } : { token: held.token, apply }),
 	};
 	if (json)
@@ -278,7 +278,7 @@ export async function runCheckpoint(
 		config.sessionPrefix,
 		hasChildren,
 	);
-	const resolveWriter = (): Writer => {
+	const resolveWriter = (): Resolved => {
 		const caller = callerSession(toolEnv, workspace, config, hasChildren);
 		return { caller, problem: writerProblem(caller, prefix) };
 	};
@@ -403,7 +403,7 @@ export async function runCheckpoint(
 						? JSON.stringify({
 								...next,
 								applied: true,
-								caller: writerFacts(caller),
+								caller: callerFacts(caller),
 								updatedName:
 									updated.status === "rewritten"
 										? { before: updated.before, after: writer }
