@@ -560,9 +560,19 @@ export async function runTool(
 			};
 		}
 		if (command === "checkpoint") {
+			const config = configForWorkspace(homeWorkspace, tree, toolEnv);
+			const userProblems = splitConfigProblems(config.problems, toolEnv).user;
+			if (userProblems.length > 0) {
+				return result(
+					userProblems.map(configProblemLine).join("\n"),
+					2,
+					"stderr",
+				);
+			}
 			const checkpoint = await runCheckpoint(
 				homeWorkspace,
 				toolEnv,
+				config,
 				{
 					apply: flags.apply === true,
 					token: typeof flags.token === "string" ? flags.token : undefined,

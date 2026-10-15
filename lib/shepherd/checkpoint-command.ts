@@ -1,3 +1,6 @@
+import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type Caller, callerSession } from "./caller";
 import {
 	checkpointBoundary,
 	classifyChanges,
@@ -11,6 +14,8 @@ import {
 	type HeldState,
 	nextCheckpoint,
 } from "./checkpoint-write";
+import type { Config } from "./config";
+import { contentHash } from "./current-prev";
 import { localTimestamp } from "./dates";
 import { appendEntries } from "./journal";
 import {
@@ -20,9 +25,12 @@ import {
 	lockStatus,
 	withStateLock,
 } from "./lock";
+import { withUpdatedName } from "./query-items";
+import { sessionPrefixFor } from "./session-name";
 import type { ToolEnv } from "./sessions";
 import { type ChainEntry, journalChain, words } from "./text";
 import type { Workspace } from "./tree";
+import { findChildWorkspaces } from "./workspace";
 
 export type CheckpointOptions = {
 	apply: boolean;
@@ -115,8 +123,38 @@ function refusedRange(held: HeldState): {
 		fromReset: !found,
 	};
 }
-function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
+/** Why the caller cannot certify without --session, or undefined for this workspace's Shepherd. */
+function writerProblem(
+	caller: Caller,
+	workspace: Workspace,
+	config: Config,
+): string | undefined {
+	if (caller.harness === null)
+		return caller.reason ?? "no calling session found; pass --session <name>";
+	if (caller.name === null)
+		return `calling session is unnamed (${caller.harness} ${caller.id?.slice(0, 8)}: ${caller.reason}); name it, then run the dry run again, or pass --session <name>`;
+	if (caller.role !== "shepherd")
+		return `${caller.name} is not this workspace's Shepherd (prefix ${sessionPrefixFor(workspace.dir, config.sessionPrefix, findChildWorkspaces(workspace.dir).length > 0)}-); the Shepherd certifies, or pass --session <name> on its instruction`;
+	return undefined;
+}
+function writerFacts(caller: Caller) {
+	return {
+		name: caller.name,
+		harness: caller.harness,
+		id: caller.id,
+		role: caller.role,
+		reason: caller.reason ?? null,
+	};
+}
+function dryRun(
+	workspace: Workspace,
+	toolEnv: ToolEnv,
+	config: Config,
+	json: boolean,
+): Result {
 	const held = captureState(workspace, toolEnv);
+	const caller = callerSession(toolEnv, workspace, config);
+	const problem = writerProblem(caller, workspace, config);
 	const before = held.status === "ok" ? (held.checkpoint?.files ?? {}) : {};
 	const after = Object.fromEntries(
 		Object.entries(held.files).map(([path, file]) => [path, file.hash]),
@@ -142,7 +180,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	const refused = !held.range.ok ? held.range.message : unsafeReason(held);
 	const selected = held.range.ok ? held.range : refusedRange(held);
 	const range = selected.entries;
-	const apply = `shepherd tool checkpoint --apply --token ${held.token} --session <your session name>${held.dropped?.unaccounted.length ? ' --accept-dropped "<why each line may go>"' : ""}`;
+	const apply = `shepherd tool checkpoint --apply --token ${held.token}${problem ? " --session <your session name>" : ""}${held.dropped?.unaccounted.length ? ' --accept-dropped "<why each line may go>"' : ""}`;
 	const facts = {
 		revision: held.revision,
 		nextRevision: held.revision + 1,
@@ -155,6 +193,7 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 		changed,
 		dropped: held.dropped ?? { candidates: [], accounted: [], unaccounted: [] },
 		lock,
+		writer: writerFacts(caller),
 		...(refused ? { refused } : { token: held.token, apply }),
 	};
 	if (json)
@@ -177,6 +216,9 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 			: "";
 	const lines = [
 		`checkpoint: ${checkpoint} -> would write revision ${held.revision + 1}`,
+		problem
+			? `writer: none (${problem})`
+			: `writer: ${caller.name} (${caller.harness}, ${caller.id?.slice(0, 8)})`,
 		`journal: ${range.length} entries ${!selected.fromReset ? "since the boundary" : "in the fallback range"}${span}`,
 		...range.map((entry) => `  - ${location(entry)} ${entry.text}`),
 		`new boundary: ${boundary(last ?? held.chain.at(-1))}`,
@@ -196,10 +238,33 @@ function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	return { code: refused ? 1 : 0, text: lines.join("\n"), stream: "stdout" };
 }
 
+/**
+ * Set the writer's name on CURRENT's Updated: line, inside the lock, and hold
+ * the new bytes so the snapshot and the manifest describe the file as written.
+ */
+function rewriteUpdated(
+	workspace: Workspace,
+	held: HeldState,
+	writer: string,
+): ReturnType<typeof withUpdatedName> {
+	const bytes = held.files["CURRENT.md"]?.bytes;
+	if (bytes == null) return { status: "skipped", reason: "missing" };
+	const updated = withUpdatedName(Buffer.from(bytes).toString("utf8"), writer);
+	if (updated.status !== "rewritten") return updated;
+	const next = Buffer.from(updated.text, "utf8");
+	const temporary = join(workspace.state, "CURRENT.md.tmp");
+	rmSync(temporary, { force: true });
+	writeFileSync(temporary, next, { flag: "wx" });
+	renameSync(temporary, join(workspace.state, "CURRENT.md"));
+	held.files["CURRENT.md"] = { bytes: next, hash: contentHash(next) };
+	return updated;
+}
+
 /** Show the full certification state or commit exactly the validated held bytes. */
 export async function runCheckpoint(
 	workspace: Workspace,
 	toolEnv: ToolEnv,
+	config: Config,
 	options: CheckpointOptions,
 	hooks: CheckpointHooks = {},
 ): Promise<Result> {
@@ -212,7 +277,7 @@ export async function runCheckpoint(
 			text: "usage: shepherd tool checkpoint [--apply --token <token>] [--session <session>] [--accept-dropped <reason>] [--json]",
 			stream: "stderr",
 		};
-	if (!options.apply) return dryRun(workspace, toolEnv, options.json);
+	if (!options.apply) return dryRun(workspace, toolEnv, config, options.json);
 	for (const [flag, value] of [
 		["session", options.session],
 		["accept-dropped", options.acceptDropped],
@@ -234,6 +299,10 @@ export async function runCheckpoint(
 			toolEnv,
 			async (): Promise<Result> => {
 				await hooks.afterLock?.();
+				const caller = callerSession(toolEnv, workspace, config);
+				const problem = writerProblem(caller, workspace, config);
+				if (options.session === undefined && problem) return failure(problem);
+				const writer = options.session ?? (caller.name as string);
 				const read = readCheckpoint(workspace.state);
 				if (
 					read.status === "invalid" &&
@@ -301,17 +370,41 @@ export async function runCheckpoint(
 					)
 						return appendRefusal(unaccounted.length);
 				}
+				const updated = rewriteUpdated(workspace, held, writer);
 				const next = nextCheckpoint(held, {
 					written: localTimestamp(toolEnv.clock()),
-					session: options.session,
+					session: writer,
 					appended,
 				});
 				commitCheckpoint(workspace.state, held, next, hooks.commit);
+				const lines = [
+					`checkpoint: wrote revision ${next.revision}`,
+					`new boundary: ${boundary(appended.at(-1) ?? held.chain.at(-1))}`,
+				];
+				if (options.session !== undefined && caller.name !== options.session)
+					lines.push(
+						`writer: ${writer} (--session; the calling session is ${caller.name ?? "unknown"})`,
+					);
+				else lines.push(`writer: ${writer}`);
+				if (updated.status === "rewritten")
+					lines.push(
+						`CURRENT.md Updated: ${updated.before ?? "none"} -> ${writer}`,
+					);
+				if (updated.status === "skipped")
+					lines.push(`Updated: line not rewritten (${updated.reason})`);
 				return {
 					code: 0,
 					text: options.json
-						? JSON.stringify({ ...next, applied: true })
-						: `checkpoint: wrote revision ${next.revision}\nnew boundary: ${boundary(appended.at(-1) ?? held.chain.at(-1))}`,
+						? JSON.stringify({
+								...next,
+								applied: true,
+								writer: writerFacts(caller),
+								updatedName:
+									updated.status === "rewritten"
+										? { before: updated.before, after: writer }
+										: null,
+							})
+						: lines.join("\n"),
 					stream: "stdout",
 				};
 			},

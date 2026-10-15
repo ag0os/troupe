@@ -88,6 +88,49 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 	return undefined;
 }
 
+const UPDATED_SHAPE =
+	/^Updated:\s*(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?:,\s*(.*?))?\s*$/;
+
+/** CURRENT's first `Updated:` line outside a fence and above `## Items`. */
+export function updatedLine(
+	text: string,
+): { line: number; text: string } | null {
+	for (const { n, line } of proseLines(text)) {
+		if (/^##\s+Items\b/i.test(line)) return null;
+		if (/^Updated:/.test(line)) return { line: n, text: line };
+	}
+	return null;
+}
+
+/** The session name on CURRENT's `Updated:` line, when the line has the standard shape. */
+export function updatedName(text: string): string | null {
+	const found = updatedLine(text);
+	return found?.text.match(UPDATED_SHAPE)?.[2] || null;
+}
+
+/**
+ * CURRENT with the `Updated:` line's session name set to writer, nothing else
+ * changed, or why the line was left alone.
+ */
+export function withUpdatedName(
+	text: string,
+	writer: string,
+):
+	| { status: "rewritten"; text: string; before: string | null }
+	| { status: "same" }
+	| { status: "skipped"; reason: "missing" | "not in the standard shape" } {
+	const found = updatedLine(text);
+	if (!found) return { status: "skipped", reason: "missing" };
+	const match = found.text.match(UPDATED_SHAPE);
+	if (!match?.[1])
+		return { status: "skipped", reason: "not in the standard shape" };
+	const before = match[2] || null;
+	if (before === writer) return { status: "same" };
+	const lines = text.split("\n");
+	lines[found.line - 1] = `Updated: ${match[1]}, ${writer}`;
+	return { status: "rewritten", text: lines.join("\n"), before };
+}
+
 /** CURRENT's Items entries, scoped to the Items section and lossless. */
 export function currentItems(text: string): CurrentItems {
 	const all = sourceLines(text);

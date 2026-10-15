@@ -12,7 +12,11 @@ import {
 import { dirname, join } from "node:path";
 import { checkWorkspace } from "./check";
 import { assessCheckpoint, readCheckpoint } from "./checkpoint";
-import { type CheckpointHooks, runCheckpoint } from "./checkpoint-command";
+import {
+	type CheckpointHooks,
+	type CheckpointOptions,
+	runCheckpoint,
+} from "./checkpoint-command";
 import {
 	captureState,
 	commitCheckpoint,
@@ -22,7 +26,7 @@ import { loadConfig } from "./config";
 import { contentHash } from "./current-prev";
 import { appendEntries } from "./journal";
 import { runStart } from "./start";
-import { fakeClock, fakeToolEnv, makeTree } from "./test-support";
+import { fakeClock, fakeToolEnv, makeTree, testConfig } from "./test-support";
 import { journalChain } from "./text";
 import { discoverTree } from "./tree";
 
@@ -65,7 +69,7 @@ function fixture(files: Record<string, string> = {}) {
 	const remove = (path: string) =>
 		rmSync(join(workspace.state, path), { recursive: true, force: true });
 	const dry = (json = false) =>
-		runCheckpoint(workspace, env, { apply: false, json });
+		runCheckpoint(workspace, env, testConfig(), { apply: false, json });
 	const apply = (
 		token = captureState(workspace, env).token,
 		hooks: CheckpointHooks = {},
@@ -75,6 +79,7 @@ function fixture(files: Record<string, string> = {}) {
 		runCheckpoint(
 			workspace,
 			env,
+			testConfig(),
 			{ apply: true, token, json, session: "test-session", acceptDropped },
 			hooks,
 		);
@@ -486,7 +491,12 @@ for (const options of [
 ])
 	test(`usage refuses ${JSON.stringify(options)}`, async () => {
 		const f = fixture();
-		const result = await runCheckpoint(f.workspace, f.env, options);
+		const result = await runCheckpoint(
+			f.workspace,
+			f.env,
+			testConfig(),
+			options,
+		);
 		expect(result.code).toBe(2);
 		expect(result.stream).toBe("stderr");
 		expect(result.text).toStartWith("usage:");
@@ -533,7 +543,7 @@ test("dry run token applies and assessment is CLEAN", async () => {
 	const token = dry.text.match(/^token: (.+)$/m)?.[1];
 	expect(token).toMatch(/^r0-[a-f0-9]{12}$/);
 	expect(dry.text).toStartWith(
-		"checkpoint: no checkpoint -> would write revision 1\njournal: 2 entries in the fallback range, journal.md:2 to 4 (all shown below)",
+		"checkpoint: no checkpoint -> would write revision 1\nwriter: none (no calling session found; pass --session <name>)\njournal: 2 entries in the fallback range, journal.md:2 to 4 (all shown below)",
 	);
 	expect(dry.text).toEndWith(
 		`Read every entry and changed file above, then: shepherd tool checkpoint --apply --token ${token} --session <your session name>`,
@@ -559,11 +569,11 @@ test("written uses the clock in local time with offset in a child process", asyn
 	const f = fixture();
 	const script = `import { runCheckpoint } from ${JSON.stringify(join(import.meta.dir, "checkpoint-command.ts"))};
 import { captureState } from ${JSON.stringify(join(import.meta.dir, "checkpoint-write.ts"))};
-import { fakeToolEnv } from ${JSON.stringify(join(import.meta.dir, "test-support.ts"))};
+import { fakeToolEnv, testConfig } from ${JSON.stringify(join(import.meta.dir, "test-support.ts"))};
 const workspace = ${JSON.stringify(f.workspace)};
 const env = fakeToolEnv({ home: workspace.dir, clock: () => new Date("2026-10-08T13:52:13Z") });
 const token = captureState(workspace, env).token;
-console.log((await runCheckpoint(workspace, env, { apply: true, token, json: true })).text);`;
+console.log((await runCheckpoint(workspace, env, testConfig(), { apply: true, token, json: true, session: "test-session" })).text);`;
 	const child = Bun.spawn([process.execPath, "--eval", script], {
 		env: { ...process.env, TZ: "America/Argentina/Buenos_Aires" },
 		stdout: "pipe",
@@ -755,6 +765,7 @@ for (const flag of ["session", "acceptDropped"] as const)
 			const result = await runCheckpoint(
 				f.workspace,
 				f.env,
+				testConfig(),
 				{
 					apply: true,
 					token: captureState(f.workspace, f.env).token,
@@ -939,5 +950,183 @@ test("lost snapshot keeps lost evidence text through dry run, start, check and a
 	expect((await f.apply(undefined, {}, "retired by owner")).code).toBe(0);
 	expect(f.read("journal.md")).toContain(
 		`dropped from CURRENT (retired by owner): ${warning}`,
+	);
+});
+
+const SESSION = "0f3c2a71-5b2e-4a8e-9d55-3f1e2b9c7a10";
+const THREAD = "01a0d582-7c41-4f3e-8a2b-9e1d0c3b4a55";
+const UPDATED_CURRENT = `# Current
+Updated: 2026-10-15 09:00, forge-1014
+
+Preserve this important line
+Retain another important fact
+`;
+
+/**
+ * The fixture workspace with prefix forge, called from a Claude session
+ * whose registry entry (pid 4242, in the workspace) the entry describes.
+ */
+function called(
+	entry: { name?: string; nameSource?: string } | null,
+	options: { env?: Record<string, string>; current?: string } = {},
+) {
+	const f = fixture({ "CURRENT.md": options.current ?? UPDATED_CURRENT });
+	if (entry) {
+		f.put(
+			"../.claude/sessions/4242.json",
+			JSON.stringify({
+				pid: 4242,
+				sessionId: SESSION,
+				cwd: f.workspace.dir,
+				status: "busy",
+				nameSource: "user",
+				...entry,
+			}),
+		);
+	}
+	const env = fakeToolEnv({
+		home: f.workspace.dir,
+		clock: fakeClock("2026-10-15T13:52:13Z").clock,
+		alivePids: [process.pid, 4242],
+		env: {
+			...(entry ? { CLAUDE_PID: "4242", CLAUDE_CODE_SESSION_ID: SESSION } : {}),
+			...options.env,
+		},
+	});
+	const config = testConfig({ sessionPrefix: "forge" });
+	const run = (options: Omit<CheckpointOptions, "json"> & { json?: boolean }) =>
+		runCheckpoint(f.workspace, env, config, { json: false, ...options });
+	const token = () => captureState(f.workspace, env).token;
+	const written = () =>
+		existsSync(join(f.workspace.state, "checkpoint.json"))
+			? f.checkpoint().session
+			: "no checkpoint";
+	return { ...f, env, config, run, token, written };
+}
+
+test("the dry run names the calling Shepherd and drops --session from the apply line", async () => {
+	const f = called({ name: "forge-1015" });
+	const dry = await f.run({ apply: false });
+	expect(dry.text).toContain(`writer: forge-1015 (claude, 0f3c2a71)`);
+	expect(dry.text).toContain(
+		`then: shepherd tool checkpoint --apply --token ${f.token()}\n`.trimEnd(),
+	);
+	expect(dry.text).not.toContain("--session");
+	expect(
+		JSON.parse((await f.run({ apply: false, json: true })).text).writer,
+	).toEqual({
+		name: "forge-1015",
+		harness: "claude",
+		id: SESSION,
+		role: "shepherd",
+		reason: null,
+	});
+});
+
+test("apply without --session records the calling Shepherd", async () => {
+	const f = called({ name: "forge-1015" });
+	const applied = await f.run({ apply: true, token: f.token() });
+	expect(applied.code).toBe(0);
+	expect(f.written()).toBe("forge-1015");
+});
+
+const refusals: [string, Parameters<typeof called>, string][] = [
+	[
+		"no calling session",
+		[null],
+		"no calling session found; pass --session <name>",
+	],
+	[
+		"a delegate",
+		[{ name: "si-x" }],
+		"si-x is not this workspace's Shepherd (prefix forge-); the Shepherd certifies, or pass --session <name> on its instruction",
+	],
+	[
+		"an unnamed session",
+		[{ name: "forge-1015", nameSource: "derived" }],
+		"calling session is unnamed (claude 0f3c2a71: name derived by Claude Code; name the session); name it, then run the dry run again, or pass --session <name>",
+	],
+	[
+		"two harnesses",
+		[{ name: "forge-1015" }, { env: { CODEX_THREAD_ID: THREAD } }],
+		"both CLAUDE_PID and CODEX_THREAD_ID are set; pass --session",
+	],
+];
+for (const [name, args, message] of refusals) {
+	test(`apply refuses without a Shepherd writer: ${name}`, async () => {
+		const f = called(...args);
+		const before = f.read("CURRENT.md");
+		const refused = await f.run({ apply: true, token: f.token() });
+		expect(refused).toMatchObject({ code: 1, text: message, stream: "stderr" });
+		expect(f.written()).toBe("no checkpoint");
+		expect(f.read("CURRENT.md")).toBe(before);
+		const dry = await f.run({ apply: false });
+		expect(dry.text).toContain(`writer: none (${message})`);
+		expect(dry.text).toContain("--session <your session name>");
+		const typed = await f.run({ apply: true, token: f.token(), session: "x" });
+		expect(typed.code).toBe(0);
+		expect(f.written()).toBe("x");
+	});
+}
+
+test("--session overrides the calling session and says so", async () => {
+	const f = called({ name: "forge-1014" });
+	const applied = await f.run({
+		apply: true,
+		token: f.token(),
+		session: "forge-1015",
+	});
+	expect(applied.code).toBe(0);
+	expect(applied.text).toContain(
+		"writer: forge-1015 (--session; the calling session is forge-1014)",
+	);
+	expect(f.written()).toBe("forge-1015");
+});
+
+test("apply rewrites only the Updated: name, and start is then clean", async () => {
+	const f = called({ name: "forge-1015" });
+	const applied = await f.run({ apply: true, token: f.token() });
+	expect(applied.text).toContain(
+		"CURRENT.md Updated: forge-1014 -> forge-1015",
+	);
+	expect(f.read("CURRENT.md")).toBe(
+		UPDATED_CURRENT.replace("09:00, forge-1014", "09:00, forge-1015"),
+	);
+	expect(f.read("checkpoints/CURRENT.r1")).toBe(f.read("CURRENT.md"));
+	expect(f.assess().changed).toEqual([]);
+	expect(f.assess().verdict).toBe("CLEAN");
+	const json = await (async () => {
+		const g = called({ name: "forge-1015" });
+		return JSON.parse(
+			(await g.run({ apply: true, token: g.token(), json: true })).text,
+		);
+	})();
+	expect(json.updatedName).toEqual({
+		before: "forge-1014",
+		after: "forge-1015",
+	});
+});
+
+test("a nameless Updated: line gains the writer; a missing one is left alone", async () => {
+	const nameless = called(
+		{ name: "forge-1015" },
+		{ current: UPDATED_CURRENT.replace("09:00, forge-1014", "09:00") },
+	);
+	expect(
+		(await nameless.run({ apply: true, token: nameless.token() })).text,
+	).toContain("CURRENT.md Updated: none -> forge-1015");
+	expect(nameless.read("CURRENT.md")).toBe(
+		UPDATED_CURRENT.replace("forge-1014", "forge-1015"),
+	);
+	const missing = called({ name: "forge-1015" }, { current: current });
+	const applied = await missing.run({ apply: true, token: missing.token() });
+	expect(applied.text).toContain("Updated: line not rewritten (missing)");
+	expect(missing.read("CURRENT.md")).toBe(current);
+	const odd = called(
+		{ name: "forge-1015" },
+		{ current: UPDATED_CURRENT.replace("2026-10-15 09:00", "today") },
+	);
+	expect((await odd.run({ apply: true, token: odd.token() })).text).toContain(
+		"Updated: line not rewritten (not in the standard shape)",
 	);
 });
