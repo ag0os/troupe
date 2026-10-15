@@ -3044,7 +3044,7 @@ describe("F16: one boundary and one change classifier", () => {
 		});
 	}
 
-	test("assessCheckpoint, query checkpoint and the dry run classify changes alike", async () => {
+	test("regression guard: assessCheckpoint, query checkpoint and the dry run list the same changes with work/todo symlinked", async () => {
 		const fixture = certified(BOUNDARY, {
 			"outside/work/todo/lock/STATUS.md": STATUS,
 		});
