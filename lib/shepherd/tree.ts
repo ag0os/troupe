@@ -40,7 +40,8 @@ function isWorkspace(path: string): boolean {
 	return isDirectory(path) && isDirectory(join(path, STATE_DIR));
 }
 
-function enclosingWorkspace(path: string): string | undefined {
+/** The nearest ancestor of a resolved path that is a workspace, by lstat. */
+export function enclosingWorkspace(path: string): string | undefined {
 	for (let dir = dirname(path); dir !== dirname(dir); dir = dirname(dir)) {
 		if (isWorkspace(dir)) return dir;
 	}

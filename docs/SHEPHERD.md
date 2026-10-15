@@ -198,6 +198,12 @@ shepherd tool start      [--budget <words>] [--json]
 shepherd tool journal    (<text> | --stdin) [--json]
 shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]
 shepherd tool unlock     [--json]
+shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--json]
+shepherd tool query item <slug> [--json]
+shepherd tool query sessions [--json]
+shepherd tool query autonomy [--json]
+shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--json]
+shepherd tool query checkpoint [--json]
 ```
 
 `tool check` checks this workspace and every workspace beneath it. Name one or more workspaces to limit the check. By default it hides informational findings; `--all` shows them, `--status` reports tracked work and live sessions, `--context` reports words by context tier, and `--json` produces machine readable output. `--status` and `--context` cannot be combined.
@@ -221,6 +227,29 @@ Journal entry ids are derived at read time, never written. The journal sequence 
 The workspace lock serializes every writer: `tool journal`, `tool checkpoint --apply` and `tool archive --apply` take the directory `.shepherd/.state.lock/`, whose `owner` file holds the pid and start time; readers, the dry runs included, never take it. A writer that finds it held by a live pid waits up to 5 seconds, then fails with "locked by pid N (alive)". A lock whose pid is dead, or whose `owner` is missing or malformed, is stale: writers fail at once with "stale lock `.shepherd/.state.lock` left by pid N; run `shepherd tool unlock`" and never take or remove it. Run `shepherd tool unlock` only when no other Shepherd of the workspace is live (`shepherd tool check --status` shows live sessions); it refuses a live owner in any case. Unlocks serialize under a second lock, `.shepherd/.unlock.lock/`; one left by a crashed unlock makes `tool unlock` print the `rm -r` line to run by hand. `tool check` reports either stale lock as an error (`lock-stale`), and `tool start` prints the lock state. A crash can leave inert directories in `.shepherd/`: `.state.lock.<pid>.<uuid>.gone` from between a lock's rename away and its delete, and `.state.lock.<pid>.tmp` from between creating a lock and renaming it into place, with the same two names for `.unlock.lock`. Nothing cleans up a `.gone` directory. A `.tmp` directory has no general sweep either: only a later writer whose pid (and thread) gives the same name removes it. Both are safe to delete by hand when no Shepherd of the workspace is running.
 
 For a fresh machine, follow [SETUP.md](SETUP.md).
+
+### Query
+
+`tool query` answers questions from one workspace's files for a programmatic caller, the scheduled heartbeat first. It never writes and takes no lock. `tool start` remains what a session reads at open; the query is not a substitute for it.
+
+It reads under a fixed contract, and nothing else:
+
+1. Directory discovery: one `lstat` of `<cwd>/.shepherd` and of each ancestor's `.shepherd` to find the launch workspace and the root of its tree. It enumerates no sibling workspace.
+2. Configuration: the user config file, which every query reads (an invalid one exits 2, as for every tool); and the workspace's own `.shepherd/config.json`, read only by `autonomy` and `sessions`. Enclosing workspace configs are never read.
+3. Record contents under the workspace's `.shepherd/` only. Every path is checked first: no absolute path, no `..`, and each component is `lstat`ed; a symlink anywhere on the path, or a file of the wrong kind, is refused as `record-unsafe` without reading or enumerating its target.
+4. Session sources, machine state outside the record, for `sessions` only.
+
+Every result, with `--json`, carries `schema`, `command`, `query`, `root`, `observed` (the local time when collection started), `retried`, `scope`, `workspace` (`name`, `dir`, `state`) and `problems` (`code`, `file` relative to `.shepherd/` or absolute for a config file, `line` when known, `message`), then the query's own fields. Every documented field is always present, null when unknown. Without `--json` the answer goes to stdout and the problem lines to stderr.
+
+| Situation | Exit |
+|---|---|
+| Answered, possibly empty, a session source unavailable (`source-unavailable`) | 0 |
+| Not answerable from the record: a needed file missing or unreadable, an open fence, a symlinked record, an invalid checkpoint or config, a duplicate or unknown slug, a lost cursor, an unreadable journal chain, files that kept changing | 1, with the full result and the problems that caused it |
+| Usage: unknown query, bad word, slug, `--since` or `--max`, extra arguments, a flag of another command, an invalid user config, not a workspace | 2, nothing on stdout |
+
+`query items [WORD]` lists the entries of CURRENT's `## Items` section, from its heading to the next `#` or `##` heading, outside fenced code. An entry is a bullet whose first content is a bold run of three or more capital letters (`**NEXT**`, `**NEXT:**`), with its indented continuation lines. Each entry has `word`, `known` (one of the five status words), `slug` and `link` (from the first link to a `STATUS.md`; null for a small entry without one), `status` (`path` and `exists`), `text` (the entry without bullet, word and link targets, never cut), `raw` (the source lines unchanged) and `line`/`endLine`. The result also has `file`, `updated` (the `Updated:` value), `noNext` and `section`. A missing section is `items-section-missing` and a link outside `.shepherd/` or through a symlink is `link-unsafe`, both exit 1. The optional word filters the entries.
+
+`query item <slug>` returns one item: the Items entries with that slug, how it was found (`resolved`: `link` from CURRENT, or `directory` from `work/todo`, `work/in-progress` or `work/done` when no entry links it), its `dir`, `state` and `candidates`, and its `STATUS.md` whole as `raw` beside a projection: `frontmatter` (`raw` and the `key: value` `fields`, where an unquoted `#` after whitespace starts a comment and quotes keep it), `title`, `preamble` and `sections` (heading, level, line range and text). Entries linking different directories, or a slug in two buckets, is `item-duplicate`; no entry and no directory is `item-unknown`; a linked directory that is gone is `status-missing`. An unlinked small item is not addressable; `items` carries it whole. Archived items are out of scope.
 
 ### Init
 

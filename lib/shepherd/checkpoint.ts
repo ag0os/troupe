@@ -84,7 +84,7 @@ type CheckpointRead =
 function object(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function localPath(value: string): boolean {
+export function localPath(value: string): boolean {
 	return (
 		value.length > 0 &&
 		!isAbsolute(value) &&

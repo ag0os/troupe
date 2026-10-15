@@ -357,7 +357,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			json: {
 				type: "boolean",
 				description:
-					"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock: emit machine-readable JSON",
+					"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query: emit machine-readable JSON",
 			},
 			today: {
 				type: "string",
@@ -397,6 +397,16 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			"accept-dropped": {
 				type: "string",
 				description: "tool checkpoint: journal dropped lines with this reason",
+			},
+			since: {
+				type: "string",
+				description:
+					"tool query journal: entries after a journal id or from a date YYYY-MM-DD",
+			},
+			max: {
+				type: "string",
+				description:
+					"tool query journal: newest entries to return, a positive integer or all (default 50)",
 			},
 			name: {
 				type: "string",
@@ -820,7 +830,7 @@ describe("tool surface", () => {
 					["tool", "guide", "--json"],
 					2,
 					"",
-					"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock\n",
+					"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query\n",
 				],
 				[
 					["tool", "guide", "--model", "x"],
@@ -901,7 +911,7 @@ describe("tool surface", () => {
 			stdout: "",
 			records: [],
 			stderr:
-				"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock\n",
+				"shepherd: --json applies only to tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query\n",
 		});
 	});
 
@@ -1925,6 +1935,8 @@ describe("staged context flag refusals", () => {
 		["token", "r0-000000000000", "checkpoint"],
 		["session", "T12", "checkpoint"],
 		["accept-dropped", "reason", "checkpoint"],
+		["since", "2026-10-01", "query journal"],
+		["max", "5", "query journal"],
 	] as const) {
 		test(`launch refuses --${name} with its owner`, async () => {
 			const { cwd } = build("plain");

@@ -47,6 +47,30 @@ describe("runTool usage and validation", () => {
 			expect(output.text).toContain("shepherd tool guide [<name>]");
 			expect(output.text).toContain("shepherd tool init [--master] [--json]");
 			expect(output.text).toContain("shepherd tool doctor [--json]");
+			for (const query of [
+				"items",
+				"item",
+				"sessions",
+				"autonomy",
+				"journal",
+				"checkpoint",
+			]) {
+				expect(output.text).toContain(`shepherd tool query ${query}`);
+			}
+		}
+	});
+
+	test("refuses the query journal flags on other commands", async () => {
+		const { env } = fixture();
+		for (const [command, name, value] of [
+			["check", "since", "2026-10-01"],
+			["start", "max", "5"],
+		] as const) {
+			expect(await runTool([command], { [name]: value }, env)).toEqual({
+				text: `shepherd: --${name} applies only to tool query journal\n`,
+				code: 2,
+				stream: "stderr",
+			});
 		}
 	});
 
@@ -154,7 +178,7 @@ describe("runTool guide", () => {
 			[
 				"json",
 				true,
-				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock",
+				"tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query",
 			],
 			["today", "2026-13-40", "tool check and tool archive"],
 			["all", true, "tool check"],

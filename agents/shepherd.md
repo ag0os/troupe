@@ -13,7 +13,7 @@ flags:
     description: "tool check: show words per context tier"
   json:
     type: boolean
-    description: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock: emit machine-readable JSON"
+    description: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query: emit machine-readable JSON"
   today:
     type: string
     description: "tool check and tool archive: evaluate dates as of YYYY-MM-DD"
@@ -41,6 +41,12 @@ flags:
   accept-dropped:
     type: string
     description: "tool checkpoint: journal dropped lines with this reason"
+  since:
+    type: string
+    description: "tool query journal: entries after a journal id or from a date YYYY-MM-DD"
+  max:
+    type: string
+    description: "tool query journal: newest entries to return, a positive integer or all (default 50)"
   name:
     type: string
     short: n

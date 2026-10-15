@@ -27,6 +27,7 @@ import {
 	unlockState,
 	withStateLocks,
 } from "./lock";
+import { runQuery } from "./query";
 import { runningSessions, type ToolEnv } from "./sessions";
 import { runStart } from "./start";
 import { renderStatus, statusJson, statusReport } from "./status-render";
@@ -58,6 +59,12 @@ const USAGE = [
 	"shepherd tool journal    (<text> | --stdin) [--json]",
 	"shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]",
 	"shepherd tool unlock     [--json]",
+	"shepherd tool query items [NEXT|SCHEDULED|WAITING|ASK|CANDIDATE] [--json]",
+	"shepherd tool query item <slug> [--json]",
+	"shepherd tool query sessions [--json]",
+	"shepherd tool query autonomy [--json]",
+	"shepherd tool query journal [--since <id|YYYY-MM-DD>] [--max <n|all>] [--json]",
+	"shepherd tool query checkpoint [--json]",
 ].join("\n");
 
 const CHECK_FLAGS = new Set(["all", "status", "context", "json", "today"]);
@@ -74,6 +81,7 @@ const COMMAND_FLAGS = {
 	journal: new Set(["stdin", "json"]),
 	checkpoint: new Set(["apply", "token", "session", "accept-dropped", "json"]),
 	unlock: new Set(["json"]),
+	query: new Set(["json", "since", "max"]),
 };
 type ToolCommand = keyof typeof COMMAND_FLAGS;
 const FLAG_OWNERS: Record<string, string> = {
@@ -81,7 +89,7 @@ const FLAG_OWNERS: Record<string, string> = {
 	status: "tool check",
 	context: "tool check",
 	master: "tool init",
-	json: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint and tool unlock",
+	json: "tool check, tool archive, tool init, tool doctor, tool start, tool journal, tool checkpoint, tool unlock and tool query",
 	today: "tool check and tool archive",
 	apply: "tool archive and tool checkpoint",
 	recursive: "tool archive",
@@ -90,6 +98,8 @@ const FLAG_OWNERS: Record<string, string> = {
 	token: "tool checkpoint",
 	session: "tool checkpoint",
 	"accept-dropped": "tool checkpoint",
+	since: "tool query journal",
+	max: "tool query journal",
 };
 const LEVELS: FindingLevel[] = ["error", "warn", "info"];
 
@@ -108,7 +118,7 @@ function result(
 	return { text: text.endsWith("\n") ? text : `${text}\n`, code, stream };
 }
 
-function usage(): ToolResult {
+export function usage(): ToolResult {
 	return result(USAGE, 2, "stderr");
 }
 
@@ -168,7 +178,7 @@ function enclosingWorkspace(cwd: string): string | undefined {
 	return undefined;
 }
 
-function treeError(cwd: string, error: unknown): ToolResult {
+export function treeError(cwd: string, error: unknown): ToolResult {
 	const message = error instanceof Error ? error.message : String(error);
 	const nearest = message.startsWith("not a workspace:")
 		? enclosingWorkspace(cwd)
@@ -463,6 +473,7 @@ export async function runTool(
 	if (!isToolCommand(command)) return usage();
 	const badFlag = invalidFlag(command, flags);
 	if (badFlag) return result(badFlag, 2, "stderr");
+	if (command === "query") return runQuery(args.slice(1), flags, toolEnv);
 	if (command === "guide") {
 		if (args.length > 2) return usage();
 		const name = args[1];
