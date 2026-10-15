@@ -171,46 +171,51 @@ export interface Packet {
 }
 
 /**
- * Native log entries that record the session's environment or the CLI's
- * bookkeeping rather than anything the session did. The packet's copy of
- * `claude.jsonl` leaves them out; the archived log keeps them.
+ * Native log entries the packet's copy of `claude.jsonl` shows: the
+ * session's messages and the attachments it saw (`environment` already
+ * redacted by the export). Every other entry, the CLI's bookkeeping, its
+ * other environment attachments, its request payloads and any type a later
+ * CLI adds, is left out: fail closed. The archived log keeps every line.
  */
-export const DROPPED_ATTACHMENTS = [
-	"prompt_snapshot",
-	"skill_listing",
-	"agent_listing_delta",
-	"mcp_instructions_delta",
-	"deferred_tools_delta",
-	"deferred_tools_record",
-	"total_tokens_reminder",
-	"session_context",
-	"credential_org",
-	"auto_mode",
-	"model",
-	"remote_session_change",
-] as const;
-export const DROPPED_ENTRIES = ["last-prompt", "cost-state", "atis-latch"];
+export const PACKET_ENTRIES = ["user", "assistant", "queue-operation"];
+export const PACKET_ATTACHMENTS = [
+	"date",
+	"silent_turn_reminder",
+	"environment",
+];
+
+/**
+ * A kind the dropped-lines header names: it sits outside the evidence
+ * fence, so anything else gets a fixed label.
+ */
+const NAMED = /^[\w.-]{1,64}$/;
+const named = (kind: unknown) => typeof kind === "string" && NAMED.test(kind);
 
 function droppedKind(line: string): string | undefined {
-	let entry: {
-		type?: unknown;
-		attachment?: { type?: unknown };
-		message?: { content?: unknown };
-	};
+	let parsed: unknown;
 	try {
-		entry = JSON.parse(line);
+		parsed = JSON.parse(line);
 	} catch {
 		return undefined;
 	}
-	if (!entry || typeof entry !== "object") return undefined;
+	const entry: {
+		type?: unknown;
+		attachment?: { type?: unknown };
+		message?: { content?: unknown };
+	} = parsed && typeof parsed === "object" ? parsed : {};
 	const kind = entry.attachment?.type;
-	if (
-		entry.type === "attachment" &&
-		DROPPED_ATTACHMENTS.some((dropped) => dropped === kind)
-	)
-		return `attachment ${kind}`;
-	if (DROPPED_ENTRIES.some((dropped) => dropped === entry.type))
-		return String(entry.type);
+	if (entry.type === "attachment")
+		return PACKET_ATTACHMENTS.some((shown) => shown === kind)
+			? undefined
+			: named(kind)
+				? `attachment ${kind}`
+				: "attachment (other)";
+	if (!PACKET_ENTRIES.some((shown) => shown === entry.type))
+		return typeof entry.type !== "string"
+			? "untyped entry"
+			: named(entry.type)
+				? entry.type
+				: "other entry";
 	// Thinking the CLI did not record holds only its signature.
 	const content = entry.message?.content;
 	if (

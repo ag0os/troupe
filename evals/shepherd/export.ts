@@ -1,16 +1,22 @@
 /**
  * Export one attempt's scratch artifacts into the committed evidence tree
  * (spec 6.1, R2). Every text file is redacted first, within its lines and to
- * a fixpoint, so no line is added or removed and evidence line numbers hold:
+ * a fixpoint of its structural and text rules together, so no line is added
+ * or removed and evidence line numbers hold:
  * - the home directory, the repository root and other host paths outside
  *   the run's scratch root become an explicit marker, whole path token by
  *   token, including tokens written with JSON `\uXXXX` escapes;
  * - the home path's slug spelling becomes a marker everywhere, kept scratch
  *   paths included, and the account name where a long listing shows it;
  * - email addresses become markers numbered per address within the attempt;
+ * - in the native log, every entry whose type is off an allow list keeps
+ *   its field names and its plain envelope values, each other value a
+ *   marker; a line that does not parse becomes a marker line, and one with
+ *   a duplicate member is rewritten without the shadowed member first;
  * - in the native log, every attachment off a short allow list, and every
  *   CLI-injected `isMeta` message, keeps its shape with its strings and keys
- *   as markers, so each line stays valid JSON; the prompt under test stays;
+ *   as markers, so each line stays valid JSON, and an attachment value that
+ *   is not an object becomes a marker; the prompt under test stays;
  * - in the run manifest, settings env values and plugin names.
  * Only recognisable host paths are touched: sed addresses, prose and base64
  * snapshot records keep their bytes. The mechanical checks and the scorer
@@ -38,6 +44,9 @@ export const SLUG_MARKER = "[redacted-home]";
 export const emailMarker = (n: number) => `[redacted-email-${n}]`;
 export const ACCOUNT_MARKER = "[redacted-account]";
 export const ENVIRONMENT_MARKER = "[redacted-environment]";
+export const ENTRY_MARKER = "[redacted-entry]";
+/** Stands for a native log line that does not parse; not JSON, so the checks still see a malformed line. */
+export const UNPARSABLE_MARKER = "[redacted-unparsable-line]";
 export const ENV_MARKER = "[redacted-env-value]";
 /** What stands for every `PATH` entry outside the scratch root. */
 export const PATH_MARKER = "[redacted-path]";
@@ -370,16 +379,99 @@ function replaceStrings(
  * environment or the CLI's bookkeeping and is redacted: fail closed.
  */
 export const SESSION_ATTACHMENTS = ["date", "silent_turn_reminder"];
+/**
+ * Native log entry types that keep the rules below: the session's messages,
+ * attachments and the CLI's bookkeeping. Every other entry, the request
+ * payloads CLI 2.1.300 added (system prompt, tool definitions, MCP, plugin
+ * and skill names) and any type a later CLI adds, is redacted: fail closed.
+ */
+export const LOG_ENTRY_TYPES = [
+	"user",
+	"assistant",
+	"attachment",
+	"cost-state",
+	"queue-operation",
+	"last-prompt",
+	"atis-latch",
+];
 /** The prompt under test, appended last to the system prompt by Shepherd. */
 const PROMPT_UNDER_TEST = /^# Shepherd\n/;
 
 const hex = (text: string) => createHash("sha256").update(text).digest("hex");
+/** A block already redacted keeps its hash of the original, so export is a fixpoint. */
+const SYSTEM_PROMPT_MARKER = /^\[redacted-system-prompt sha256:[0-9a-f]{64}\]$/;
+
+const ENVELOPE = ["type", "sessionId", "timestamp", "uuid"];
+const PLAIN = /^[\w.:+-]{1,100}$/;
 
 /**
- * One native log line. An attachment off the allow list keeps its `type`,
- * its field names and the entry's own fields (uuid, timestamps); every other
- * string and every key below its fields becomes a marker. A CLI-injected
- * `isMeta` user message keeps its role and block types only.
+ * JSON with U+2028, U+2029 and U+0085 escaped: Python's `splitlines()`, which
+ * the checks read logs with, ends a line at each of them.
+ */
+const serialized = (value: unknown) =>
+	JSON.stringify(value).replace(
+		/[\u2028\u2029\u0085]/g,
+		(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+
+/**
+ * Whether an object in this valid JSON text names a member twice. Parsers
+ * keep the last, so the bytes would still hold a shadowed member no rule
+ * below sees.
+ */
+function hasDuplicateMembers(text: string): boolean {
+	const objects: (Set<string> | null)[] = [];
+	let key = false;
+	for (let i = 0; i < text.length; i++) {
+		const c = text[i];
+		if (c === "{" || c === "[") {
+			objects.push(c === "{" ? new Set() : null);
+			key = c === "{";
+		} else if (c === "}" || c === "]") {
+			objects.pop();
+			key = false;
+		} else if (c === ",") key = objects.at(-1) instanceof Set;
+		else if (c === '"') {
+			let end = i + 1;
+			while (text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
+			const names = objects.at(-1);
+			if (key && names) {
+				const name: string = JSON.parse(text.slice(i, end + 1));
+				if (names.has(name)) return true;
+				names.add(name);
+				key = false;
+			}
+			i = end;
+		}
+	}
+	return false;
+}
+
+/**
+ * An entry off the allow list, in place: its field names and plain envelope
+ * values stay, every other top-level value becomes one marker. An array or
+ * other JSON value that is not an object becomes the marker.
+ */
+function redactEntry(entry: unknown): { text: string; count: number } {
+	if (!entry || typeof entry !== "object" || Array.isArray(entry))
+		return { text: serialized(ENTRY_MARKER), count: 1 };
+	let count = 0;
+	const fields = Object.entries(entry).map(([key, value]) => {
+		if (
+			ENVELOPE.includes(key) &&
+			typeof value === "string" &&
+			PLAIN.test(value)
+		)
+			return [key, value];
+		if (value !== ENTRY_MARKER) count++;
+		return [key, ENTRY_MARKER];
+	});
+	return { text: serialized(Object.fromEntries(fields)), count };
+}
+
+/**
+ * One native log line, by the rules this file's header lists. A line naming a
+ * member twice is rewritten from its parsed value before any rule reads it.
  */
 function redactLogLine(line: string): { text: string; count: number } {
 	let entry: {
@@ -390,38 +482,69 @@ function redactLogLine(line: string): { text: string; count: number } {
 	try {
 		entry = JSON.parse(line);
 	} catch {
-		return { text: line, count: 0 };
+		return line.trim() === ""
+			? { text: line, count: 0 }
+			: { text: UNPARSABLE_MARKER, count: 1 };
 	}
-	if (entry?.type === "user" && entry.isMeta === true)
-		return replaceStrings(line, ({ key, path }) =>
-			!key &&
-			path[0] === "message" &&
-			path[1] === "content" &&
-			path.at(-1) !== "type"
-				? ENVIRONMENT_MARKER
-				: undefined,
+	let count = 0;
+	if (hasDuplicateMembers(line)) {
+		line = serialized(entry);
+		count++;
+	}
+	if (
+		!entry ||
+		typeof entry !== "object" ||
+		!LOG_ENTRY_TYPES.some((type) => type === entry.type)
+	)
+		return redactEntry(entry);
+	const added = (result: { text: string; count: number }) => ({
+		text: result.text,
+		count: result.count + count,
+	});
+	if (entry.type === "user" && entry.isMeta === true)
+		return added(
+			replaceStrings(line, ({ key, path }) =>
+				!key &&
+				path[0] === "message" &&
+				path[1] === "content" &&
+				path.at(-1) !== "type"
+					? ENVIRONMENT_MARKER
+					: undefined,
+			),
 		);
-	if (entry?.type !== "attachment") return { text: line, count: 0 };
+	if (entry.type !== "attachment") return added({ text: line, count: 0 });
+	const value: unknown = entry.attachment;
+	if (
+		"attachment" in entry &&
+		(value === null || typeof value !== "object" || Array.isArray(value))
+	) {
+		line = serialized({ ...entry, attachment: ENVIRONMENT_MARKER });
+		entry = JSON.parse(line);
+		count++;
+	}
 	const kind = entry.attachment?.type;
 	if (SESSION_ATTACHMENTS.some((k) => k === kind))
-		return { text: line, count: 0 };
+		return added({ text: line, count: 0 });
 	const prompt = entry.attachment?.systemPrompt;
 	const last =
 		kind === "prompt_snapshot" && Array.isArray(prompt)
 			? prompt.length - 1
 			: -1;
 	let keys = 0;
-	return replaceStrings(line, ({ key, path, value }) => {
-		if (path[0] === "rendered") return key ? undefined : ENVIRONMENT_MARKER;
-		if (path[0] !== "attachment" || path.length < 2) return undefined;
-		if (key) return path.length > 2 ? `[redacted-key-${++keys}]` : undefined;
-		if (path.length === 2 && path[1] === "type") return undefined;
-		if (last >= 0 && path[1] === "systemPrompt" && path.length === 3)
-			return path[2] === last && PROMPT_UNDER_TEST.test(value)
-				? undefined
-				: `[redacted-system-prompt sha256:${hex(value)}]`;
-		return ENVIRONMENT_MARKER;
-	});
+	return added(
+		replaceStrings(line, ({ key, path, value }) => {
+			if (path[0] === "rendered") return key ? undefined : ENVIRONMENT_MARKER;
+			if (path[0] !== "attachment" || path.length < 2) return undefined;
+			if (key) return path.length > 2 ? `[redacted-key-${++keys}]` : undefined;
+			if (path.length === 2 && path[1] === "type") return undefined;
+			if (last >= 0 && path[1] === "systemPrompt" && path.length === 3)
+				return (path[2] === last && PROMPT_UNDER_TEST.test(value)) ||
+					SYSTEM_PROMPT_MARKER.test(value)
+					? undefined
+					: `[redacted-system-prompt sha256:${hex(value)}]`;
+			return ENVIRONMENT_MARKER;
+		}),
+	);
 }
 
 /**
@@ -493,6 +616,28 @@ function redactStructure(
 	return { text, count: 0 };
 }
 
+/**
+ * Structural and text redaction, repeated until the bytes stop changing: a
+ * text replacement can make a structural rule apply (a kept envelope value
+ * holding the home slug, two keys redacted to the same marker), so exporting
+ * an export changes nothing.
+ */
+function redactArtifact(
+	name: string,
+	text: string,
+	context: RedactionContext,
+): { text: string; count: number } {
+	let count = 0;
+	for (let pass = 0; pass < 10; pass++) {
+		const structured = redactStructure(name, text, context);
+		const next = redactText(structured.text, context);
+		if (next.text === text) return { text, count };
+		text = next.text;
+		count += structured.count + next.count;
+	}
+	throw new Error(`Redaction of ${name} did not reach a fixpoint`);
+}
+
 const TYPES: [RegExp, string][] = [
 	[/\.jsonl$/, "native-log"],
 	[/-run\.json$/, "run-manifest"],
@@ -530,11 +675,8 @@ export function writeArtifact(
 	const bytes =
 		typeof content === "string" ? new TextEncoder().encode(content) : content;
 	const text = decode(bytes);
-	const structured =
-		text === undefined ? undefined : redactStructure(name, text, context);
-	const paths = structured && redactText(structured.text, context);
-	const redacted = structured &&
-		paths && { text: paths.text, count: structured.count + paths.count };
+	const redacted =
+		text === undefined ? undefined : redactArtifact(name, text, context);
 	const out =
 		redacted === undefined ? bytes : new TextEncoder().encode(redacted.text);
 	writeFileSync(join(dir, name), out, { flag: "wx" });

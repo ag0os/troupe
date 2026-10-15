@@ -323,3 +323,87 @@ export function projectDirName(cwd: string): string {
 		hash = ((hash << 5) - hash + cwd.charCodeAt(i)) | 0;
 	return `${slug.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
 }
+
+/**
+ * Invented names a CLI request entry can carry, which neither export nor a
+ * packet may show: an MCP tool, a plugin skill, an address and a home path.
+ */
+export const PLANTED = {
+	mcp: "mcp__acme-tracker__file_ticket",
+	plugin: "widget-forge-plugin:shaper",
+	email: "planted.person@example.net",
+	home: "/Users/plantedhome",
+	slug: "-Users-plantedhome",
+};
+
+/**
+ * The three request entries CLI 2.1.300 writes into the native log, with
+ * its key names and nesting and invented content only.
+ */
+export function requestEntries(
+	sessionId: string,
+	timestamp = "2026-10-13T15:11:13.000Z",
+): Record<string, unknown>[] {
+	const reminder = [
+		"<system-reminder>",
+		`Skills: ${PLANTED.plugin}: shapes widgets.`,
+		`MCP servers: acme-tracker. userEmail: ${PLANTED.email}`,
+		`claudeMd: Contents of ${PLANTED.home}/CLAUDE.md`,
+		`Project dir ${PLANTED.slug}-Projects-x`,
+		"</system-reminder>",
+	].join("\n");
+	return [
+		{
+			type: "api-request-blob",
+			hash: "b".repeat(64),
+			sessionId,
+			message: {
+				role: "user",
+				content: [
+					{ type: "text", text: reminder },
+					{ type: "text", text: "You are taking over this workspace." },
+				],
+			},
+		},
+		{
+			type: "api-request-shape",
+			sessionId,
+			shapeHash: "s".repeat(16),
+			timestamp,
+			version: "2.1.300",
+			shape: {
+				system: [
+					{ type: "text", text: "You are an invented CLI. SYSTEM-PROMPT-TEXT" },
+					{
+						type: "text",
+						text: `Read ${PLANTED.home}/.claude/CLAUDE.md`,
+						cache_control: { type: "ephemeral" },
+					},
+				],
+				tools: [
+					{
+						name: PLANTED.mcp,
+						description: "Files an invented ticket.",
+						input_schema: { type: "object", properties: {} },
+					},
+					{ name: "Skill", description: `- ${PLANTED.plugin}: shapes widgets` },
+				],
+			},
+		},
+		{
+			type: "api-request",
+			id: "req_planted_1",
+			sessionId,
+			shapeHash: "s".repeat(16),
+			requestDigest: "d".repeat(16),
+			querySource: "repl_main_thread",
+			timestamp,
+			version: "2.1.300",
+			base: { model: "claude-opus-5-5", max_tokens: 64000 },
+			cacheControl: { system: [{ type: "ephemeral" }] },
+			keep: [{ hash: "b".repeat(64) }],
+			params: { effort: "high", mcp: [PLANTED.mcp] },
+			tail: [{ role: "user", content: [{ type: "text", text: reminder }] }],
+		},
+	];
+}

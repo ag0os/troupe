@@ -13,17 +13,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	ACCOUNT_MARKER,
+	ENTRY_MARKER,
 	ENV_MARKER,
 	ENVIRONMENT_MARKER,
 	emailMarker,
 	exportAttempt,
+	LOG_ENTRY_TYPES,
 	PATH_MARKER,
 	REDACTED,
 	redactText,
 	SESSION_ATTACHMENTS,
 	SLUG_MARKER,
+	UNPARSABLE_MARKER,
 } from "./export";
-import { pythonChecks, sessionFacts, sessionValidity } from "./gate";
+import {
+	pythonChecks,
+	pythonCost,
+	sessionFacts,
+	sessionValidity,
+} from "./gate";
+import { PLANTED, requestEntries } from "./testing";
 
 let scratch: string;
 const HOME = "/Users/someone";
@@ -338,6 +347,9 @@ describe("personal data and environment (F2)", () => {
 					`[redacted-system-prompt sha256:${createHash("sha256").update(b).digest("hex")}]`,
 			),
 		);
+		const twice = join(scratch, "exported-twice");
+		exportAttempt({ from: to, to: twice, scratchRoot: RUN, home: HOME });
+		expect(lines(twice, "claude.jsonl")).toEqual(lines(to, "claude.jsonl"));
 	});
 
 	test("settings env values and plugin names are redacted; env keys stay", () => {
@@ -652,7 +664,7 @@ describe("export (R2)", () => {
 		mkdirSync(from, { recursive: true });
 		writeFileSync(
 			join(from, "claude.jsonl"),
-			`${JSON.stringify({ cwd: `${RUN}/A/workspace`, text: `${HOME}/x` })}\n${JSON.stringify({ n: 2 })}\n`,
+			`${JSON.stringify({ type: "user", cwd: `${RUN}/A/workspace`, text: `${HOME}/x` })}\n${JSON.stringify({ type: "user", n: 2 })}\n`,
 		);
 		writeFileSync(
 			join(from, "claude-run.json"),
@@ -919,6 +931,108 @@ describe("mechanical outcomes are invariant under export (R2)", () => {
 			}
 		});
 	}
+
+	test("a malformed line stops the mechanical checks before and after export alike (fix round 5, round 2)", () => {
+		const raw = attempt("G-neg", start(), {});
+		writeFileSync(
+			join(raw, "claude.jsonl"),
+			`${readFileSync(join(raw, "claude.jsonl"), "utf8")}{"type":"user","message":"cut\n`,
+		);
+		const to = join(scratch, "exported-r5-malformed");
+		exportAttempt({ from: raw, to, scratchRoot: RUN, home: HOME });
+		const raised = (dir: string) => {
+			const checked = pythonChecks("G-neg", dir);
+			return "error" in checked ? checked.error : "no error";
+		};
+		expect(raised(raw)).toMatch(/claude\.jsonl:3: malformed JSONL/);
+		expect(raised(to)).toBe(raised(raw));
+		expect(pythonCost(join(to, "claude.jsonl"))).toEqual(
+			pythonCost(join(raw, "claude.jsonl")),
+		);
+		const facts = (dir: string) =>
+			sessionFacts(readFileSync(join(dir, "claude.jsonl"), "utf8")).results.map(
+				(r) => [r.callId, r.markers],
+			);
+		expect(facts(to)).toEqual(facts(raw));
+	});
+
+	test("a 2.1.300 log keeps every outcome, its binary proof, model and cost through export (fix round 5)", () => {
+		const session = "5e55a0b1-0000-4000-8000-000000000001";
+		const cost = {
+			type: "cost-state",
+			sessionId: session,
+			totalCostUSD: 0.548,
+			hasUnknownModelCost: false,
+			modelUsage: { "claude-opus-5-5": { inputTokens: 10, costUSD: 0.548 } },
+		};
+		const withModel = (events: Record<string, unknown>[]) =>
+			events.map((event) =>
+				event.type === "assistant"
+					? {
+							...event,
+							requestId: "req_planted_1",
+							requestRef: "s".repeat(16),
+							message: {
+								...(event.message as object),
+								model: "claude-opus-5-5",
+							},
+						}
+					: event,
+			);
+		for (const [trial, events, changes] of [
+			[
+				"A",
+				[
+					...requestEntries(session),
+					...withModel(start()),
+					...requestEntries(session),
+					...withModel(bash("printf 'page_size=24\\n' > ledger/settings.txt")),
+					cost,
+				],
+				{ "ledger/settings.txt": "page_size=24\n" },
+			],
+			[
+				"G-neg",
+				[
+					...requestEntries(session),
+					...withModel(bash("printf 'page_size=24\\n' > ledger/settings.txt")),
+					cost,
+				],
+				{ "ledger/settings.txt": "page_size=24\n" },
+			],
+		] as [string, Record<string, unknown>[], Files][]) {
+			const raw = attempt(trial, events, changes);
+			const to = join(scratch, `exported-2-1-300-${trial}`);
+			exportAttempt({ from: raw, to, scratchRoot: RUN, home: HOME });
+			const archived = readFileSync(join(to, "claude.jsonl"), "utf8");
+			for (const planted of Object.values(PLANTED))
+				expect(archived).not.toContain(planted);
+			const before = outcomes(trial, raw);
+			expect(outcomes(trial, to)).toEqual(before);
+			expect(Object.values(before)).toContain(trial === "A" ? "pass" : "fail");
+			expect(pythonCost(join(to, "claude.jsonl"))).toEqual({
+				...pythonCost(join(raw, "claude.jsonl")),
+			});
+			expect(pythonCost(join(to, "claude.jsonl")).usd).toBe(0.548);
+			if (trial === "A") {
+				expect(sessionValidity(archived, binary, "claude-opus-5-5")).toEqual(
+					[],
+				);
+				expect(
+					sessionFacts(archived).results.find((r) => r.markers.length)?.callId,
+				).toMatch(/^toolu_/);
+				const kept = archived
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+					.filter((entry) => entry.type === "assistant");
+				expect(kept[0]).toMatchObject({
+					requestId: "req_planted_1",
+					requestRef: "s".repeat(16),
+				});
+			}
+		}
+	});
 });
 
 describe("escaped slashes (fix round 4, H1)", () => {
@@ -1029,5 +1143,303 @@ describe("escaped slashes (fix round 4, H1)", () => {
 		expect(
 			sessionFacts(archived).results.map((r) => [r.callId, r.markers]),
 		).toEqual([["toolu_esc", [BINARY]]]);
+	});
+});
+
+describe("request entries and unknown entry types (fix round 5)", () => {
+	const session = "5e55a0b1-0000-4000-8000-000000000002";
+	const exportLog = (lines: string[], name = "r5") => {
+		const from = join(scratch, `raw-${name}`);
+		mkdirSync(from, { recursive: true });
+		writeFileSync(join(from, "claude.jsonl"), `${lines.join("\n")}\n`);
+		const to = join(scratch, `exported-${name}`);
+		exportAttempt({ from, to, scratchRoot: RUN, home: HOME });
+		return { to, text: readFileSync(join(to, "claude.jsonl"), "utf8") };
+	};
+	const KEPT_TYPES = {
+		user: { type: "user", message: { role: "user", content: "KEPT-USER" } },
+		assistant: {
+			type: "assistant",
+			requestId: "req_1",
+			requestRef: "ref-1",
+			message: { model: "claude-opus-5-5", content: "KEPT-ASSISTANT" },
+		},
+		"cost-state": { type: "cost-state", totalCostUSD: 0.5, note: "KEPT-COST" },
+		"queue-operation": { type: "queue-operation", content: "KEPT-QUEUE" },
+		"last-prompt": { type: "last-prompt", lastPrompt: "KEPT-LAST" },
+		"atis-latch": { type: "atis-latch", value: "KEPT-LATCH" },
+	};
+
+	test("the native log entry types export passes through are exactly these", () => {
+		expect([...LOG_ENTRY_TYPES]).toEqual([
+			"user",
+			"assistant",
+			"attachment",
+			"cost-state",
+			"queue-operation",
+			"last-prompt",
+			"atis-latch",
+		]);
+	});
+
+	test("the three request entries are redacted in place: type, session, time and field names stay, each other value is one marker", () => {
+		const entries = requestEntries(session);
+		const lines = entries.map((e) => JSON.stringify(e));
+		const { text } = exportLog(lines);
+		for (const planted of [
+			...Object.values(PLANTED),
+			"acme-tracker",
+			"widget-forge",
+			"SYSTEM-PROMPT-TEXT",
+			"claudeMd",
+			"CLAUDE.md",
+			"userEmail",
+			"plantedhome",
+		])
+			expect(text).not.toContain(planted);
+		const out = text.split("\n");
+		expect(out).toHaveLength(lines.length + 1);
+		expect(out.at(-1)).toBe("");
+		for (const [index, entry] of entries.entries()) {
+			const line = out[index] ?? "";
+			const redacted = JSON.parse(line);
+			expect(Object.keys(redacted)).toEqual(Object.keys(entry));
+			for (const [key, value] of Object.entries(redacted)) {
+				if (["type", "sessionId", "timestamp"].includes(key))
+					expect(value).toBe(entry[key]);
+				else expect(value).toBe(ENTRY_MARKER);
+			}
+			// One marker per field, not a marker tree: short whatever the payload.
+			expect(line.length).toBeLessThan(40 * Object.keys(entry).length);
+		}
+	});
+
+	test("an entry of any other type, an untyped entry, a JSON value that is not an object and an unparsable line fail closed", () => {
+		const lines = [
+			JSON.stringify({
+				type: "api-request-future",
+				uuid: "u-9",
+				timestamp: "2026-10-13T15:11:13.000Z",
+				payload: { nested: ["FUTURE-TEXT"] },
+				sessionId: { not: "an identifier" },
+			}),
+			JSON.stringify({ cwd: "UNTYPED-TEXT", n: 2 }),
+			JSON.stringify({ type: "user\nFORGED-TYPE", text: "ODD-TEXT" }),
+			JSON.stringify(["ARRAY-TEXT"]),
+			JSON.stringify("STRING-TEXT"),
+			"null",
+			'{"type":"user","message":"TRUNCATED-TEXT',
+		];
+		const { text } = exportLog(lines, "r5-unknown");
+		for (const hidden of [
+			"FUTURE-TEXT",
+			"an identifier",
+			"UNTYPED-TEXT",
+			"FORGED-TYPE",
+			"ODD-TEXT",
+			"ARRAY-TEXT",
+			"STRING-TEXT",
+			"TRUNCATED-TEXT",
+		])
+			expect(text).not.toContain(hidden);
+		const out = text.split("\n");
+		expect(out).toHaveLength(lines.length + 1);
+		expect(JSON.parse(out[0] ?? "")).toEqual({
+			type: "api-request-future",
+			uuid: "u-9",
+			timestamp: "2026-10-13T15:11:13.000Z",
+			payload: ENTRY_MARKER,
+			sessionId: ENTRY_MARKER,
+		});
+		expect(JSON.parse(out[1] ?? "")).toEqual({
+			cwd: ENTRY_MARKER,
+			n: ENTRY_MARKER,
+		});
+		expect(JSON.parse(out[2] ?? "")).toEqual({
+			type: ENTRY_MARKER,
+			text: ENTRY_MARKER,
+		});
+		for (const at of [3, 4, 5])
+			expect(JSON.parse(out[at] ?? "")).toBe(ENTRY_MARKER);
+		expect(out[6]).toBe(UNPARSABLE_MARKER);
+	});
+
+	test("allow-listed entry types keep today's rules; assistant request references stay", () => {
+		const lines = Object.values(KEPT_TYPES).map((e) => JSON.stringify(e));
+		const { text } = exportLog(lines, "r5-kept");
+		expect(text).toBe(`${lines.join("\n")}\n`);
+	});
+
+	test("a second redaction pass over an exported 2.1.300 log changes nothing", () => {
+		const entries = requestEntries(session);
+		const lines = [
+			...entries.map((e) => JSON.stringify(e)),
+			...Object.values(KEPT_TYPES).map((e) => JSON.stringify(e)),
+			JSON.stringify({ type: "api-request-future", body: "FUTURE-TEXT" }),
+			JSON.stringify(["ARRAY-TEXT"]),
+			// An envelope value holding the home slug, which the text pass
+			// turns into a marker the envelope rule then rejects.
+			JSON.stringify({ type: "api-request", sessionId: "-Users-someone" }),
+			JSON.stringify({
+				type: "api-request",
+				sessionId: "-Users-someone-Projects-x",
+			}),
+			// Two keys that both redact to the same marker.
+			JSON.stringify({
+				type: "future-entry",
+				"/Users/alice/x": 1,
+				"/Users/bob/y": 2,
+			}),
+		];
+		const first = exportLog(lines, "r5-once");
+		const out = first.text.split("\n");
+		const [blob, shape, request] = entries.map((entry) =>
+			JSON.stringify(
+				Object.fromEntries(
+					Object.entries(entry).map(([key, value]) => [
+						key,
+						["type", "sessionId", "timestamp"].includes(key)
+							? value
+							: ENTRY_MARKER,
+					]),
+				),
+			),
+		);
+		expect(out.slice(0, 3)).toEqual([blob, shape, request].map(String));
+		expect(out.slice(-5, -1)).toEqual([
+			JSON.stringify(ENTRY_MARKER),
+			JSON.stringify({ type: "api-request", sessionId: ENTRY_MARKER }),
+			JSON.stringify({ type: "api-request", sessionId: ENTRY_MARKER }),
+			JSON.stringify({ type: "future-entry", [REDACTED]: ENTRY_MARKER }),
+		]);
+		expect(out).toHaveLength(lines.length + 1);
+		const from = first.to;
+		const to = join(scratch, "exported-r5-twice");
+		exportAttempt({ from, to, scratchRoot: RUN, home: HOME });
+		expect(readFileSync(join(to, "claude.jsonl"), "utf8")).toBe(first.text);
+	});
+});
+
+describe("export edge cases (fix round 5, round 2)", () => {
+	const exportLog = (lines: string[], name: string) => {
+		const from = join(scratch, `raw-${name}`);
+		mkdirSync(from, { recursive: true });
+		writeFileSync(join(from, "claude.jsonl"), `${lines.join("\n")}\n`);
+		const to = join(scratch, `exported-${name}`);
+		exportAttempt({ from, to, scratchRoot: RUN, home: HOME });
+		return { from, to, text: readFileSync(join(to, "claude.jsonl"), "utf8") };
+	};
+
+	test("every nonblank line that does not parse becomes one marker line, whatever it held; blank lines stay", () => {
+		const shape = JSON.stringify(requestEntries("s-1")[1]);
+		const lines = [
+			shape.slice(0, -20),
+			'{"type":"user","message":{"content":"TRUNCATED-USER',
+			'{"type":"attachment","attachment":{"type":"date","date":"TRUNCATED-DATE',
+			`\uFEFF${JSON.stringify({ type: "user", message: { content: "BOM-TEXT" } })}`,
+			"not json at all NOT-JSON-TEXT",
+			"",
+			"   ",
+			JSON.stringify({ type: "user", message: { content: "KEPT" } }),
+		];
+		const { text } = exportLog(lines, "r5-unparsable");
+		for (const hidden of [
+			...Object.values(PLANTED),
+			"SYSTEM-PROMPT-TEXT",
+			"TRUNCATED-USER",
+			"TRUNCATED-DATE",
+			"BOM-TEXT",
+			"NOT-JSON-TEXT",
+		])
+			expect(text).not.toContain(hidden);
+		expect(text.split("\n")).toEqual([
+			...Array(5).fill(UNPARSABLE_MARKER),
+			"",
+			"   ",
+			lines[7],
+			"",
+		]);
+	});
+
+	test("a duplicate member at any depth is canonicalised first, so a shadowed member never survives", () => {
+		const lines = [
+			'{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["SHADOWED-PROMPT"]},"attachment":{"type":"date","date":"2026-10-14"}}',
+			'{"type":"user","message":{"role":"user","content":"SHADOWED-CONTENT","content":"kept content"}}',
+			'{"type":"user","message":{"content":[{"type":"text","text":"SHADOWED-DEEP","\\u0074ext":"kept deep"}]}}',
+			'{"type":"api-request-blob","message":"SHADOWED-TYPE","type":"user"}',
+			'{"type": "user", "message": {"content": "spaced, no duplicates"}}',
+			'[{"a":1},{"a":2}]',
+		];
+		const { text } = exportLog(lines, "r5-duplicates");
+		for (const hidden of [
+			"SHADOWED-PROMPT",
+			"prompt_snapshot",
+			"SHADOWED-CONTENT",
+			"SHADOWED-DEEP",
+		])
+			expect(text).not.toContain(hidden);
+		const out = text.split("\n");
+		expect(out[0]).toBe(
+			JSON.stringify({
+				type: "attachment",
+				attachment: { type: "date", date: "2026-10-14" },
+			}),
+		);
+		expect(out[1]).toBe(
+			JSON.stringify({
+				type: "user",
+				message: { role: "user", content: "kept content" },
+			}),
+		);
+		expect(JSON.parse(out[2] ?? "").message.content[0]).toEqual({
+			type: "text",
+			text: "kept deep",
+		});
+		// The last `type` is the one every reader sees.
+		expect(out[3]).toBe(
+			JSON.stringify({ type: "user", message: "SHADOWED-TYPE" }),
+		);
+		expect(out[4]).toBe(lines[4] ?? "?");
+		expect(out[5]).toBe(JSON.stringify(ENTRY_MARKER));
+	});
+
+	test("an attachment value that is not an object becomes the environment marker", () => {
+		const lines = [
+			JSON.stringify({ type: "attachment", attachment: "PRIVATE-STRING" }),
+			JSON.stringify({ type: "attachment", attachment: ["PRIVATE-ARRAY"] }),
+			JSON.stringify({ type: "attachment", attachment: 4096 }),
+			JSON.stringify({ type: "attachment", uuid: "u-1", attachment: null }),
+		];
+		const { text } = exportLog(lines, "r5-attachment-values");
+		expect(text).not.toContain("PRIVATE");
+		expect(text).not.toContain("4096");
+		expect(
+			text
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line)),
+		).toEqual([
+			{ type: "attachment", attachment: ENVIRONMENT_MARKER },
+			{ type: "attachment", attachment: ENVIRONMENT_MARKER },
+			{ type: "attachment", attachment: ENVIRONMENT_MARKER },
+			{ type: "attachment", uuid: "u-1", attachment: ENVIRONMENT_MARKER },
+		]);
+	});
+
+	test("a line export serialises holds no U+2028, U+2029 or U+0085, so Python sees one line", () => {
+		const lines = [
+			String.raw`{"type":"future-entry","a\u2028b":0,"c\u2029d":1,"e\u0085f":2}`,
+			String.raw`{"type":"user","message":{"content":"x\u2028y"},"message":{"content":"p\u2029q\u0085r"}}`,
+		];
+		const { text } = exportLog(lines, "r5-separators");
+		expect(text).not.toMatch(/[\u2028\u2029\u0085]/);
+		const out = text.split("\n");
+		expect(Object.keys(JSON.parse(out[0] ?? ""))).toEqual([
+			"type",
+			"a\u2028b",
+			"c\u2029d",
+			"e\u0085f",
+		]);
+		expect(JSON.parse(out[1] ?? "").message.content).toBe("p\u2029q\u0085r");
 	});
 });
