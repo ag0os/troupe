@@ -1,8 +1,19 @@
 import { lstatSync } from "node:fs";
 import { basename, join, posix, relative, resolve, sep } from "node:path";
-import { localPath } from "./checkpoint";
-import { type Config, loadConfig, splitConfigProblems } from "./config";
-import { localDate, localTimestamp } from "./dates";
+import {
+	FIXED_PATHS,
+	hashPaths,
+	localPath,
+	readCheckpoint,
+} from "./checkpoint";
+import {
+	type Autonomy,
+	autonomyUntil,
+	type Config,
+	loadConfig,
+	splitConfigProblems,
+} from "./config";
+import { dayOf, localDate, localTimestamp } from "./dates";
 import {
 	type CurrentItem,
 	type CurrentItems,
@@ -11,9 +22,10 @@ import {
 	type StatusProjection,
 	statusProjection,
 } from "./query-items";
-import { readRecord, recordPath } from "./query-read";
+import { readRecord, readRecordDir, recordPath } from "./query-read";
 import type { ToolEnv } from "./sessions";
 import { STATUS_WORDS } from "./status-parse";
+import { journalChain } from "./text";
 import { type ToolResult, treeError, usage } from "./tool";
 import { enclosingWorkspace, type Workspace, WorkspaceTreeError } from "./tree";
 import { STATE_DIR } from "./workspace";
@@ -53,6 +65,7 @@ type QueryContext = {
 	toolEnv: ToolEnv;
 	config: Config;
 	target: Workspace;
+	observedAt: Date;
 };
 
 type Collected = {
@@ -382,11 +395,264 @@ function collectItem({ request, target }: QueryContext): Collected {
 	};
 }
 
+function collectAutonomy({
+	toolEnv,
+	target,
+	observedAt,
+}: QueryContext): Collected {
+	const file = join(target.state, "config.json");
+	const fields: {
+		file: string;
+		present: boolean | null;
+		autonomy: Autonomy | null;
+		active: boolean;
+		expired: boolean | null;
+	} = { file, present: null, autonomy: null, active: false, expired: null };
+	const checked = recordPath(target.state, "config.json");
+	if (checked.status === "unsafe") {
+		return {
+			fields,
+			problems: [unsafe(join(target.state, checked.file), checked.reason)],
+			text: ["autonomy: off (config.json refused)"],
+		};
+	}
+	const config =
+		checked.status === "ok"
+			? loadConfig({
+					home: toolEnv.home,
+					env: toolEnv.env,
+					workspaceChain: [target.dir],
+				})
+			: undefined;
+	const invalid = config
+		? splitConfigProblems(config.problems, toolEnv).workspace
+		: [];
+	if (invalid.length > 0) {
+		return {
+			fields,
+			problems: invalid.map((entry) =>
+				problem("config-invalid", entry.file, `${entry.key}: ${entry.problem}`),
+			),
+			text: ["autonomy: off (config.json is invalid)"],
+		};
+	}
+	const grant = config?.autonomy;
+	if (!grant) {
+		fields.present = false;
+		return { fields, problems: [], text: ["autonomy: off (not set)"] };
+	}
+	const until =
+		grant.until === undefined ? undefined : autonomyUntil(grant.until);
+	fields.present = true;
+	fields.autonomy = grant;
+	if (until) {
+		fields.expired =
+			until.kind === "date"
+				? dayOf(observedAt) > until.day
+				: observedAt.getTime() >= until.time;
+	}
+	fields.active = grant.enabled && fields.expired !== true;
+	const text = fields.active
+		? `autonomy: active${grant.until === undefined ? "" : ` until ${grant.until}`} (config.json)`
+		: grant.enabled
+			? `autonomy: off (expired ${grant.until}, config.json)`
+			: "autonomy: off (disabled in config.json)";
+	return { fields, problems: [], text: [text] };
+}
+
+type Boundary = {
+	state: "found" | "lost" | "null" | "none";
+	position: number | null;
+	file: string | null;
+	line: number | null;
+};
+
+type Changed = {
+	path: string;
+	kind: "changed" | "appeared" | "removed" | "unsafe";
+	reason?: string;
+};
+
+/** Live covered paths, enumerating the buckets through the checked helper. */
+function livePaths(state: string): {
+	paths: string[];
+	refused: Map<string, string>;
+} {
+	const paths: string[] = [...FIXED_PATHS];
+	const refused = new Map<string, string>();
+	for (const bucket of ["todo", "in-progress"]) {
+		const listed = readRecordDir(state, `work/${bucket}`);
+		if (listed.status === "unsafe") refused.set(listed.file, listed.reason);
+		if (listed.status !== "ok") continue;
+		for (const entry of listed.entries) {
+			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+			const path = `work/${bucket}/${entry.name}/STATUS.md`;
+			if (recordPath(state, path).status !== "missing") paths.push(path);
+		}
+	}
+	return { paths, refused };
+}
+
+function collectCheckpoint({ target }: QueryContext): Collected {
+	const problems: QueryProblem[] = [];
+	const checked = recordPath(target.state, "checkpoint.json");
+	let read: ReturnType<typeof readCheckpoint>;
+	if (checked.status === "unsafe") {
+		read = { status: "invalid", reason: `${checked.file} ${checked.reason}` };
+		problems.push(unsafe(checked.file, checked.reason));
+	} else if (checked.status === "missing") {
+		read = { status: "none" };
+	} else {
+		read = readCheckpoint(target.state);
+		if (read.status === "invalid") {
+			problems.push(
+				problem(
+					"checkpoint-invalid",
+					"checkpoint.json",
+					`invalid checkpoint: ${read.reason}`,
+				),
+			);
+		}
+	}
+	const checkpoint = read.status === "ok" ? read.checkpoint : undefined;
+	let boundary: Boundary = {
+		state: "none",
+		position: null,
+		file: null,
+		line: null,
+	};
+	let chain: ReturnType<typeof journalChain> | undefined;
+	let entriesSince: number | null = null;
+	let changed: Changed[] | null = null;
+	let compared: number | null = null;
+	if (checkpoint) {
+		chain = journalChain(target.state);
+		for (const entry of chain.unreadable) {
+			problems.push(
+				problem(
+					"journal-unreadable",
+					entry.file,
+					`${entry.file} ${entry.reason}`,
+					entry.line,
+				),
+			);
+		}
+		const { entries } = chain;
+		const { from, to } = checkpoint.journal;
+		const fromIndex = entries.findIndex(({ id }) => id === from);
+		const toIndex = entries.findIndex(({ id }) => id === to);
+		const certified = entries[toIndex];
+		if (from === null && to === null) {
+			boundary = { state: "null", position: 0, file: null, line: null };
+		} else if (
+			from !== null &&
+			fromIndex >= 0 &&
+			certified &&
+			toIndex >= fromIndex
+		) {
+			boundary = {
+				state: "found",
+				position: toIndex + 1,
+				file: certified.file,
+				line: certified.line,
+			};
+		} else {
+			boundary = { state: "lost", position: null, file: null, line: null };
+		}
+		if (boundary.position !== null && chain.unreadable.length === 0) {
+			entriesSince = entries
+				.slice(boundary.position)
+				.filter(({ day }) => day !== undefined).length;
+		}
+
+		const live = livePaths(target.state);
+		const hashed = [
+			...new Set([...Object.keys(checkpoint.files), ...live.paths]),
+		];
+		const hashes = hashPaths(target, hashed);
+		const paths = [...new Set([...hashed, ...live.refused.keys()])].sort();
+		compared = paths.length;
+		changed = paths.flatMap((path): Changed[] => {
+			const refused = live.refused.get(path);
+			if (refused !== undefined) {
+				return [{ path, kind: "unsafe", reason: refused }];
+			}
+			const before = checkpoint.files[path] ?? null;
+			const after = hashes[path] ?? null;
+			if (after?.startsWith("unsafe:")) {
+				return [
+					{ path, kind: "unsafe", reason: after.slice("unsafe:".length) },
+				];
+			}
+			if (before === after) return [];
+			return [
+				{
+					path,
+					kind:
+						after === null
+							? "removed"
+							: before === null
+								? "appeared"
+								: "changed",
+				},
+			];
+		});
+	}
+
+	const text = [
+		read.status === "none"
+			? "no checkpoint"
+			: read.status === "invalid"
+				? `invalid checkpoint: ${read.reason}`
+				: `revision ${read.checkpoint.revision} by ${read.checkpoint.session ?? "unknown"} at ${read.checkpoint.written}`,
+		boundary.state === "found"
+			? `boundary: found at ${boundary.file}:${boundary.line}`
+			: `boundary: ${boundary.state}`,
+	];
+	if (changed) {
+		text.push(
+			`entries since: ${entriesSince ?? "unknown"}; compared: ${compared}; changed: ${changed.length}`,
+			...changed.map(
+				({ path, kind, reason }) =>
+					`  ${kind} ${path}${reason === undefined ? "" : ` (${reason})`}`,
+			),
+		);
+	}
+	return {
+		fields: {
+			status: read.status,
+			reason: read.status === "invalid" ? read.reason : null,
+			revision: checkpoint?.revision ?? null,
+			written: checkpoint?.written ?? null,
+			session: checkpoint?.session ?? null,
+			snapshot: checkpoint?.snapshot ?? null,
+			journal: checkpoint
+				? {
+						from: checkpoint.journal.from,
+						to: checkpoint.journal.to,
+						count: checkpoint.journal.count,
+					}
+				: null,
+			chain: chain
+				? { files: chain.files, unreadable: chain.unreadable }
+				: null,
+			boundary,
+			entriesSince,
+			compared,
+			changed,
+		},
+		problems,
+		text,
+	};
+}
+
 const COLLECTORS: Partial<
 	Record<QueryName, (context: QueryContext) => Collected | Promise<Collected>>
 > = {
 	items: collectItems,
 	item: collectItem,
+	autonomy: collectAutonomy,
+	checkpoint: collectCheckpoint,
 };
 
 function unique(problems: QueryProblem[]): QueryProblem[] {
@@ -446,8 +712,16 @@ export async function runQuery(
 	if (!collect) return usage();
 
 	const { target, root } = resolved;
-	const observed = localTimestamp(toolEnv.clock());
-	const collected = await collect({ request, toolEnv, config, target });
+	const clock = toolEnv.clock().getTime();
+	const observedAt = new Date(Math.floor(clock / 1000) * 1000);
+	const observed = localTimestamp(observedAt);
+	const collected = await collect({
+		request,
+		toolEnv,
+		config,
+		target,
+		observedAt,
+	});
 	const problems = unique(collected.problems);
 	const code = exitCode(problems);
 	if (request.json) {

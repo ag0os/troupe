@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { type Dirent, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { localPath } from "./checkpoint";
 
@@ -69,6 +69,30 @@ export function readRecord(state: string, relative: string): ReadRecord {
 	if (checked.status !== "ok") return checked;
 	try {
 		return { status: "ok", text: readFileSync(checked.path, "utf8") };
+	} catch (error) {
+		if (missing(error)) return { status: "missing" };
+		return {
+			status: "unsafe",
+			file: relative,
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+export type RecordDir =
+	| { status: "ok"; entries: Dirent[] }
+	| { status: "missing" }
+	| { status: "unsafe"; file: string; reason: string };
+
+/** Enumerate a directory below state through recordPath. */
+export function readRecordDir(state: string, relative: string): RecordDir {
+	const checked = recordPath(state, relative, "directory");
+	if (checked.status !== "ok") return checked;
+	try {
+		return {
+			status: "ok",
+			entries: readdirSync(checked.path, { withFileTypes: true }),
+		};
 	} catch (error) {
 		if (missing(error)) return { status: "missing" };
 		return {

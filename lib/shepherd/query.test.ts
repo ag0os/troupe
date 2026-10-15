@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { coveredPaths, hashPaths } from "./checkpoint";
 import type { ToolEnv } from "./sessions";
 import { fakeToolEnv, type MakeTreeOptions, makeTree } from "./test-support";
+import { journalChain } from "./text";
 import { runTool } from "./tool";
 
 const cleanups: Array<() => void> = [];
@@ -615,6 +617,508 @@ describe("tool query workspace resolution", () => {
 	});
 });
 
+describe("tool query autonomy", () => {
+	function grant(value: unknown): Record<string, string> {
+		return {
+			"root/a/.shepherd/config.json": JSON.stringify({ autonomy: value }),
+		};
+	}
+
+	async function autonomy(
+		files: Record<string, string>,
+		clock?: () => Date,
+		flags: Record<string, string | boolean> = {},
+	) {
+		const fixture = contractTree(files);
+		return query(
+			["autonomy"],
+			fixture.env(fixture.a, clock ? { clock } : {}),
+			flags,
+		);
+	}
+
+	test("reports an absent config file as not set", async () => {
+		const fixture = contractTree();
+		fs.rmSync(join(fixture.a, ".shepherd", "config.json"));
+		const { code, json } = await query(["autonomy"], fixture.env(fixture.a));
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			query: "autonomy",
+			problems: [],
+			file: join(fixture.a, ".shepherd", "config.json"),
+			present: false,
+			autonomy: null,
+			active: false,
+			expired: null,
+		});
+	});
+
+	test("reports a config without the key as not set", async () => {
+		const { code, json } = await autonomy({});
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			present: false,
+			autonomy: null,
+			active: false,
+			expired: null,
+		});
+	});
+
+	test("an enabled grant without until is active", async () => {
+		const { code, json } = await autonomy(grant({ enabled: true }));
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			present: true,
+			autonomy: { enabled: true },
+			active: true,
+			expired: null,
+		});
+	});
+
+	test("a disabled grant is present and inactive", async () => {
+		const { json } = await autonomy(
+			grant({ enabled: false, until: "2026-12-01" }),
+		);
+		expect(json).toMatchObject({
+			present: true,
+			active: false,
+			expired: false,
+		});
+	});
+
+	test("a bare date holds through the end of its local day", async () => {
+		const late = () => new Date(2026, 9, 5, 23, 59, 59);
+		const midnight = () => new Date(2026, 9, 6, 0, 0, 0);
+		for (const [until, clock, active] of [
+			["2026-10-04", late, false],
+			["2026-10-05", late, true],
+			["2026-10-06", late, true],
+			["2026-10-05", midnight, false],
+			["2026-10-06", midnight, true],
+		] as const) {
+			const { code, json } = await autonomy(
+				grant({ enabled: true, until }),
+				clock,
+			);
+			expect(code).toBe(0);
+			expect({ until, active: json.active, expired: json.expired }).toEqual({
+				until,
+				active,
+				expired: !active,
+			});
+		}
+	});
+
+	test("an instant holds strictly before it, in any offset", async () => {
+		for (const [until, active] of [
+			["2026-10-05T11:59:59Z", false],
+			["2026-10-05T12:00:00Z", false],
+			["2026-10-05T12:00:01Z", true],
+			["2026-10-05T09:00:01-03:00", true],
+			["2026-10-05T14:00:01+02:00", true],
+			["2026-10-05T14:00+02:00", false],
+		] as const) {
+			const { json } = await autonomy(grant({ enabled: true, until }));
+			expect({ until, active: json.active, expired: json.expired }).toEqual({
+				until,
+				active,
+				expired: !active,
+			});
+		}
+	});
+
+	test("an invalid config file stops the caller", async () => {
+		for (const text of [
+			"{",
+			'{"autonomy":{"enabled":true,"until":"2026-02-30"}}',
+			'{"autonomy":{"enabled":"yes"}}',
+		]) {
+			const { code, json } = await autonomy({
+				"root/a/.shepherd/config.json": text,
+			});
+			expect(code).toBe(1);
+			expect(json).toMatchObject({
+				present: null,
+				autonomy: null,
+				active: false,
+				expired: null,
+			});
+			expect(codes(json)).toEqual(["config-invalid"]);
+			expect(json.problems[0].file).toBe(
+				join(json.workspace.state, "config.json"),
+			);
+		}
+	});
+
+	test("refuses a symlinked config without reading its target", async () => {
+		const fixture = contractTree({
+			"outside/config.json": '{"autonomy":{"enabled":true}}',
+		});
+		const config = join(fixture.a, ".shepherd", "config.json");
+		fs.rmSync(config);
+		fs.symlinkSync(join(fixture.base, "outside", "config.json"), config);
+		const { value, calls } = await spyFs(() =>
+			query(["autonomy"], fixture.env(fixture.a)),
+		);
+		expect(value.code).toBe(1);
+		expect(value.json).toMatchObject({
+			present: null,
+			autonomy: null,
+			active: false,
+		});
+		expect(codes(value.json)).toEqual(["record-unsafe"]);
+		expect(
+			calls.filter(
+				({ fn, path }) =>
+					path.includes(`${sep}outside`) ||
+					(fn === "readFileSync" && path === config),
+			),
+		).toEqual([]);
+	});
+
+	test("answers from the child's file alone, never the parent's grant", async () => {
+		const parent = {
+			"root/.shepherd/config.json": '{"autonomy":{"enabled":true}}',
+		};
+		const absent = contractTree(parent);
+		fs.rmSync(join(absent.a, ".shepherd", "config.json"));
+		expect(
+			(await query(["autonomy"], absent.env(absent.a))).json,
+		).toMatchObject({ present: false, active: false });
+
+		expect(
+			(await autonomy({ ...parent, ...grant({ enabled: false }) })).json,
+		).toMatchObject({ present: true, active: false });
+
+		const invalid = await autonomy({
+			...parent,
+			...grant({ enabled: true, extra: 1 }),
+		});
+		expect(invalid.code).toBe(1);
+		expect(invalid.json).toMatchObject({ present: null, active: false });
+	});
+
+	test("renders the text form", async () => {
+		const fixture = contractTree(grant({ enabled: true, until: "2026-10-20" }));
+		expect(
+			await runTool(["query", "autonomy"], {}, fixture.env(fixture.a)),
+		).toEqual({
+			text: "autonomy: active until 2026-10-20 (config.json)\n",
+			code: 0,
+			stream: "stdout",
+		});
+		expect(
+			(await runTool(["query", "autonomy"], {}, fixture.env(fixture.b))).text,
+		).toBe("autonomy: off (not set)\n");
+	});
+});
+
+const ARCHIVE = "## 2026-09-30\n- 09:00 september one\n- 10:00 september two\n";
+const JOURNAL = "## 2026-10-13\n- 10:00 started\n- 11:00 more\n- 12:00 last\n";
+
+/** A with an archive month and a three entry journal, certified by cursors. */
+function checkpointTree(extra: Record<string, string> = {}) {
+	const fixture = contractTree({
+		"root/a/.shepherd/archive/journal/2026-09.md": ARCHIVE,
+		"root/a/.shepherd/journal.md": JOURNAL,
+		"root/a/.shepherd/MEMORY.md": "# Memory\n",
+		...extra,
+	});
+	const state = join(fixture.a, ".shepherd");
+	return {
+		...fixture,
+		state,
+		certify(
+			cursors: (ids: string[]) => { from: string | null; to: string | null },
+		) {
+			const ids = journalChain(state).entries.map(({ id }) => id);
+			const { from, to } = cursors(ids);
+			const checkpoint = {
+				schema: 1,
+				revision: 3,
+				written: "2026-10-13T15:25:02-03:00",
+				session: "ws-1013",
+				snapshot: "checkpoints/CURRENT.r3",
+				journal: {
+					from,
+					to,
+					count:
+						from === null || to === null
+							? 0
+							: Math.max(0, ids.indexOf(to) - ids.indexOf(from) + 1),
+				},
+				files: hashPaths(
+					{ name: "a", dir: fixture.a, state },
+					coveredPaths(state),
+				),
+				evidence: {},
+			};
+			fs.writeFileSync(
+				join(state, "checkpoint.json"),
+				JSON.stringify(checkpoint),
+			);
+			return checkpoint;
+		},
+	};
+}
+
+/** Certify from the first archive entry to journal.md's first entry. */
+const BOUNDARY = (ids: string[]) => ({
+	from: ids[0] as string,
+	to: ids[2] as string,
+});
+
+describe("tool query checkpoint", () => {
+	test("reports no checkpoint with every field present", async () => {
+		const fixture = checkpointTree();
+		const { code, json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			query: "checkpoint",
+			problems: [],
+			status: "none",
+			reason: null,
+			revision: null,
+			written: null,
+			session: null,
+			snapshot: null,
+			journal: null,
+			chain: null,
+			boundary: { state: "none", position: null, file: null, line: null },
+			entriesSince: null,
+			compared: null,
+			changed: null,
+		});
+	});
+
+	test("reports an invalid checkpoint", async () => {
+		const fixture = checkpointTree({
+			"root/a/.shepherd/checkpoint.json": '{"schema":2}',
+		});
+		const { code, json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(code).toBe(1);
+		expect(codes(json)).toEqual(["checkpoint-invalid"]);
+		expect(json).toMatchObject({
+			status: "invalid",
+			reason: "schema must be 1",
+			revision: null,
+			boundary: { state: "none" },
+			entriesSince: null,
+			compared: null,
+			changed: null,
+		});
+	});
+
+	test("reports a valid checkpoint with its boundary and nothing changed", async () => {
+		const fixture = checkpointTree();
+		const certified = fixture.certify(BOUNDARY);
+		const { code, json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			problems: [],
+			status: "ok",
+			reason: null,
+			revision: 3,
+			written: "2026-10-13T15:25:02-03:00",
+			session: "ws-1013",
+			snapshot: "checkpoints/CURRENT.r3",
+			journal: {
+				from: certified.journal.from,
+				to: certified.journal.to,
+				count: 3,
+			},
+			chain: {
+				files: ["archive/journal/2026-09.md", "journal.md"],
+				unreadable: [],
+			},
+			boundary: { state: "found", position: 3, file: "journal.md", line: 2 },
+			entriesSince: 2,
+			compared: 7,
+			changed: [],
+		});
+	});
+
+	test("lists changed, appeared, removed and unsafe covered files only", async () => {
+		const fixture = checkpointTree({
+			"outside/STATUS.md": STATUS,
+		});
+		fixture.certify(BOUNDARY);
+		const { state } = fixture;
+		fs.appendFileSync(join(state, "CURRENT.md"), "- **ASK** more\n");
+		fs.mkdirSync(join(state, "work", "todo", "new"));
+		fs.writeFileSync(join(state, "work", "todo", "new", "STATUS.md"), STATUS);
+		fs.rmSync(join(state, "work", "todo", "lock"), { recursive: true });
+		const evals = join(state, "work", "in-progress", "evals", "STATUS.md");
+		fs.rmSync(evals);
+		fs.symlinkSync(join(fixture.base, "outside", "STATUS.md"), evals);
+		const { value, calls } = await spyFs(() =>
+			query(["checkpoint"], fixture.env(fixture.a)),
+		);
+		expect(value.code).toBe(0);
+		expect(value.json.compared).toBe(8);
+		expect(value.json.changed).toEqual([
+			{ path: "CURRENT.md", kind: "changed" },
+			{
+				path: "work/in-progress/evals/STATUS.md",
+				kind: "unsafe",
+				reason: "is a symlink",
+			},
+			{ path: "work/todo/lock/STATUS.md", kind: "removed" },
+			{ path: "work/todo/new/STATUS.md", kind: "appeared" },
+		]);
+		expect(
+			calls.filter(
+				({ fn, path }) =>
+					path.includes(`${sep}outside`) ||
+					(fn === "readFileSync" && path === evals),
+			),
+		).toEqual([]);
+	});
+
+	for (const link of ["work", "work/todo"]) {
+		test(`refuses a symlinked ${link} without enumerating its target`, async () => {
+			const fixture = checkpointTree({
+				"outside/work/todo/lock/STATUS.md": STATUS,
+				"outside/work/todo/other/STATUS.md": STATUS,
+				"outside/work/in-progress/evals/STATUS.md": STATUS,
+			});
+			fixture.certify(BOUNDARY);
+			const linked = join(fixture.state, link);
+			fs.rmSync(linked, { recursive: true });
+			fs.symlinkSync(join(fixture.base, "outside", link), linked);
+			const { value, calls } = await spyFs(() =>
+				query(["checkpoint"], fixture.env(fixture.a)),
+			);
+			expect(value.code).toBe(0);
+			expect(value.json.changed).toContainEqual({
+				path: link,
+				kind: "unsafe",
+				reason: "is a symlink",
+			});
+			expect(
+				value.json.changed.some(
+					({ path }: { path: string }) => path === "work/todo/other/STATUS.md",
+				),
+			).toBeFalse();
+			expect(
+				calls.filter(
+					({ fn, path }) =>
+						path.includes(`${sep}outside`) ||
+						path.startsWith(`${linked}${sep}`) ||
+						(fn === "readdirSync" && path === linked),
+				),
+			).toEqual([]);
+		});
+	}
+
+	test("loses the boundary when the certified entries moved", async () => {
+		const edited = checkpointTree();
+		edited.certify(BOUNDARY);
+		fs.writeFileSync(
+			join(edited.state, "journal.md"),
+			JOURNAL.replace("10:00 started", "10:00 started, edited"),
+		);
+		const pruned = checkpointTree();
+		pruned.certify(BOUNDARY);
+		fs.rmSync(join(pruned.state, "archive", "journal", "2026-09.md"));
+		const reversed = checkpointTree();
+		reversed.certify((ids) => ({
+			from: ids[2] as string,
+			to: ids[0] as string,
+		}));
+		for (const fixture of [edited, pruned, reversed]) {
+			const { code, json } = await query(
+				["checkpoint"],
+				fixture.env(fixture.a),
+			);
+			expect(code).toBe(0);
+			expect(json.status).toBe("ok");
+			expect(json.boundary).toEqual({
+				state: "lost",
+				position: null,
+				file: null,
+				line: null,
+			});
+			expect(json.entriesSince).toBeNull();
+		}
+	});
+
+	test("counts headed entries from the start with null cursors", async () => {
+		const fixture = checkpointTree({
+			"root/a/.shepherd/journal.md": `- 08:00 above the heading\n\n${JOURNAL}`,
+		});
+		fixture.certify(() => ({ from: null, to: null }));
+		const { code, json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(code).toBe(0);
+		expect(json.boundary).toEqual({
+			state: "null",
+			position: 0,
+			file: null,
+			line: null,
+		});
+		expect(json.entriesSince).toBe(5);
+	});
+
+	test("an unreadable chain file leaves entriesSince null", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		fs.appendFileSync(
+			join(fixture.state, "archive", "journal", "2026-09.md"),
+			"```\nopen fence\n",
+		);
+		const { code, json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(code).toBe(1);
+		expect(codes(json)).toEqual(["journal-unreadable"]);
+		expect(json.problems[0].file).toBe("archive/journal/2026-09.md");
+		expect(json.chain.unreadable).toHaveLength(1);
+		expect(json.entriesSince).toBeNull();
+	});
+
+	test("refuses a symlinked checkpoint without reading its target", async () => {
+		const fixture = checkpointTree({ "outside/checkpoint.json": "{}" });
+		const path = join(fixture.state, "checkpoint.json");
+		fs.symlinkSync(join(fixture.base, "outside", "checkpoint.json"), path);
+		const { value, calls } = await spyFs(() =>
+			query(["checkpoint"], fixture.env(fixture.a)),
+		);
+		expect(value.code).toBe(1);
+		expect(codes(value.json)).toEqual(["record-unsafe"]);
+		expect(value.json.status).toBe("invalid");
+		expect(
+			calls.filter(
+				({ fn, path: called }) =>
+					called.includes(`${sep}outside`) ||
+					(fn === "readFileSync" && called === path),
+			),
+		).toEqual([]);
+	});
+
+	test("renders the text form", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		fs.appendFileSync(join(fixture.state, "CURRENT.md"), "- **ASK** more\n");
+		const output = await runTool(
+			["query", "checkpoint"],
+			{},
+			fixture.env(fixture.a),
+		);
+		expect(output).toEqual({
+			text: [
+				"revision 3 by ws-1013 at 2026-10-13T15:25:02-03:00",
+				"boundary: found at journal.md:2",
+				"entries since: 2; compared: 7; changed: 1",
+				"  changed CURRENT.md",
+				"",
+			].join("\n"),
+			code: 0,
+			stream: "stdout",
+		});
+		expect(
+			(await runTool(["query", "checkpoint"], {}, fixture.env(fixture.b))).text,
+		).toBe("no checkpoint\nboundary: none\n");
+	});
+});
+
 describe("tool query read contract", () => {
 	test("items reads the user config and only CURRENT and link targets", async () => {
 		const fixture = contractTree();
@@ -650,5 +1154,54 @@ describe("tool query read contract", () => {
 							)),
 			);
 		}
+	});
+	test("autonomy reads the user config and only its own config", async () => {
+		const fixture = contractTree({
+			"root/.shepherd/config.json": '{"autonomy":{"enabled":true}}',
+		});
+		const { value, calls } = await spyFs(() =>
+			query(["autonomy"], fixture.env(fixture.a)),
+		);
+		expect(value.code).toBe(0);
+		expectContract(
+			calls,
+			fixture,
+			fixture.a,
+			(path, call) =>
+				path === "config.json" &&
+				(call.fn === "lstatSync" || call.fn === "readFileSync"),
+		);
+		expect(calls).toContainEqual({
+			fn: "readFileSync",
+			path: join(fixture.a, ".shepherd", "config.json"),
+		});
+	});
+
+	test("checkpoint reads the checkpoint, the chain and the covered records", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		const { value, calls } = await spyFs(() =>
+			query(["checkpoint"], fixture.env(fixture.a)),
+		);
+		expect(value.code).toBe(0);
+		const records =
+			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md|CURRENT\.md|MEMORY\.md|docs\/INDEX\.md|pending\.md|charter\.md|work\/(todo|in-progress)\/[^/]+\/STATUS\.md)$/;
+		expectContract(calls, fixture, fixture.a, (path, call) => {
+			if (call.fn === "readdirSync") {
+				return /^(work\/(todo|in-progress)|archive\/journal)$/.test(path);
+			}
+			if (call.fn === "readFileSync") return records.test(path);
+			return (
+				call.fn === "lstatSync" &&
+				(records.test(path) ||
+					/^(docs|archive(\/journal)?|work(\/(todo|in-progress)(\/[^/]+)?)?)$/.test(
+						path,
+					))
+			);
+		});
+		expect(calls).toContainEqual({
+			fn: "readFileSync",
+			path: join(fixture.a, ".shepherd", "charter.md"),
+		});
 	});
 });
