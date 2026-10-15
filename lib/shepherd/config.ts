@@ -136,7 +136,13 @@ export function autonomyUntil(text: string): AutonomyUntil | undefined {
 	if (match[5] !== "Z") {
 		const offsetHours = Number(match[7]);
 		const offsetMinutes = Number(match[8]);
-		if (offsetHours > 14 || offsetMinutes > 59) return undefined;
+		if (
+			offsetHours > 14 ||
+			offsetMinutes > 59 ||
+			offsetHours * 60 + offsetMinutes > 840
+		) {
+			return undefined;
+		}
 		offset =
 			(match[6] === "-" ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
 	}

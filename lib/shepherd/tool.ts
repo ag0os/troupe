@@ -110,7 +110,7 @@ export function isToolCommand(
 	return command !== undefined && Object.hasOwn(COMMAND_FLAGS, command);
 }
 
-function result(
+export function result(
 	text: string,
 	code: number,
 	stream: "stdout" | "stderr" = "stdout",

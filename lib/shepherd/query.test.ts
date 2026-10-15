@@ -683,6 +683,21 @@ describe("tool query workspace resolution", () => {
 		});
 	});
 
+	test("refuses a symlink to a workspace as the launch directory", async () => {
+		const fixture = contractTree();
+		const link = join(fixture.base, "link");
+		fs.symlinkSync(fixture.a, link);
+		for (const flags of [{}, { all: true }] as Record<string, boolean>[]) {
+			const output = await runTool(
+				["query", "items"],
+				flags,
+				fixture.env(link),
+			);
+			expect(output).toMatchObject({ code: 2, stream: "stderr" });
+			expect(output.text).toContain(`not a workspace: ${link}`);
+		}
+	});
+
 	test("refuses an invalid user config with exit 2", async () => {
 		const fixture = contractTree({ "xdg/shepherd/config.json": "{" });
 		expect(await query(["items"], fixture.env(fixture.a))).toMatchObject({

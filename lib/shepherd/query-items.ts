@@ -91,8 +91,10 @@ function statusLink(raw: string): { slug: string; link: string } | undefined {
 export function currentItems(text: string): CurrentItems {
 	const all = sourceLines(text);
 	const prose = proseLines(text);
+	const start = prose.findIndex(({ line }) => /^##\s+Items\b/i.test(line));
 	const updated =
 		prose
+			.slice(0, start < 0 ? undefined : start)
 			.map(({ line }) => line.match(/^Updated:\s*(.+?)\s*$/)?.[1])
 			.find((value) => value !== undefined) ?? null;
 	const result: CurrentItems = {
@@ -108,7 +110,6 @@ export function currentItems(text: string): CurrentItems {
 		return result;
 	}
 
-	const start = prose.findIndex(({ line }) => /^##\s+Items\b/i.test(line));
 	const heading = prose[start];
 	if (!heading) {
 		result.problems.push({
@@ -233,7 +234,10 @@ export function statusProjection(text: string): StatusProjection {
 	} else {
 		projection.problems.push({
 			code: "status-no-frontmatter",
-			message: "STATUS.md has no frontmatter block",
+			message:
+				all[0] === "---"
+					? "frontmatter opened at line 1 is never closed"
+					: "STATUS.md has no frontmatter block",
 		});
 	}
 

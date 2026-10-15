@@ -36,7 +36,8 @@ function isDirectory(path: string): boolean {
 	}
 }
 
-function isWorkspace(path: string): boolean {
+/** Whether a path is a directory with its own .shepherd/, both by lstat. */
+export function isWorkspace(path: string): boolean {
 	return isDirectory(path) && isDirectory(join(path, STATE_DIR));
 }
 

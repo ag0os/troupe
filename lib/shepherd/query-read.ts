@@ -151,7 +151,8 @@ export function readRecordDir(state: string, relative: string): RecordDir {
 /**
  * Run one collection pass, keeping the first view of every path it checks
  * through recordPath (size, inode and mtime in nanoseconds) and of every
- * directory it enumerates (the listing). Passes do not nest.
+ * directory it enumerates (the listing). Passes do not nest, and collectors
+ * must be synchronous: the marks are module state for the pass's duration.
  */
 export function recorded<T>(run: () => T): { value: T; marks: Mark[] } {
 	marks = new Map();

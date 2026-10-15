@@ -355,6 +355,10 @@ describe("autonomy", () => {
 			{ enabled: true, until: "2026-10-20T10:00+15:00" },
 		],
 		[
+			"an offset of 14 hours and 30 minutes",
+			{ enabled: true, until: "2026-10-20T10:00+14:30" },
+		],
+		[
 			"an instant without an offset",
 			{ enabled: true, until: "2026-10-20T10:00" },
 		],

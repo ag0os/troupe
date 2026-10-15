@@ -1,4 +1,3 @@
-import { lstatSync } from "node:fs";
 import { basename, join, posix, relative, resolve, sep } from "node:path";
 import {
 	type Checkpoint,
@@ -47,10 +46,11 @@ import {
 	STATUS_WORDS,
 } from "./status-parse";
 import { journalChain, journalFenceProblem } from "./text";
-import { type ToolResult, treeError, usage } from "./tool";
+import { result, type ToolResult, treeError, usage } from "./tool";
 import {
 	discoverTree,
 	enclosingWorkspace,
+	isWorkspace,
 	type Workspace,
 	WorkspaceTreeError,
 } from "./tree";
@@ -106,16 +106,8 @@ const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const JOURNAL_ID = /^[0-9a-f]{10}$/;
 const DEFAULT_MAX = 50;
 
-function output(
-	text: string,
-	code: number,
-	stream: "stdout" | "stderr" = "stdout",
-): ToolResult {
-	return { text: text.endsWith("\n") ? text : `${text}\n`, code, stream };
-}
-
 function refuse(message: string): ToolResult {
-	return output(`shepherd: ${message}`, 2, "stderr");
+	return result(`shepherd: ${message}`, 2, "stderr");
 }
 
 function problem(
@@ -205,18 +197,10 @@ function validate(
 	return request;
 }
 
-function isStateDir(dir: string): boolean {
-	try {
-		return lstatSync(join(dir, STATE_DIR)).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 /** The launch workspace and its root by the ancestor walk, enumerating nothing. */
 function resolveWorkspace(cwd: string): { target: Workspace; root: string } {
 	const home = resolve(cwd);
-	if (!isStateDir(home)) {
+	if (!isWorkspace(home)) {
 		throw new WorkspaceTreeError(`not a workspace: ${home}`);
 	}
 	let root = home;
@@ -1245,7 +1229,7 @@ export async function runQuery(
 	});
 	const userProblems = splitConfigProblems(config.problems, toolEnv).user;
 	if (userProblems.length > 0) {
-		return output(
+		return result(
 			userProblems
 				.map(
 					(entry) => `shepherd: ${entry.file}: ${entry.key}: ${entry.problem}`,
@@ -1328,7 +1312,7 @@ export async function runQuery(
 				...rest,
 			};
 		}
-		return output(JSON.stringify(json, null, 2), code);
+		return result(JSON.stringify(json, null, 2), code);
 	}
 
 	const notices = answers.flatMap(({ target, answer }) =>
@@ -1349,7 +1333,7 @@ export async function runQuery(
 				.join("\n\n")
 		: (answers[0]?.answer.text ?? []).join("\n");
 	return {
-		...output(text, code),
+		...result(text, code),
 		...(notices.length > 0 ? { notice: notices.join("\n") } : {}),
 	};
 }

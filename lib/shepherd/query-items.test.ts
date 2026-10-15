@@ -134,6 +134,15 @@ describe("currentItems", () => {
 		]);
 	});
 
+	test("reads Updated only above the Items heading", () => {
+		expect(
+			currentItems("## Items\n- **NEXT** a\n\nUpdated: inside\n").updated,
+		).toBeNull();
+		expect(
+			currentItems("Updated: top\n\n## Items\nUpdated: inside\n").updated,
+		).toBe("top");
+	});
+
 	test("reads noNext", () => {
 		expect(currentItems("## Items\nNo NEXT is set.\n").noNext).toBeTrue();
 		expect(currentItems(CURRENT).noNext).toBeFalse();
@@ -247,6 +256,17 @@ describe("statusProjection", () => {
 		expect(projection.sections.map(({ heading }) => heading)).toEqual(["One"]);
 		expect(projection.problems.map(({ code }) => code)).toEqual([
 			"status-no-frontmatter",
+		]);
+	});
+
+	test("names a frontmatter block that is never closed", () => {
+		const projection = statusProjection("---\na: b\n# t\n## One\nx\n");
+		expect(projection.frontmatter).toBeNull();
+		expect(projection.problems).toEqual([
+			{
+				code: "status-no-frontmatter",
+				message: "frontmatter opened at line 1 is never closed",
+			},
 		]);
 	});
 
