@@ -73,7 +73,7 @@ source: Claude registry; Codex through Herdr: unchecked (not inside Herdr); suba
 test("returns the status JSON shape", () => {
 	const fixture = makeTree({
 		"home/root/.shepherd/CURRENT.md":
-			"Updated: today\n- **NEXT**: ship it\n## Live sessions\n- missing-one",
+			"Updated: today\n## Items\n- **NEXT**: ship it\n## Live sessions\n- missing-one",
 	});
 	cleanups.push(fixture.cleanup);
 	const home = join(fixture.root, "home");
@@ -102,7 +102,7 @@ test("returns the status JSON shape", () => {
 						word: "NEXT",
 						known: true,
 						text: "ship it",
-						line: 2,
+						line: 3,
 					},
 				],
 				live: {
@@ -112,7 +112,7 @@ test("returns the status JSON shape", () => {
 					unchecked: [
 						{
 							name: "missing-one",
-							line: 4,
+							line: 5,
 							retired: false,
 							subagent: false,
 							codex: false,

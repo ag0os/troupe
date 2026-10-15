@@ -7,18 +7,105 @@ import {
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
 } from "./config";
-import { listedSessions, noNext, statusItems } from "./status-parse";
-import { makeTree } from "./test-support";
+import { statusItems } from "./query-items";
+import { listedSessions, noNext } from "./status-parse";
+import { makeTree, OFF_SHAPE_CURRENT } from "./test-support";
 import { discoverTree } from "./tree";
 
 describe("statusItems", () => {
-	test("finds all five known words anywhere and detects no NEXT", () => {
-		const text = `**NEXT**: first
-## Notes
+	test("is the query's entry shape: off-shape entries are skipped", () => {
+		expect(
+			statusItems(OFF_SHAPE_CURRENT).map(({ word, known, line }) => ({
+				word,
+				known,
+				line,
+			})),
+		).toEqual([
+			{ word: "NEXT", known: true, line: 7 },
+			{ word: "CANDIDATE", known: true, line: 10 },
+			{ word: "BLOCKED", known: false, line: 11 },
+		]);
+	});
+
+	test("warns on off-shape entries and keeps the unknown word finding", () => {
+		const fixture = makeTree({
+			"root/.shepherd/charter.md": "Charter",
+			"root/.shepherd/CURRENT.md": OFF_SHAPE_CURRENT,
+		});
+		try {
+			const tree = discoverTree(join(fixture.root, "root"));
+			const findings = checkWorkspace(
+				tree.root,
+				tree,
+				{
+					marks: { ...DEFAULT_MARKS },
+					windows: { ...DEFAULT_WINDOWS },
+					start: { ...DEFAULT_START },
+					handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
+					codex: {},
+					problems: [],
+				},
+				new Date(2026, 9, 15),
+			);
+			expect(
+				findings
+					.filter(({ code }) => code.startsWith("status-"))
+					.map(({ level, code, line }) => ({ level, code, line })),
+			).toEqual([
+				{ level: "warn", code: "status-entry-off-shape", line: 8 },
+				{ level: "warn", code: "status-entry-off-shape", line: 9 },
+				{ level: "warn", code: "status-word-unknown", line: 11 },
+			]);
+			expect(
+				findings.find(({ code }) => code === "status-entry-off-shape")?.message,
+			).toBe(
+				'entry starts with **ASK: consulting**; core\'s shape is "- **WORD** text"; query items skips it',
+			);
+		} finally {
+			fixture.cleanup();
+		}
+	});
+
+	test("warns when CURRENT has no Items section", () => {
+		const fixture = makeTree({
+			"root/.shepherd/charter.md": "Charter",
+			"root/.shepherd/CURRENT.md": "Updated: 2026-10-15\n- **NEXT** loose\n",
+		});
+		try {
+			const tree = discoverTree(join(fixture.root, "root"));
+			const findings = checkWorkspace(
+				tree.root,
+				tree,
+				{
+					marks: { ...DEFAULT_MARKS },
+					windows: { ...DEFAULT_WINDOWS },
+					start: { ...DEFAULT_START },
+					handoffCeilings: { ...DEFAULT_HANDOFF_CEILINGS },
+					codex: {},
+					problems: [],
+				},
+				new Date(2026, 9, 15),
+			);
+			expect(statusItems("Updated: 2026-10-15\n- **NEXT** loose\n")).toEqual(
+				[],
+			);
+			expect(
+				findings.find(({ code }) => code === "items-section-missing"),
+			).toMatchObject({ level: "warn", file: "CURRENT.md" });
+		} finally {
+			fixture.cleanup();
+		}
+	});
+
+	test("finds all five known words in Items and detects no NEXT", () => {
+		const text = `**NEXT**: outside Items is prose
+## Items
+- **NEXT**: first
 - **ASK** - second
-**WAITING** (third)
+- **WAITING** (third)
 * **SCHEDULED** fourth
-**CANDIDATE**: fifth
+- **CANDIDATE**: fifth
+## Notes
 No NEXT is set`;
 
 		expect(statusItems(text).map(({ word }) => word)).toEqual([
@@ -31,23 +118,20 @@ No NEXT is set`;
 		expect(noNext(text)).toBeTrue();
 	});
 
-	test("skips only unique colon-form legend runs", () => {
-		const legend = `- **NEXT**: what is next
+	test("counts a legend only inside Items", () => {
+		const legend = `## Legend
+- **NEXT**: what is next
 - **ASK**: waiting on the user
 - **WAITING**: waiting elsewhere`;
 		expect(statusItems(legend)).toEqual([]);
-
-		const items = Array.from(
-			{ length: 8 },
-			(_, index) => `- **NEXT** Work ${index + 1}`,
-		).join("\n");
-		expect(statusItems(items)).toHaveLength(8);
 		expect(
-			statusItems(`- **NEXT**: one\n- **ASK**: two\n- **NEXT**: three`),
+			statusItems(
+				`## Items\n- **NEXT**: one\n- **ASK**: two\n- **NEXT**: three`,
+			),
 		).toHaveLength(3);
 	});
 
-	test("scopes unknown words to Items but keeps known words elsewhere", () => {
+	test("takes known and unknown words from Items only", () => {
 		const items = statusItems(`- **BLOCKED**: outside
 **NEXT**: outside known
 ## Items
@@ -60,7 +144,6 @@ No NEXT is set`;
 		expect(
 			items.map(({ word, known, line }) => ({ word, known, line })),
 		).toEqual([
-			{ word: "NEXT", known: true, line: 2 },
 			{ word: "CHECK", known: false, line: 4 },
 			{ word: "PAUSED", known: false, line: 6 },
 		]);
@@ -80,7 +163,7 @@ No NEXT is set`;
 	test("cleans links and bold markers and cuts text to 150 characters", () => {
 		const long = "x".repeat(160);
 		const items = statusItems(
-			`- **NEXT**: Read [the plan](docs/plan.md)\n- **CHECK**: ${long}`,
+			`## Items\n- **NEXT**: Read [the plan](docs/plan.md)\n- **CHECK**: ${long}`,
 		);
 
 		expect(items[0]?.text).toBe("Read the plan");

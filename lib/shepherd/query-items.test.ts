@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { currentItems, statusProjection } from "./query-items";
-import { makeTree } from "./test-support";
+import { makeTree, OFF_SHAPE_CURRENT } from "./test-support";
 import { closedDate } from "./text";
 
 const LONG = `${"word ".repeat(80).trim()} end`;
@@ -46,6 +46,25 @@ function lines(text: string, from: number, to: number): string {
 }
 
 describe("currentItems", () => {
+	test("skips off-shape entries and names each as a problem", () => {
+		const parsed = currentItems(OFF_SHAPE_CURRENT);
+		expect(parsed.items.map(({ line }) => line)).toEqual([7, 10, 11]);
+		expect(parsed.problems).toEqual([
+			{
+				code: "entry-off-shape",
+				line: 8,
+				message:
+					'entry starts with **ASK: consulting**; core\'s shape is "- **WORD** text"; query items skips it',
+			},
+			{
+				code: "entry-off-shape",
+				line: 9,
+				message:
+					'entry starts with **WAITING forge**; core\'s shape is "- **WORD** text"; query items skips it',
+			},
+		]);
+	});
+
 	test("takes exactly the Items entries, lossless", () => {
 		const parsed = currentItems(CURRENT);
 

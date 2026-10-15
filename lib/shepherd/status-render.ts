@@ -1,13 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { statusItems } from "./query-items";
 import type { AdapterResult, Running, RunningSessionsResult } from "./sessions";
 import { type LiveReport, liveReports, recordFreshness } from "./status";
-import {
-	noNext,
-	STATUS_WORDS,
-	type StatusItem,
-	statusItems,
-} from "./status-parse";
+import { noNext, STATUS_WORDS, type StatusItem } from "./status-parse";
 import type { Workspace, WorkspaceTree } from "./tree";
 
 export type StatusLiveReport = LiveReport & { record: string | null };

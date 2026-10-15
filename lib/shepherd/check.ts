@@ -9,8 +9,8 @@ import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
 import { lockStatus } from "./lock";
+import { currentItems } from "./query-items";
 import type { ToolEnv } from "./sessions";
-import { statusItems } from "./status-parse";
 import {
 	frontmatter,
 	journalChain,
@@ -301,7 +301,20 @@ export function checkWorkspace(
 			}
 		}
 
-		for (const item of statusItems(text)) {
+		const entries = currentItems(text);
+		for (const problem of entries.problems) {
+			if (problem.code === "entry-off-shape")
+				add(
+					"warn",
+					"status-entry-off-shape",
+					current,
+					problem.message,
+					problem.line,
+				);
+			if (problem.code === "items-section-missing")
+				add("warn", "items-section-missing", current, problem.message);
+		}
+		for (const item of entries.items) {
 			if (!item.known) {
 				add(
 					"warn",

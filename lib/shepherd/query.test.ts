@@ -8,6 +8,7 @@ import {
 	jsonCommandResult,
 	type MakeTreeOptions,
 	makeTree,
+	OFF_SHAPE_CURRENT,
 } from "./test-support";
 import { journalChain } from "./text";
 import { runTool } from "./tool";
@@ -3096,5 +3097,34 @@ describe("F16: one boundary and one change classifier", () => {
 		);
 		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
 		expect(assessed(fixture).changed).toEqual(json.changed);
+	});
+});
+
+describe("acceptance 3: one entry shape", () => {
+	test("check --status and query items count the same entries; query skips off-shape lines with exit 0", async () => {
+		const fixture = contractTree({
+			"root/a/.shepherd/CURRENT.md": OFF_SHAPE_CURRENT,
+		});
+		const env = fixture.env(fixture.a);
+		const items = await query(["items"], env);
+		expect(items.code).toBe(0);
+		expect(items.json.items.map(({ line }: { line: number }) => line)).toEqual([
+			7, 10, 11,
+		]);
+		expect(
+			items.json.problems.map(
+				({ code, line }: { code: string; line: number }) => ({ code, line }),
+			),
+		).toEqual([
+			{ code: "entry-off-shape", line: 8 },
+			{ code: "entry-off-shape", line: 9 },
+		]);
+		const status = await runTool(["check"], { status: true, json: true }, env);
+		const report = JSON.parse(status.text).workspaces.find(
+			({ name }: { name: string }) => name === "a",
+		);
+		expect(report.items.map(({ line }: { line: number }) => line)).toEqual([
+			7, 10, 11,
+		]);
 	});
 });

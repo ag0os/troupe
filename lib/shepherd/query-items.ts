@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { noNext, STATUS_WORDS } from "./status-parse";
+import { noNext, STATUS_WORDS, type StatusItem } from "./status-parse";
 import { journalFenceProblem, proseLines } from "./text";
 
 export type ParseProblem = {
@@ -47,6 +47,7 @@ export type StatusProjection = {
 
 const KNOWN = new Set<string>(STATUS_WORDS);
 const ENTRY = /^[-*][ \t]+\*\*([A-Z]{3,}):?\*\*/;
+const BOLD_START = /^[-*][ \t]+(\*\*([A-Z]+)\b[^*]*\*\*)/;
 const LINK = /\[([^\]]*)\]\(([^)\s]+)\)/g;
 const WORK_STATUS = /^work\/[^/]+\/([^/]+)\/STATUS\.md$/;
 
@@ -152,7 +153,16 @@ export function currentItems(text: string): CurrentItems {
 		}
 		finish();
 		const word = line.match(ENTRY)?.[1];
-		if (!word) continue;
+		if (!word) {
+			const bold = line.match(BOLD_START);
+			if (bold?.[1] && bold[2] && KNOWN.has(bold[2]))
+				result.problems.push({
+					code: "entry-off-shape",
+					line: n,
+					message: `entry starts with ${bold[1]}; core's shape is "- **WORD** text"; query items skips it`,
+				});
+			continue;
+		}
 		current = {
 			item: {
 				word,
@@ -169,6 +179,19 @@ export function currentItems(text: string): CurrentItems {
 	}
 	finish();
 	return result;
+}
+
+/** CURRENT's entries as status shows them: the word, its text cut to 150 characters, and its line. */
+export function statusItems(text: string): StatusItem[] {
+	return currentItems(text).items.map(({ word, known, text, line }) => {
+		const clean = text.replace(/\*\*/g, "");
+		return {
+			word,
+			known,
+			text: clean.length > 150 ? `${clean.slice(0, 147)}...` : clean,
+			line,
+		};
+	});
 }
 
 function frontmatterValue(rest: string): string {

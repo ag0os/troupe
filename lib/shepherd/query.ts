@@ -1112,7 +1112,11 @@ function unique(problems: QueryProblem[]): QueryProblem[] {
 }
 
 function exitCode(problems: readonly QueryProblem[]): number {
-	return problems.some(({ code }) => code !== "source-unavailable") ? 1 : 0;
+	return problems.some(
+		({ code }) => code !== "source-unavailable" && code !== "entry-off-shape",
+	)
+		? 1
+		: 0;
 }
 
 function problemLine(entry: QueryProblem, workspace?: string): string {

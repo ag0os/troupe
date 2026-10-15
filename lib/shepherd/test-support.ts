@@ -94,3 +94,17 @@ export function makeTree(
 		cleanup: () => rmSync(root, { recursive: true, force: true }),
 	};
 }
+
+/** A CURRENT with two off-shape entries (lines 8 and 9) and an unknown word (line 11). */
+export const OFF_SHAPE_CURRENT = `# Current
+Updated: 2026-10-15 09:00, forge-1014
+
+Some line.
+
+## Items
+- **NEXT** [session-identity](work/in-progress/session-identity/STATUS.md): step 3, the spec
+- **ASK: consulting**, the user decides on PR #13
+- **WAITING forge** (PR #13 gates)
+- **CANDIDATE** tool friction, standing
+- **BLOCKED** no access
+`;
