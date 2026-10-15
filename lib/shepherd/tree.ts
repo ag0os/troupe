@@ -22,6 +22,17 @@ export interface WorkspaceTree {
 	workspaces: Workspace[];
 }
 
+/** Whether another workspace of the tree lies beneath this one. */
+export function hasChildWorkspace(
+	tree: WorkspaceTree,
+	workspace: Workspace,
+): boolean {
+	return tree.workspaces.some((other) => {
+		const path = relative(workspace.dir, other.dir);
+		return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
+	});
+}
+
 export type WorkspaceScope = "check" | "archive" | "archive-recursive";
 
 export class WorkspaceTreeError extends Error {

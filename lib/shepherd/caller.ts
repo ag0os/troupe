@@ -3,7 +3,6 @@ import { sessionPrefixFor } from "./session-name";
 import { claudeRegistry, codexIndex, type ToolEnv } from "./sessions";
 import { ownsDirectory } from "./status";
 import type { Workspace } from "./tree";
-import { findChildWorkspaces } from "./workspace";
 
 /** The session that ran a tool command, as its harness reports it. */
 export type Caller = {
@@ -59,7 +58,7 @@ export function callerSession(
 	toolEnv: ToolEnv,
 	workspace: Pick<Workspace, "dir">,
 	config: Config,
-	hasChildren = findChildWorkspaces(workspace.dir).length > 0,
+	hasChildren: boolean,
 ): Caller {
 	const claude = claudeCaller(toolEnv);
 	const thread = toolEnv.env.CODEX_THREAD_ID || undefined;

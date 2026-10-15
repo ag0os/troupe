@@ -49,7 +49,7 @@ async function identityFixture({
 	const workspace = { name: "forge", dir, state: join(dir, ".shepherd") };
 	const config = testConfig({ sessionPrefix: "fg" });
 	const quiet = fakeToolEnv({ home, cwd: dir });
-	const certified = await runCheckpoint(workspace, quiet, config, {
+	const certified = await runCheckpoint(workspace, quiet, config, false, {
 		apply: true,
 		token: captureState(workspace, quiet).token,
 		session: writer,

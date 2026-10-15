@@ -30,7 +30,6 @@ import { sessionPrefixFor } from "./session-name";
 import type { ToolEnv } from "./sessions";
 import { type ChainEntry, journalChain, words } from "./text";
 import type { Workspace } from "./tree";
-import { findChildWorkspaces } from "./workspace";
 
 export type CheckpointOptions = {
 	apply: boolean;
@@ -124,17 +123,13 @@ function refusedRange(held: HeldState): {
 	};
 }
 /** Why the caller cannot certify without --session, or undefined for this workspace's Shepherd. */
-function writerProblem(
-	caller: Caller,
-	workspace: Workspace,
-	config: Config,
-): string | undefined {
+function writerProblem(caller: Caller, prefix: string): string | undefined {
 	if (caller.harness === null)
 		return caller.reason ?? "no calling session found; pass --session <name>";
 	if (caller.name === null)
 		return `calling session is unnamed (${caller.harness} ${caller.id?.slice(0, 8)}: ${caller.reason}); name it, then run the dry run again, or pass --session <name>`;
 	if (caller.role !== "shepherd")
-		return `${caller.name} is not this workspace's Shepherd (prefix ${sessionPrefixFor(workspace.dir, config.sessionPrefix, findChildWorkspaces(workspace.dir).length > 0)}-); the Shepherd certifies, or pass --session <name> on its instruction`;
+		return `${caller.name} is not this workspace's Shepherd (prefix ${prefix}-); the Shepherd certifies, or pass --session <name> on its instruction`;
 	return undefined;
 }
 function writerFacts(caller: Caller) {
@@ -146,15 +141,15 @@ function writerFacts(caller: Caller) {
 		reason: caller.reason ?? null,
 	};
 }
+type Writer = { caller: Caller; problem: string | undefined };
 function dryRun(
 	workspace: Workspace,
 	toolEnv: ToolEnv,
-	config: Config,
+	resolveWriter: () => Writer,
 	json: boolean,
 ): Result {
 	const held = captureState(workspace, toolEnv);
-	const caller = callerSession(toolEnv, workspace, config);
-	const problem = writerProblem(caller, workspace, config);
+	const { caller, problem } = resolveWriter();
 	const before = held.status === "ok" ? (held.checkpoint?.files ?? {}) : {};
 	const after = Object.fromEntries(
 		Object.entries(held.files).map(([path, file]) => [path, file.hash]),
@@ -265,6 +260,7 @@ export async function runCheckpoint(
 	workspace: Workspace,
 	toolEnv: ToolEnv,
 	config: Config,
+	hasChildren: boolean,
 	options: CheckpointOptions,
 	hooks: CheckpointHooks = {},
 ): Promise<Result> {
@@ -277,7 +273,17 @@ export async function runCheckpoint(
 			text: "usage: shepherd tool checkpoint [--apply --token <token>] [--session <session>] [--accept-dropped <reason>] [--json]",
 			stream: "stderr",
 		};
-	if (!options.apply) return dryRun(workspace, toolEnv, config, options.json);
+	const prefix = sessionPrefixFor(
+		workspace.dir,
+		config.sessionPrefix,
+		hasChildren,
+	);
+	const resolveWriter = (): Writer => {
+		const caller = callerSession(toolEnv, workspace, config, hasChildren);
+		return { caller, problem: writerProblem(caller, prefix) };
+	};
+	if (!options.apply)
+		return dryRun(workspace, toolEnv, resolveWriter, options.json);
 	for (const [flag, value] of [
 		["session", options.session],
 		["accept-dropped", options.acceptDropped],
@@ -299,8 +305,7 @@ export async function runCheckpoint(
 			toolEnv,
 			async (): Promise<Result> => {
 				await hooks.afterLock?.();
-				const caller = callerSession(toolEnv, workspace, config);
-				const problem = writerProblem(caller, workspace, config);
+				const { caller, problem } = resolveWriter();
 				if (options.session === undefined && problem) return failure(problem);
 				const writer = options.session ?? (caller.name as string);
 				const read = readCheckpoint(workspace.state);

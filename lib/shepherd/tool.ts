@@ -33,6 +33,7 @@ import { runStart } from "./start";
 import { renderStatus, statusJson, statusReport } from "./status-render";
 import {
 	discoverTree,
+	hasChildWorkspace,
 	selectWorkspaces,
 	type Workspace,
 	type WorkspaceTree,
@@ -574,6 +575,7 @@ export async function runTool(
 				homeWorkspace,
 				toolEnv,
 				config,
+				hasChildWorkspace(tree, homeWorkspace),
 				{
 					apply: flags.apply === true,
 					token: typeof flags.token === "string" ? flags.token : undefined,

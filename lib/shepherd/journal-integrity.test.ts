@@ -36,7 +36,7 @@ function fixture(journal = "## 2026-09-30\n- 09:00 certified\n") {
 	const env = fakeToolEnv({ cwd: f.root, home: f.root });
 	const path = join(workspace.state, "journal.md");
 	const certify = () =>
-		runCheckpoint(workspace, env, testConfig(), {
+		runCheckpoint(workspace, env, testConfig(), false, {
 			apply: true,
 			token: captureState(workspace, env).token,
 			json: false,
@@ -69,7 +69,7 @@ test("an unclosed fence makes start reconcile and checkpoint dry run and apply r
 	expect(start.text).toContain("RECONCILE");
 	expect(start.text).toContain(reason);
 	for (const output of [
-		await runCheckpoint(f.workspace, f.env, testConfig(), {
+		await runCheckpoint(f.workspace, f.env, testConfig(), false, {
 			apply: false,
 			json: false,
 		}),
@@ -103,7 +103,7 @@ test("a symlinked archive is named by start and checkpoint and archive apply wri
 	const start = await runTool(["start"], {}, f.env);
 	expect(start.text).toContain("RECONCILE");
 	expect(start.text).toContain("archive: is a symlink");
-	const dry = await runCheckpoint(f.workspace, f.env, testConfig(), {
+	const dry = await runCheckpoint(f.workspace, f.env, testConfig(), false, {
 		apply: false,
 		json: false,
 	});
@@ -131,7 +131,7 @@ test("checkpoint ignores a README bullet in the journal archive", async () => {
 	);
 	const held = captureState(f.workspace, f.env);
 	expect(held.chain.map(({ text }) => text)).toEqual(["09:00 certified"]);
-	const dry = await runCheckpoint(f.workspace, f.env, testConfig(), {
+	const dry = await runCheckpoint(f.workspace, f.env, testConfig(), false, {
 		apply: false,
 		json: false,
 	});

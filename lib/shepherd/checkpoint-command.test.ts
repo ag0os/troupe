@@ -69,7 +69,7 @@ function fixture(files: Record<string, string> = {}) {
 	const remove = (path: string) =>
 		rmSync(join(workspace.state, path), { recursive: true, force: true });
 	const dry = (json = false) =>
-		runCheckpoint(workspace, env, testConfig(), { apply: false, json });
+		runCheckpoint(workspace, env, testConfig(), false, { apply: false, json });
 	const apply = (
 		token = captureState(workspace, env).token,
 		hooks: CheckpointHooks = {},
@@ -80,6 +80,7 @@ function fixture(files: Record<string, string> = {}) {
 			workspace,
 			env,
 			testConfig(),
+			false,
 			{ apply: true, token, json, session: "test-session", acceptDropped },
 			hooks,
 		);
@@ -495,6 +496,7 @@ for (const options of [
 			f.workspace,
 			f.env,
 			testConfig(),
+			false,
 			options,
 		);
 		expect(result.code).toBe(2);
@@ -573,7 +575,7 @@ import { fakeToolEnv, testConfig } from ${JSON.stringify(join(import.meta.dir, "
 const workspace = ${JSON.stringify(f.workspace)};
 const env = fakeToolEnv({ home: workspace.dir, clock: () => new Date("2026-10-08T13:52:13Z") });
 const token = captureState(workspace, env).token;
-console.log((await runCheckpoint(workspace, env, testConfig(), { apply: true, token, json: true, session: "test-session" })).text);`;
+console.log((await runCheckpoint(workspace, env, testConfig(), false, { apply: true, token, json: true, session: "test-session" })).text);`;
 	const child = Bun.spawn([process.execPath, "--eval", script], {
 		env: { ...process.env, TZ: "America/Argentina/Buenos_Aires" },
 		stdout: "pipe",
@@ -766,6 +768,7 @@ for (const flag of ["session", "acceptDropped"] as const)
 				f.workspace,
 				f.env,
 				testConfig(),
+				false,
 				{
 					apply: true,
 					token: captureState(f.workspace, f.env).token,
@@ -995,7 +998,7 @@ function called(
 	});
 	const config = testConfig({ sessionPrefix: "forge" });
 	const run = (options: Omit<CheckpointOptions, "json"> & { json?: boolean }) =>
-		runCheckpoint(f.workspace, env, config, { json: false, ...options });
+		runCheckpoint(f.workspace, env, config, false, { json: false, ...options });
 	const token = () => captureState(f.workspace, env).token;
 	const written = () =>
 		existsSync(join(f.workspace.state, "checkpoint.json"))

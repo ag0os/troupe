@@ -22,7 +22,7 @@ import {
 	read,
 	words,
 } from "./text";
-import type { Workspace, WorkspaceTree } from "./tree";
+import { hasChildWorkspace, type Workspace, type WorkspaceTree } from "./tree";
 
 const MEMORY_TYPES = new Set(["user", "preference", "project", "reference"]);
 
@@ -306,9 +306,7 @@ export function checkWorkspace(
 
 		const claude = namedSessions(claudeRegistry(probe));
 		if (claude.available) {
-			const hasChildren = tree.workspaces.some(
-				(other) => other !== workspace && isBeneath(workspace.dir, other.dir),
-			);
+			const hasChildren = hasChildWorkspace(tree, workspace);
 			const view = sessionView({
 				listed: listedSessions(text),
 				running: claude.sessions,
