@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { coveredPaths, hashPaths } from "./checkpoint";
+import { assessCheckpoint, coveredPaths, hashPaths } from "./checkpoint";
 import type { ToolEnv } from "./sessions";
 import {
 	fakeToolEnv,
@@ -2992,5 +2992,109 @@ describe("tool query acceptance", () => {
 		expect(await configFindings({ autonomy: { enabled: "yes" } })).toEqual([
 			expect.objectContaining({ code: "config-invalid" }),
 		]);
+	});
+});
+
+describe("F16: one boundary and one change classifier", () => {
+	function certified(
+		cursors: (ids: string[]) => { from: string | null; to: string | null },
+		extra: Record<string, string> = {},
+	) {
+		const fixture = checkpointTree(extra);
+		const { snapshot } = fixture.certify(cursors);
+		fs.mkdirSync(join(fixture.state, "checkpoints"));
+		fs.copyFileSync(
+			join(fixture.state, "CURRENT.md"),
+			join(fixture.state, snapshot),
+		);
+		return fixture;
+	}
+	function assessed(fixture: ReturnType<typeof checkpointTree>) {
+		return assessCheckpoint(
+			{ name: "a", dir: fixture.a, state: fixture.state },
+			fixture.env(fixture.a),
+		);
+	}
+
+	const cases: [
+		string,
+		(ids: string[]) => { from: string | null; to: string | null },
+		((state: string) => void)?,
+	][] = [
+		["found across an archive month", BOUNDARY],
+		[
+			"lost from an edited certified entry",
+			BOUNDARY,
+			(state) =>
+				fs.writeFileSync(
+					join(state, "journal.md"),
+					JOURNAL.replace("10:00 started", "10:00 started, edited"),
+				),
+		],
+		["both cursors null", () => ({ from: null, to: null })],
+	];
+	for (const [name, cursors, change] of cases) {
+		test(`assessCheckpoint and query checkpoint give one boundary: ${name}`, async () => {
+			const fixture = certified(cursors);
+			change?.(fixture.state);
+			const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+			expect(assessed(fixture).boundary).toEqual(json.boundary);
+		});
+	}
+
+	test("assessCheckpoint, query checkpoint and the dry run classify changes alike", async () => {
+		const fixture = certified(BOUNDARY, {
+			"outside/work/todo/lock/STATUS.md": STATUS,
+		});
+		const { state } = fixture;
+		fs.appendFileSync(join(state, "CURRENT.md"), "- **ASK** more\n");
+		fs.mkdirSync(join(state, "work", "in-progress", "new"));
+		fs.writeFileSync(
+			join(state, "work", "in-progress", "new", "STATUS.md"),
+			STATUS,
+		);
+		fs.rmSync(join(state, "MEMORY.md"));
+		fs.rmSync(join(state, "work", "todo"), { recursive: true });
+		fs.symlinkSync(
+			join(fixture.base, "outside", "work", "todo"),
+			join(state, "work", "todo"),
+		);
+		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(json.changed).toContainEqual({
+			path: "work/todo",
+			kind: "unsafe",
+			reason: "is a symlink",
+		});
+		expect(assessed(fixture).changed).toEqual(json.changed);
+		const dry = await runTool(
+			["checkpoint"],
+			{ json: true },
+			fixture.env(fixture.a),
+		);
+		expect(
+			JSON.parse(dry.text).changed.map(
+				({ path, kind }: { path: string; kind: string }) => ({ path, kind }),
+			),
+		).toEqual(
+			json.changed.map(({ path, kind }: { path: string; kind: string }) => ({
+				path,
+				kind,
+			})),
+		);
+	});
+
+	test("assessCheckpoint and query checkpoint agree on a symlinked work", async () => {
+		const fixture = certified(BOUNDARY, {
+			"outside/work/todo/lock/STATUS.md": STATUS,
+			"outside/work/todo/other/STATUS.md": STATUS,
+			"outside/work/in-progress/evals/STATUS.md": STATUS,
+		});
+		fs.rmSync(join(fixture.state, "work"), { recursive: true });
+		fs.symlinkSync(
+			join(fixture.base, "outside", "work"),
+			join(fixture.state, "work"),
+		);
+		const { json } = await query(["checkpoint"], fixture.env(fixture.a));
+		expect(assessed(fixture).changed).toEqual(json.changed);
 	});
 });

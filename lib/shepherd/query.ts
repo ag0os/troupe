@@ -1,6 +1,9 @@
 import { basename, join, posix, relative, resolve, sep } from "node:path";
 import {
-	type Checkpoint,
+	type Changed,
+	type Boundary as CheckpointBoundary,
+	checkpointBoundary,
+	classifyChanges,
 	FIXED_PATHS,
 	hashPaths,
 	localPath,
@@ -756,18 +759,9 @@ function collectAutonomy({
 	return { fields, problems: [], text: [text] };
 }
 
-type Boundary = {
-	state: "found" | "lost" | "null" | "none";
-	position: number | null;
-	file: string | null;
-	line: number | null;
-};
-
-type Changed = {
-	path: string;
-	kind: "changed" | "appeared" | "removed" | "unsafe";
-	reason?: string;
-};
+type Boundary =
+	| CheckpointBoundary
+	| { state: "none"; position: null; file: null; line: null };
 
 /** Live covered paths, enumerating the buckets through the checked helper. */
 function livePaths(state: string): {
@@ -852,32 +846,6 @@ function chainProblems(chain: Chain): QueryProblem[] {
 	);
 }
 
-/**
- * Where the certified journal ends in the chain, by the assessCheckpoint
- * rule: found only when both cursors are in the chain, in order.
- */
-function checkpointBoundary(
-	entries: Chain["entries"],
-	journal: Checkpoint["journal"],
-): Boundary {
-	const { from, to } = journal;
-	if (from === null && to === null) {
-		return { state: "null", position: 0, file: null, line: null };
-	}
-	const fromIndex = entries.findIndex(({ id }) => id === from);
-	const toIndex = entries.findIndex(({ id }) => id === to);
-	const certified = entries[toIndex];
-	if (from !== null && fromIndex >= 0 && certified && toIndex >= fromIndex) {
-		return {
-			state: "found",
-			position: toIndex + 1,
-			file: certified.file,
-			line: certified.line,
-		};
-	}
-	return { state: "lost", position: null, file: null, line: null };
-}
-
 function collectCheckpoint({ target }: QueryContext): Collected {
 	const { read, problems } = checkpointRecord(target.state);
 	const checkpoint = read.status === "ok" ? read.checkpoint : undefined;
@@ -908,33 +876,10 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 		];
 		for (const path of hashed) recordPath(target.state, path);
 		const hashes = hashPaths(target, hashed);
-		const paths = [...new Set([...hashed, ...live.refused.keys()])].sort();
-		compared = paths.length;
-		changed = paths.flatMap((path): Changed[] => {
-			const refused = live.refused.get(path);
-			if (refused !== undefined) {
-				return [{ path, kind: "unsafe", reason: refused }];
-			}
-			const before = checkpoint.files[path] ?? null;
-			const after = hashes[path] ?? null;
-			if (after?.startsWith("unsafe:")) {
-				return [
-					{ path, kind: "unsafe", reason: after.slice("unsafe:".length) },
-				];
-			}
-			if (before === after) return [];
-			return [
-				{
-					path,
-					kind:
-						after === null
-							? "removed"
-							: before === null
-								? "appeared"
-								: "changed",
-				},
-			];
-		});
+		for (const [path, reason] of live.refused)
+			hashes[path] = `unsafe:${reason}`;
+		compared = Object.keys(hashes).length;
+		changed = classifyChanges(checkpoint.files, hashes);
 	}
 
 	const text = [

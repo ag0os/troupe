@@ -235,7 +235,12 @@ describe("checkpoint journal assessment", () => {
 		const f = fixture();
 		f.certify();
 		f.put("journal.md", original.replace("first", "edited"));
-		expect(f.assess().boundary).toEqual({ state: "lost" });
+		expect(f.assess().boundary).toEqual({
+			state: "lost",
+			position: null,
+			file: null,
+			line: null,
+		});
 		expect(f.assess().reasons[0]).toBe(
 			"boundary lost: the journal changed before the certified entry",
 		);
@@ -245,7 +250,12 @@ describe("checkpoint journal assessment", () => {
 		f.certify((c) => {
 			c.journal = { from: null, to: null, count: 0 };
 		});
-		expect(f.assess().boundary).toEqual({ state: "found", position: 0 });
+		expect(f.assess().boundary).toEqual({
+			state: "null",
+			position: 0,
+			file: null,
+			line: null,
+		});
 		expect(f.assess().unreviewed.entries).toHaveLength(2);
 	});
 	test("from missing while to is intact loses the boundary", () => {
@@ -253,7 +263,12 @@ describe("checkpoint journal assessment", () => {
 		f.certify((c) => {
 			c.journal.from = "edited-away";
 		});
-		expect(f.assess().boundary).toEqual({ state: "lost" });
+		expect(f.assess().boundary).toEqual({
+			state: "lost",
+			position: null,
+			file: null,
+			line: null,
+		});
 	});
 	test("empty current headings fall back to archived entries", () => {
 		const f = fixture({

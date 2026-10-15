@@ -1,4 +1,9 @@
-import { fallbackSections, readCheckpoint } from "./checkpoint";
+import {
+	checkpointBoundary,
+	classifyChanges,
+	fallbackSections,
+	readCheckpoint,
+} from "./checkpoint";
 import {
 	captureState,
 	checkpointToken,
@@ -96,17 +101,14 @@ function refusedRange(held: HeldState): {
 	const from = held.chain.findIndex(
 		(entry) => entry.id === held.checkpoint?.journal.from,
 	);
-	const to = held.chain.findIndex(
-		(entry) => entry.id === held.checkpoint?.journal.to,
-	);
-	const found =
-		held.status === "ok" &&
-		held.checkpoint !== undefined &&
-		((held.checkpoint.journal.from === null &&
-			held.checkpoint.journal.to === null) ||
-			(from >= 0 && to >= from));
+	const position =
+		held.status === "ok" && held.checkpoint
+			? checkpointBoundary(held.chain, held.checkpoint.journal).position
+			: null;
+	const found = position !== null;
 	const first = fallbackSections("", held.chain, [])[0]?.entries[0];
-	const start = found ? to + 1 : first ? held.chain.indexOf(first) : 0;
+	const start =
+		position !== null ? position : first ? held.chain.indexOf(first) : 0;
 	return {
 		entries: held.chain.slice(start),
 		uncertified: found ? Math.max(0, from) : start,
@@ -115,33 +117,21 @@ function refusedRange(held: HeldState): {
 }
 function dryRun(workspace: Workspace, toolEnv: ToolEnv, json: boolean): Result {
 	const held = captureState(workspace, toolEnv);
-	const changed = Object.keys(held.files)
-		.sort()
-		.flatMap((path) => {
-			const file = held.files[path];
-			if (!file) return [];
-			const before =
-				held.status === "ok" ? (held.checkpoint?.files[path] ?? null) : null;
-			if (before === file.hash) return [];
-			const text =
-				file.bytes === null
-					? undefined
-					: Buffer.from(file.bytes).toString("utf8");
-			return [
-				{
-					path,
-					kind: file.hash?.startsWith("unsafe:")
-						? "unsafe"
-						: file.hash === null
-							? "removed"
-							: before === null
-								? "appeared"
-								: "changed",
-					words: text === undefined ? 0 : words(text),
-					...(text === undefined ? {} : { text }),
-				},
-			];
-		});
+	const before = held.status === "ok" ? (held.checkpoint?.files ?? {}) : {};
+	const after = Object.fromEntries(
+		Object.entries(held.files).map(([path, file]) => [path, file.hash]),
+	);
+	const changed = classifyChanges(before, after).map((change) => {
+		const bytes = held.files[change.path]?.bytes;
+		const text =
+			bytes == null ? undefined : Buffer.from(bytes).toString("utf8");
+		return {
+			path: change.path,
+			kind: change.kind,
+			words: text === undefined ? 0 : words(text),
+			...(text === undefined ? {} : { text }),
+		};
+	});
 	const status = lockStatus(workspace.state, toolEnv);
 	const lock =
 		status.status === "free"
