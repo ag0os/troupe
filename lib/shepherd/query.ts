@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import { basename, join, posix, relative, resolve, sep } from "node:path";
 import {
+	type Checkpoint,
 	FIXED_PATHS,
 	hashPaths,
 	localPath,
@@ -493,27 +494,80 @@ function livePaths(state: string): {
 	return { paths, refused };
 }
 
-function collectCheckpoint({ target }: QueryContext): Collected {
-	const problems: QueryProblem[] = [];
-	const checked = recordPath(target.state, "checkpoint.json");
-	let read: ReturnType<typeof readCheckpoint>;
+type CheckpointRecord = {
+	read: ReturnType<typeof readCheckpoint>;
+	problems: QueryProblem[];
+};
+
+/** The checkpoint through the record check, with the problems it gives. */
+function checkpointRecord(state: string): CheckpointRecord {
+	const checked = recordPath(state, "checkpoint.json");
 	if (checked.status === "unsafe") {
-		read = { status: "invalid", reason: `${checked.file} ${checked.reason}` };
-		problems.push(unsafe(checked.file, checked.reason));
-	} else if (checked.status === "missing") {
-		read = { status: "none" };
-	} else {
-		read = readCheckpoint(target.state);
-		if (read.status === "invalid") {
-			problems.push(
-				problem(
-					"checkpoint-invalid",
-					"checkpoint.json",
-					`invalid checkpoint: ${read.reason}`,
-				),
-			);
-		}
+		return {
+			read: { status: "invalid", reason: `${checked.file} ${checked.reason}` },
+			problems: [unsafe(checked.file, checked.reason)],
+		};
 	}
+	if (checked.status === "missing") {
+		return { read: { status: "none" }, problems: [] };
+	}
+	const read = readCheckpoint(state);
+	return {
+		read,
+		problems:
+			read.status === "invalid"
+				? [
+						problem(
+							"checkpoint-invalid",
+							"checkpoint.json",
+							`invalid checkpoint: ${read.reason}`,
+						),
+					]
+				: [],
+	};
+}
+
+type Chain = ReturnType<typeof journalChain>;
+
+function chainProblems(chain: Chain): QueryProblem[] {
+	return chain.unreadable.map((entry) =>
+		problem(
+			"journal-unreadable",
+			entry.file,
+			`${entry.file} ${entry.reason}`,
+			entry.line,
+		),
+	);
+}
+
+/**
+ * Where the certified journal ends in the chain, by the assessCheckpoint
+ * rule: found only when both cursors are in the chain, in order.
+ */
+function checkpointBoundary(
+	entries: Chain["entries"],
+	journal: Checkpoint["journal"],
+): Boundary {
+	const { from, to } = journal;
+	if (from === null && to === null) {
+		return { state: "null", position: 0, file: null, line: null };
+	}
+	const fromIndex = entries.findIndex(({ id }) => id === from);
+	const toIndex = entries.findIndex(({ id }) => id === to);
+	const certified = entries[toIndex];
+	if (from !== null && fromIndex >= 0 && certified && toIndex >= fromIndex) {
+		return {
+			state: "found",
+			position: toIndex + 1,
+			file: certified.file,
+			line: certified.line,
+		};
+	}
+	return { state: "lost", position: null, file: null, line: null };
+}
+
+function collectCheckpoint({ target }: QueryContext): Collected {
+	const { read, problems } = checkpointRecord(target.state);
 	const checkpoint = read.status === "ok" ? read.checkpoint : undefined;
 	let boundary: Boundary = {
 		state: "none",
@@ -521,44 +575,15 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 		file: null,
 		line: null,
 	};
-	let chain: ReturnType<typeof journalChain> | undefined;
+	let chain: Chain | undefined;
 	let entriesSince: number | null = null;
 	let changed: Changed[] | null = null;
 	let compared: number | null = null;
 	if (checkpoint) {
 		chain = journalChain(target.state);
-		for (const entry of chain.unreadable) {
-			problems.push(
-				problem(
-					"journal-unreadable",
-					entry.file,
-					`${entry.file} ${entry.reason}`,
-					entry.line,
-				),
-			);
-		}
+		problems.push(...chainProblems(chain));
 		const { entries } = chain;
-		const { from, to } = checkpoint.journal;
-		const fromIndex = entries.findIndex(({ id }) => id === from);
-		const toIndex = entries.findIndex(({ id }) => id === to);
-		const certified = entries[toIndex];
-		if (from === null && to === null) {
-			boundary = { state: "null", position: 0, file: null, line: null };
-		} else if (
-			from !== null &&
-			fromIndex >= 0 &&
-			certified &&
-			toIndex >= fromIndex
-		) {
-			boundary = {
-				state: "found",
-				position: toIndex + 1,
-				file: certified.file,
-				line: certified.line,
-			};
-		} else {
-			boundary = { state: "lost", position: null, file: null, line: null };
-		}
+		boundary = checkpointBoundary(entries, checkpoint.journal);
 		if (boundary.position !== null && chain.unreadable.length === 0) {
 			entriesSince = entries
 				.slice(boundary.position)
@@ -646,12 +671,176 @@ function collectCheckpoint({ target }: QueryContext): Collected {
 	};
 }
 
+type SinceField = {
+	kind:
+		| "checkpoint"
+		| "checkpoint-null"
+		| "checkpoint-invalid"
+		| "none"
+		| "id"
+		| "date";
+	id: string | null;
+	day: string | null;
+	found: boolean | null;
+	file: string | null;
+	line: number | null;
+};
+
+function since(
+	kind: SinceField["kind"],
+	fields: Partial<Omit<SinceField, "kind">> = {},
+): SinceField {
+	return {
+		kind,
+		id: null,
+		day: null,
+		found: null,
+		file: null,
+		line: null,
+		...fields,
+	};
+}
+
+function at({ file, line }: { file: string; line: number }): string {
+	return `${file}:${line}`;
+}
+
+function sinceLine({ kind, id, day, found }: SinceField): string {
+	if (kind === "checkpoint") {
+		return found
+			? `[since checkpoint ${id}]`
+			: `[checkpoint cursor ${id} lost; newest entries]`;
+	}
+	if (kind === "checkpoint-null") {
+		return "[since the start; the checkpoint certifies no entries]";
+	}
+	if (kind === "checkpoint-invalid") {
+		return "[checkpoint invalid; newest entries]";
+	}
+	if (kind === "none") return "[no checkpoint; newest entries]";
+	if (kind === "id") return found ? `[since ${id}]` : `[cursor ${id} lost]`;
+	return `[since ${day}]`;
+}
+
+function collectJournal({ request, target }: QueryContext): Collected {
+	const problems: QueryProblem[] = [];
+	const chain = journalChain(target.state);
+	const { entries } = chain;
+	const missing =
+		!chain.files.includes("journal.md") &&
+		!chain.unreadable.some(({ file }) => file === "journal.md");
+	if (missing) {
+		problems.push(
+			problem("journal-missing", "journal.md", "journal.md is missing"),
+		);
+	}
+	problems.push(...chainProblems(chain));
+
+	let cursor: SinceField;
+	let matched = entries;
+	const cursorLost = (file: string, message: string) =>
+		problems.push(problem("cursor-lost", file, message));
+	if (request.since?.kind === "id") {
+		const { id } = request.since;
+		const index = entries.findIndex((entry) => entry.id === id);
+		const entry = entries[index];
+		if (entry) {
+			cursor = since("id", {
+				id,
+				found: true,
+				file: entry.file,
+				line: entry.line,
+			});
+			matched = entries.slice(index + 1);
+		} else {
+			cursor = since("id", { id, found: false });
+			matched = [];
+			cursorLost("journal.md", `journal id ${id} is not in the chain`);
+		}
+	} else if (request.since?.kind === "date") {
+		const { day } = request.since;
+		cursor = since("date", { day });
+		matched = entries.filter(
+			(entry) => entry.day !== undefined && entry.day >= day,
+		);
+	} else {
+		const record = checkpointRecord(target.state);
+		problems.push(...record.problems);
+		if (record.read.status === "none") cursor = since("none");
+		else if (record.read.status === "invalid") {
+			cursor = since("checkpoint-invalid");
+		} else {
+			const { journal } = record.read.checkpoint;
+			const boundary = checkpointBoundary(entries, journal);
+			if (boundary.state === "null") cursor = since("checkpoint-null");
+			else if (boundary.state === "found") {
+				cursor = since("checkpoint", {
+					id: journal.to,
+					found: true,
+					file: boundary.file,
+					line: boundary.line,
+				});
+				matched = entries.slice(boundary.position ?? 0);
+			} else {
+				cursor = since("checkpoint", { id: journal.to, found: false });
+				cursorLost(
+					"checkpoint.json",
+					`the checkpoint's journal cursors ${journal.from} to ${journal.to} are not in the chain in order`,
+				);
+			}
+		}
+	}
+
+	const kept = request.max === "all" ? matched : matched.slice(-request.max);
+	const omitted = matched.slice(0, matched.length - kept.length);
+	const first = omitted[0];
+	const last = omitted.at(-1);
+	const truncated =
+		first && last
+			? { omitted: omitted.length, from: at(first), to: at(last) }
+			: null;
+
+	const text = [
+		sinceLine(cursor),
+		...kept.map((entry) => `${at(entry)} ${entry.id} ${entry.text}`),
+	];
+	if (kept.length === 0) text.push("no entries");
+	if (truncated) {
+		text.push(
+			`${truncated.omitted} older ${truncated.omitted === 1 ? "entry" : "entries"} omitted: ${truncated.from} to ${truncated.to}`,
+		);
+	}
+	return {
+		fields: {
+			journal: {
+				status: missing ? "missing" : entries.length === 0 ? "empty" : "ok",
+			},
+			since: cursor,
+			files: chain.files,
+			unreadable: chain.unreadable,
+			entries: kept.map(({ id, file, line, day, time, text }) => ({
+				id,
+				file,
+				line,
+				day: day ?? null,
+				time: time ?? null,
+				text,
+			})),
+			count: chain.unreadable.length === 0 ? matched.length : null,
+			truncated,
+		},
+		problems,
+		text,
+	};
+}
+
 const COLLECTORS: Partial<
 	Record<QueryName, (context: QueryContext) => Collected | Promise<Collected>>
 > = {
 	items: collectItems,
 	item: collectItem,
 	autonomy: collectAutonomy,
+	journal: collectJournal,
 	checkpoint: collectCheckpoint,
 };
 

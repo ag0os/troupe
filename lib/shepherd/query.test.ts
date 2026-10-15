@@ -1119,6 +1119,361 @@ describe("tool query checkpoint", () => {
 	});
 });
 
+const SEVEN =
+	"## 2026-10-13\n- 10:00 started\n- 11:00 more\n- 12:00 last\n- 13:00 four\n- 14:00 five\n";
+
+async function journal(
+	fixture: ReturnType<typeof checkpointTree>,
+	flags: Record<string, string | boolean> = {},
+) {
+	return query(["journal"], fixture.env(fixture.a), flags);
+}
+
+function lines(json: { entries: { file: string; line: number }[] }): string[] {
+	return json.entries.map(({ file, line }) => `${file}:${line}`);
+}
+
+describe("tool query journal", () => {
+	test("reads entries after the checkpoint's boundary by default", async () => {
+		const fixture = checkpointTree();
+		const certified = fixture.certify(BOUNDARY);
+		const { code, json } = await journal(fixture);
+		expect(code).toBe(0);
+		expect(json).toMatchObject({
+			query: "journal",
+			problems: [],
+			journal: { status: "ok" },
+			since: {
+				kind: "checkpoint",
+				id: certified.journal.to,
+				found: true,
+				file: "journal.md",
+				line: 2,
+			},
+			files: ["archive/journal/2026-09.md", "journal.md"],
+			unreadable: [],
+			count: 2,
+			truncated: null,
+		});
+		const ids = journalChain(fixture.state).entries.map(({ id }) => id);
+		expect(json.entries).toEqual([
+			{
+				id: ids[3],
+				file: "journal.md",
+				line: 3,
+				day: "2026-10-13",
+				time: "11:00",
+				text: "11:00 more",
+			},
+			{
+				id: ids[4],
+				file: "journal.md",
+				line: 4,
+				day: "2026-10-13",
+				time: "12:00",
+				text: "12:00 last",
+			},
+		]);
+	});
+
+	test("reads from the start of the chain with null cursors", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(() => ({ from: null, to: null }));
+		const { code, json } = await journal(fixture);
+		expect(code).toBe(0);
+		expect(json.since).toMatchObject({ kind: "checkpoint-null" });
+		expect(json.count).toBe(5);
+		expect(lines(json)).toEqual([
+			"archive/journal/2026-09.md:2",
+			"archive/journal/2026-09.md:3",
+			"journal.md:2",
+			"journal.md:3",
+			"journal.md:4",
+		]);
+	});
+
+	test("returns the newest entries under an invalid checkpoint", async () => {
+		const fixture = checkpointTree({
+			"root/a/.shepherd/journal.md": SEVEN,
+			"root/a/.shepherd/checkpoint.json": '{"schema":2}',
+		});
+		const { code, json } = await journal(fixture, { max: "5" });
+		expect(code).toBe(1);
+		expect(codes(json)).toEqual(["checkpoint-invalid"]);
+		expect(json.since).toMatchObject({ kind: "checkpoint-invalid" });
+		expect(json.count).toBe(7);
+		expect(lines(json)).toEqual([
+			"journal.md:2",
+			"journal.md:3",
+			"journal.md:4",
+			"journal.md:5",
+			"journal.md:6",
+		]);
+		expect(json.truncated).toEqual({
+			omitted: 2,
+			from: "archive/journal/2026-09.md:2",
+			to: "archive/journal/2026-09.md:3",
+		});
+	});
+
+	test("returns the newest entries without a checkpoint", async () => {
+		const fixture = checkpointTree();
+		const { code, json } = await journal(fixture);
+		expect(code).toBe(0);
+		expect(json.problems).toEqual([]);
+		expect(json.since).toEqual({
+			kind: "none",
+			id: null,
+			day: null,
+			found: null,
+			file: null,
+			line: null,
+		});
+		expect(json.count).toBe(5);
+		expect(json.entries).toHaveLength(5);
+		expect(json.truncated).toBeNull();
+	});
+
+	test("tells a missing journal, an empty one and a rotated one apart", async () => {
+		const missing = checkpointTree();
+		fs.rmSync(join(missing.state, "journal.md"));
+		const empty = checkpointTree({
+			"root/a/.shepherd/journal.md": "# Journal\n\n## 2026-10-13\n",
+			"root/a/.shepherd/archive/journal/2026-09.md": "## 2026-09-30\n",
+		});
+		const rotated = checkpointTree({
+			"root/a/.shepherd/journal.md": "# Journal\n",
+		});
+
+		const lost = await journal(missing);
+		expect(lost.code).toBe(1);
+		expect(codes(lost.json)).toEqual(["journal-missing"]);
+		expect(lost.json.journal).toEqual({ status: "missing" });
+		expect(lost.json.files).toEqual(["archive/journal/2026-09.md"]);
+
+		const none = await journal(empty);
+		expect(none.code).toBe(0);
+		expect(none.json).toMatchObject({
+			problems: [],
+			journal: { status: "empty" },
+			entries: [],
+			count: 0,
+			truncated: null,
+		});
+
+		const after = await journal(rotated);
+		expect(after.code).toBe(0);
+		expect(after.json.journal).toEqual({ status: "ok" });
+		expect(lines(after.json)).toEqual([
+			"archive/journal/2026-09.md:2",
+			"archive/journal/2026-09.md:3",
+		]);
+	});
+
+	test("loses the cursor when the certified entries moved", async () => {
+		const edited = checkpointTree();
+		edited.certify(BOUNDARY);
+		fs.writeFileSync(
+			join(edited.state, "journal.md"),
+			JOURNAL.replace("10:00 started", "10:00 started, edited"),
+		);
+		const pruned = checkpointTree();
+		pruned.certify(BOUNDARY);
+		fs.rmSync(join(pruned.state, "archive", "journal", "2026-09.md"));
+		const reversed = checkpointTree();
+		reversed.certify((ids) => ({
+			from: ids[2] as string,
+			to: ids[0] as string,
+		}));
+		for (const [fixture, count] of [
+			[edited, 5],
+			[pruned, 3],
+			[reversed, 5],
+		] as const) {
+			const { code, json } = await journal(fixture, { max: "2" });
+			expect(code).toBe(1);
+			expect(codes(json)).toEqual(["cursor-lost"]);
+			expect(json.since).toMatchObject({
+				kind: "checkpoint",
+				found: false,
+				file: null,
+				line: null,
+			});
+			expect(json.count).toBe(count);
+			expect(lines(json)).toEqual(["journal.md:3", "journal.md:4"]);
+			expect(json.truncated.omitted).toBe(count - 2);
+		}
+	});
+
+	test("reads after an id in the archive month and loses an unknown one", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(() => ({ from: null, to: null }));
+		const ids = journalChain(fixture.state).entries.map(({ id }) => id);
+		const { code, json } = await journal(fixture, { since: ids[1] as string });
+		expect(code).toBe(0);
+		expect(json.since).toEqual({
+			kind: "id",
+			id: ids[1],
+			day: null,
+			found: true,
+			file: "archive/journal/2026-09.md",
+			line: 3,
+		});
+		expect(json.count).toBe(3);
+		expect(lines(json)).toEqual([
+			"journal.md:2",
+			"journal.md:3",
+			"journal.md:4",
+		]);
+
+		const unknown = await journal(fixture, { since: "0123456789" });
+		expect(unknown.code).toBe(1);
+		expect(codes(unknown.json)).toEqual(["cursor-lost"]);
+		expect(unknown.json).toMatchObject({
+			since: { kind: "id", id: "0123456789", found: false },
+			entries: [],
+			count: 0,
+			truncated: null,
+		});
+	});
+
+	test("reads from a date, leaving out entries above the first heading", async () => {
+		const fixture = checkpointTree({
+			"root/a/.shepherd/journal.md": `- 08:00 above the heading\n\n${JOURNAL}`,
+		});
+		const all = await journal(fixture);
+		expect(all.json.entries[2]).toMatchObject({
+			file: "journal.md",
+			line: 1,
+			day: null,
+			time: "08:00",
+			text: "08:00 above the heading",
+		});
+		expect(all.json.count).toBe(6);
+
+		const { code, json } = await journal(fixture, { since: "2026-10-01" });
+		expect(code).toBe(0);
+		expect(json.since).toEqual({
+			kind: "date",
+			id: null,
+			day: "2026-10-01",
+			found: null,
+			file: null,
+			line: null,
+		});
+		expect(lines(json)).toEqual([
+			"journal.md:4",
+			"journal.md:5",
+			"journal.md:6",
+		]);
+		expect((await journal(fixture, { since: "2026-09-30" })).json.count).toBe(
+			5,
+		);
+	});
+
+	test("keeps the newest --max entries and reports the omitted range", async () => {
+		const fixture = checkpointTree();
+		const { code, json } = await journal(fixture, { max: "2" });
+		expect(code).toBe(0);
+		expect(json.count).toBe(5);
+		expect(lines(json)).toEqual(["journal.md:3", "journal.md:4"]);
+		expect(json.truncated).toEqual({
+			omitted: 3,
+			from: "archive/journal/2026-09.md:2",
+			to: "journal.md:2",
+		});
+		const all = await journal(fixture, { max: "all" });
+		expect(all.json.entries).toHaveLength(5);
+		expect(all.json.truncated).toBeNull();
+	});
+
+	test("refuses bad --max and --since values before any filesystem call", async () => {
+		const fixture = checkpointTree();
+		const env = fixture.env(fixture.a);
+		for (const [flags, message] of [
+			[{ max: "0" }, "invalid --max: 0"],
+			[{ max: "x" }, "invalid --max: x"],
+			[{ since: "7D6341BB91" }, "invalid --since: 7D6341BB91"],
+			[{ since: "2026-02-30" }, "invalid --since: 2026-02-30"],
+		] as const) {
+			const { value, calls } = await spyFs(() =>
+				runTool(["query", "journal"], flags, env),
+			);
+			expect(value).toMatchObject({ code: 2, stream: "stderr" });
+			expect(value.text).toContain(message);
+			expect(calls).toEqual([]);
+		}
+		expect(
+			await runTool(["query", "items"], { since: "2026-10-01" }, env),
+		).toMatchObject({ code: 2 });
+	});
+
+	test("an open fence in an archive month makes the count unknown", async () => {
+		const fixture = checkpointTree();
+		fs.appendFileSync(
+			join(fixture.state, "archive", "journal", "2026-09.md"),
+			"```\nopen fence\n",
+		);
+		const { code, json } = await journal(fixture);
+		expect(code).toBe(1);
+		expect(codes(json)).toEqual(["journal-unreadable"]);
+		expect(json.problems[0]).toMatchObject({
+			file: "archive/journal/2026-09.md",
+			line: 4,
+		});
+		expect(json.unreadable).toHaveLength(1);
+		expect(json.count).toBeNull();
+	});
+
+	test("refuses a symlinked journal without reading its target", async () => {
+		const fixture = checkpointTree({ "outside/journal.md": JOURNAL });
+		const path = join(fixture.state, "journal.md");
+		fs.rmSync(path);
+		fs.symlinkSync(join(fixture.base, "outside", "journal.md"), path);
+		const { value, calls } = await spyFs(() => journal(fixture));
+		expect(value.code).toBe(1);
+		expect(codes(value.json)).toEqual(["journal-unreadable"]);
+		expect(value.json.journal).toEqual({ status: "ok" });
+		expect(
+			calls.filter(
+				({ fn, path: called }) =>
+					called.includes(`${sep}outside`) ||
+					(fn === "readFileSync" && called === path),
+			),
+		).toEqual([]);
+	});
+
+	test("renders the text form", async () => {
+		const fixture = checkpointTree();
+		const certified = fixture.certify(BOUNDARY);
+		const ids = journalChain(fixture.state).entries.map(({ id }) => id);
+		const output = await runTool(
+			["query", "journal"],
+			{ max: "1" },
+			fixture.env(fixture.a),
+		);
+		expect(output).toEqual({
+			text: [
+				`[since checkpoint ${certified.journal.to}]`,
+				`journal.md:4 ${ids[4]} 12:00 last`,
+				"1 older entry omitted: journal.md:3 to journal.md:3",
+				"",
+			].join("\n"),
+			code: 0,
+			stream: "stdout",
+		});
+		expect(
+			(
+				await runTool(
+					["query", "journal"],
+					{ since: "2026-10-14" },
+					fixture.env(fixture.a),
+				)
+			).text,
+		).toBe("[since 2026-10-14]\nno entries\n");
+	});
+});
+
 describe("tool query read contract", () => {
 	test("items reads the user config and only CURRENT and link targets", async () => {
 		const fixture = contractTree();
@@ -1203,5 +1558,33 @@ describe("tool query read contract", () => {
 			fn: "readFileSync",
 			path: join(fixture.a, ".shepherd", "charter.md"),
 		});
+	});
+
+	test("journal reads the checkpoint and the journal chain only", async () => {
+		const fixture = checkpointTree();
+		fixture.certify(BOUNDARY);
+		const records =
+			/^(checkpoint\.json|journal\.md|archive\/journal\/\d{4}-\d{2}\.md)$/;
+		for (const flags of [{}, { since: "2026-10-01" }] as Record<
+			string,
+			string
+		>[]) {
+			const { value, calls } = await spyFs(() =>
+				query(["journal"], fixture.env(fixture.a), flags),
+			);
+			expect(value.code).toBe(0);
+			expectContract(calls, fixture, fixture.a, (path, call) => {
+				if (call.fn === "readdirSync") return path === "archive/journal";
+				if (call.fn === "readFileSync") return records.test(path);
+				return (
+					call.fn === "lstatSync" &&
+					(records.test(path) || /^archive(\/journal)?$/.test(path))
+				);
+			});
+			expect(calls).toContainEqual({
+				fn: "readFileSync",
+				path: join(fixture.a, ".shepherd", "journal.md"),
+			});
+		}
 	});
 });
