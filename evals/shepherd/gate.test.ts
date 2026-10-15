@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	setDefaultTimeout,
+	test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -43,6 +50,10 @@ import {
 import { validateDecisions } from "./scorer";
 import { invocation, projectDirName, scorerOutput } from "./testing";
 import { verifyResults } from "./verify";
+
+// Each test runs the gate end to end with fake subjects and scorers; Linux CI
+// runners take up to 5 s for one.
+setDefaultTimeout(60_000);
 
 const rubric = loadRubric();
 const TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"];

@@ -929,7 +929,7 @@ describe("mechanical outcomes are invariant under export (R2)", () => {
 			) {
 				expect(Object.values(before)).toContain("fail");
 			}
-		});
+		}, 60_000);
 	}
 
 	test("a malformed line stops the mechanical checks before and after export alike (fix round 5, round 2)", () => {
@@ -954,7 +954,7 @@ describe("mechanical outcomes are invariant under export (R2)", () => {
 				(r) => [r.callId, r.markers],
 			);
 		expect(facts(to)).toEqual(facts(raw));
-	});
+	}, 60_000);
 
 	test("a 2.1.300 log keeps every outcome, its binary proof, model and cost through export (fix round 5)", () => {
 		const session = "5e55a0b1-0000-4000-8000-000000000001";
@@ -1032,7 +1032,7 @@ describe("mechanical outcomes are invariant under export (R2)", () => {
 				});
 			}
 		}
-	});
+	}, 60_000);
 });
 
 describe("escaped slashes (fix round 4, H1)", () => {
