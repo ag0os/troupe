@@ -9,8 +9,11 @@ import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
 import { lockStatus } from "./lock";
-import { currentItems } from "./query-items";
-import type { ToolEnv } from "./sessions";
+import { currentItems, updatedName } from "./query-items";
+import { sessionPrefixFor } from "./session-name";
+import { sessionView } from "./session-view";
+import { claudeRegistry, namedSessions, type ToolEnv } from "./sessions";
+import { listedSessions } from "./status-parse";
 import {
 	frontmatter,
 	journalChain,
@@ -301,6 +304,33 @@ export function checkWorkspace(
 			}
 		}
 
+		const claude = namedSessions(claudeRegistry(probe));
+		if (claude.available) {
+			const hasChildren = tree.workspaces.some(
+				(other) => other !== workspace && isBeneath(workspace.dir, other.dir),
+			);
+			const view = sessionView({
+				listed: listedSessions(text),
+				running: claude.sessions,
+				sources: { claude: { available: true } },
+				workspace: {
+					dir: workspace.dir,
+					hasChildren,
+					prefix: sessionPrefixFor(
+						workspace.dir,
+						config.sessionPrefix,
+						hasChildren,
+					),
+				},
+				writer:
+					checkpoint.status === "ok"
+						? (checkpoint.checkpoint.session ?? null)
+						: null,
+				updatedName: updatedName(text),
+			});
+			for (const drift of view.drift)
+				add("warn", drift.code, current, drift.message, drift.line);
+		}
 		const entries = currentItems(text);
 		for (const problem of entries.problems) {
 			if (problem.code === "entry-off-shape")

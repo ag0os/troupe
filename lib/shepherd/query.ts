@@ -1,4 +1,5 @@
 import { basename, join, posix, relative, resolve, sep } from "node:path";
+import { callerSession } from "./caller";
 import {
 	type Changed,
 	type Boundary as CheckpointBoundary,
@@ -24,6 +25,7 @@ import {
 	type ParseProblem,
 	type StatusProjection,
 	statusProjection,
+	updatedName,
 } from "./query-items";
 import {
 	changedPaths,
@@ -33,12 +35,15 @@ import {
 	recordPath,
 } from "./query-read";
 import { sessionPrefixFor } from "./session-name";
+import { sessionView } from "./session-view";
 import {
 	type CodexIndex,
 	claudeRegistry,
+	codexAgents,
 	codexIndex,
 	type HerdrResult,
 	herdrSessions,
+	namedSessions,
 	type RegistryResult,
 	type ToolEnv,
 } from "./sessions";
@@ -503,11 +508,12 @@ function listedEntries(text: string): ListedEntry[] {
 
 /** The sessions query for one workspace, from sources already read. */
 function sessionsFrom(
-	{ toolEnv, target }: QueryContext,
+	{ toolEnv, target, config }: QueryContext,
 	sources: SessionSources,
 ): Collected {
 	const problems: QueryProblem[] = [];
 	let listed: ListedEntry[] = [];
+	let currentText = "";
 	const current = readRecord(target.state, "CURRENT.md");
 	if (current.status === "missing") {
 		problems.push(
@@ -523,6 +529,7 @@ function sessionsFrom(
 			);
 		}
 		listed = listedEntries(current.text);
+		currentText = current.text;
 	}
 
 	const own = workspaceConfig(toolEnv, target);
@@ -585,7 +592,8 @@ function sessionsFrom(
 					kind === "claude" && sessionId !== null
 						? registryNames.get(sessionId)
 						: undefined;
-				const name = threadName ?? label ?? registryName ?? null;
+				const name =
+					(kind === "claude" ? registryName : threadName) ?? label ?? null;
 				return [
 					{
 						agent: kind,
@@ -640,6 +648,35 @@ function sessionsFrom(
 		}
 	}
 
+	const caller = callerSession(
+		toolEnv,
+		target,
+		{
+			...config,
+			sessionPrefix:
+				own.status === "ok" ? own.config?.sessionPrefix : config.sessionPrefix,
+		},
+		hasChildren,
+	);
+	const claudeRunning = namedSessions(claude);
+	const codexRunning = codexAgents(herdr, codex?.names ?? new Map());
+	const { read } = checkpointRecord(target.state);
+	const drift =
+		prefix === null
+			? []
+			: sessionView({
+					listed,
+					running: [
+						...(claudeRunning.available ? claudeRunning.sessions : []),
+						...(codexRunning.available ? codexRunning.sessions : []),
+					],
+					sources: { claude: claudeRunning, codex: codexRunning },
+					workspace: { dir: target.dir, hasChildren, prefix },
+					writer:
+						read.status === "ok" ? (read.checkpoint.session ?? null) : null,
+					updatedName: updatedName(currentText),
+				}).drift;
+
 	const marks = (name: string | null) => {
 		const entry = listedAs(name);
 		const match = prefixMatch(name);
@@ -654,6 +691,7 @@ function sessionsFrom(
 	};
 	const text = [
 		`prefix: ${prefix ?? "unknown"}`,
+		`caller: ${caller.name ?? "none"} (${caller.role})`,
 		...listed.map((entry) => {
 			const flags = (["retired", "subagent", "codex"] as const).filter(
 				(flag) => entry[flag],
@@ -677,11 +715,14 @@ function sessionsFrom(
 		codex
 			? `codex names: ${plural(codex.homes.length, "index", "indexes")} read${codex.failures.length > 0 ? `, ${codex.failures.length} failed` : ""}`
 			: "codex names: not consulted",
+		...drift.map(({ code, message }) => `drift ${code} ${message}`),
 	];
 	return {
 		fields: {
 			prefix,
 			hasChildren,
+			caller,
+			drift,
 			listed,
 			claude: {
 				available: claude.available,

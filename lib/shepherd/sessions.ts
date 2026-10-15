@@ -114,9 +114,8 @@ export function claudeRegistry(toolEnv: ToolEnv): RegistryResult {
 	return { available: true, sessions };
 }
 
-/** Live Claude sessions from the harness registry. */
-export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
-	const registry = claudeRegistry(toolEnv);
+/** The named registry entries as running Claude sessions. */
+export function namedSessions(registry: RegistryResult): AdapterResult {
 	if (!registry.available) return registry;
 	return {
 		available: true,
@@ -126,6 +125,11 @@ export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
 				: [{ name, cwd: cwd ?? "", status: status ?? "?", harness: "claude" }],
 		),
 	};
+}
+
+/** Live Claude sessions from the harness registry. */
+export function claudeSessions(toolEnv: ToolEnv): AdapterResult {
+	return namedSessions(claudeRegistry(toolEnv));
 }
 
 /** Newest Claude transcript modification time for sessions launched in cwd. */
@@ -340,13 +344,12 @@ export function codexThreadNames(
 	return codexIndex(toolEnv, config).names;
 }
 
-function codexSessions(
-	toolEnv: ToolEnv,
-	config: Config,
+/** Herdr's Codex agents as running sessions, named from the Codex index. */
+export function codexAgents(
 	herdr: HerdrResult,
+	names: ReadonlyMap<string, string>,
 ): AdapterResult {
 	if (!herdr.available) return { available: false, reason: herdr.reason };
-	const names = codexThreadNames(toolEnv, config);
 	const sessions = (herdr.agents ?? [])
 		.filter((agent) => agent.agent === "codex")
 		.map((agent): Running => {
@@ -363,6 +366,15 @@ function codexSessions(
 			};
 		});
 	return { available: true, sessions };
+}
+
+function codexSessions(
+	toolEnv: ToolEnv,
+	config: Config,
+	herdr: HerdrResult,
+): AdapterResult {
+	if (!herdr.available) return { available: false, reason: herdr.reason };
+	return codexAgents(herdr, codexThreadNames(toolEnv, config));
 }
 
 /** Collect running sessions and the availability of all three sources. */

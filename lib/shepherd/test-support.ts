@@ -128,3 +128,76 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
 		...overrides,
 	};
 }
+
+export const IDENTITY_SESSION = "0f3c2a71-5b2e-4a8e-9d55-3f1e2b9c7a10";
+
+/**
+ * A workspace "forge" (prefix forge) whose CURRENT lists `listed` live and
+ * names it on the Updated: line, certified by `writer`, while the Claude
+ * registry runs `running` in the workspace as pid 4242, the caller.
+ */
+export async function identityFixture({
+	listed,
+	writer,
+	running,
+	extraRunning = [],
+	herdrAgents,
+}: {
+	listed: string;
+	writer: string;
+	running: string;
+	extraRunning?: { pid: number; name: string; cwd?: string }[];
+	herdrAgents?: (dir: string) => unknown[];
+}) {
+	const tree = makeTree({
+		"xdg/shepherd/config.json": "{}",
+		"forge/.shepherd/charter.md": "# forge\n",
+		"forge/.shepherd/config.json": '{"sessionPrefix":"forge"}',
+		"forge/.shepherd/journal.md": "## 2026-10-15\n- 09:00 started\n",
+		"forge/.shepherd/CURRENT.md": `# Current\nUpdated: 2026-10-15 09:00, ${listed}\n\n## Items\n- **NEXT** carry on\n\n## Live sessions\n- ${listed}: Claude Code, Shepherd\n`,
+	});
+	const dir = join(tree.root, "forge");
+	const home = join(tree.root, "home");
+	const workspace = { name: "forge", dir, state: join(dir, ".shepherd") };
+	const config = testConfig({ sessionPrefix: "forge" });
+	// Imported here so test-support stays light for tests that mock modules.
+	const { runCheckpoint } = await import("./checkpoint-command");
+	const { captureState } = await import("./checkpoint-write");
+	const quiet = fakeToolEnv({ home, cwd: dir });
+	const certified = await runCheckpoint(workspace, quiet, config, {
+		apply: true,
+		token: captureState(workspace, quiet).token,
+		session: writer,
+		json: false,
+	});
+	if (certified.code !== 0) throw new Error(certified.text);
+	const sessions = join(home, ".claude", "sessions");
+	mkdirSync(sessions, { recursive: true });
+	const entries = [
+		{ pid: 4242, name: running, sessionId: IDENTITY_SESSION, cwd: dir },
+		...extraRunning.map((entry) => ({
+			sessionId: `session-${entry.pid}`,
+			cwd: dir,
+			...entry,
+		})),
+	];
+	for (const entry of entries)
+		writeFileSync(
+			join(sessions, `${entry.pid}.json`),
+			JSON.stringify({ status: "idle", nameSource: "user", ...entry }),
+		);
+	const env = fakeToolEnv({
+		home,
+		cwd: dir,
+		alivePids: entries.map(({ pid }) => pid),
+		env: {
+			XDG_CONFIG_HOME: join(tree.root, "xdg"),
+			CLAUDE_PID: "4242",
+			CLAUDE_CODE_SESSION_ID: IDENTITY_SESSION,
+			...(herdrAgents ? { HERDR_ENV: "1" } : {}),
+		},
+		runCommand: async () =>
+			jsonCommandResult({ result: { agents: herdrAgents?.(dir) ?? [] } }),
+	});
+	return { ...tree, dir, home, workspace, config, env };
+}

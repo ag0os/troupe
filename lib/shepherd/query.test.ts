@@ -1365,7 +1365,7 @@ describe("tool query sessions", () => {
 		]);
 	});
 
-	test("keeps a Herdr label over a differently named registry twin", async () => {
+	test("names a Herdr Claude agent from its registry twin over its label", async () => {
 		const fixture = sessionsTree();
 		fixture.register([
 			{
@@ -1392,7 +1392,7 @@ describe("tool query sessions", () => {
 			expect.objectContaining({
 				sessionId: "c-2",
 				label: "ws-1014",
-				name: "ws-1014",
+				name: "other-name",
 			}),
 		]);
 	});
@@ -1519,6 +1519,7 @@ describe("tool query sessions", () => {
 		expect(await runTool(["query", "sessions"], {}, env)).toEqual({
 			text: [
 				"prefix: ws",
+				"caller: none (none)",
 				"listed ws-1013  CURRENT.md:7",
 				"listed ws-1012b (retired)  CURRENT.md:8",
 				"listed delegate-cdx-1 (codex)  CURRENT.md:9",
@@ -2503,7 +2504,7 @@ const ALLOWED = {
 						path,
 					)),
 	autonomy: ownFiles("config.json"),
-	sessions: ownFiles("CURRENT.md", "config.json"),
+	sessions: ownFiles("CURRENT.md", "config.json", "checkpoint.json"),
 	journal: chainReads(CHAIN),
 	"journal --since": chainReads(JOURNAL_FILES),
 	checkpoint: (path, call) => {

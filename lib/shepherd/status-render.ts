@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Config } from "./config";
 import { statusItems } from "./query-items";
 import type { AdapterResult, Running, RunningSessionsResult } from "./sessions";
 import { type LiveReport, liveReports, recordFreshness } from "./status";
@@ -45,8 +46,9 @@ export function statusReport(
 	tree: WorkspaceTree,
 	running: RunningSessionsResult,
 	home: string,
+	configs?: ReadonlyMap<string, Pick<Config, "sessionPrefix">>,
 ): StatusReport {
-	const reports = liveReports(workspaces, tree, running, home);
+	const reports = liveReports(workspaces, tree, running, home, configs);
 	return {
 		workspaces: workspaces.map((workspace) => {
 			const text = currentText(workspace);
@@ -57,6 +59,7 @@ export function statusReport(
 				unchecked: [],
 				retiredButRunning: [],
 				unlisted: [],
+				drift: [],
 			};
 			return {
 				name: workspace.name,
@@ -110,6 +113,7 @@ function liveLines(live: StatusLiveReport, home: string): string[] {
 			`  GONE      ${session.name} is listed (CURRENT.md:${session.line}) but not running`,
 		);
 	}
+	for (const drift of live.drift) lines.push(`  DRIFT     ${drift.message}`);
 	for (const session of live.retiredButRunning) {
 		lines.push(
 			`  RETIRED?  ${session.name} is listed as retired but still running (${session.status})`,

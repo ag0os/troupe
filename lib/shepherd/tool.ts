@@ -334,6 +334,7 @@ async function runCheck(
 			tree,
 			await runningSessions(toolEnv, config),
 			toolEnv.home,
+			configs,
 		);
 		return flags.json === true
 			? result(

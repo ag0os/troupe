@@ -121,6 +121,7 @@ test("returns the status JSON shape", () => {
 					],
 					retiredButRunning: [],
 					unlisted: [],
+					drift: [],
 					record: null,
 				},
 			},
