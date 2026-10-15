@@ -137,6 +137,17 @@ describe("runTool usage and validation", () => {
 			code: 2,
 			stream: "stderr",
 		});
+		expect(
+			await runTool(
+				["checkpoint"],
+				{},
+				{ ...env, env: { XDG_CONFIG_HOME: xdg } },
+			),
+		).toEqual({
+			text: `shepherd: ${configFile}: extra: unknown key\n`,
+			code: 2,
+			stream: "stderr",
+		});
 	});
 });
 
