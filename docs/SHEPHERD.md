@@ -228,7 +228,7 @@ The workspace lock serializes every writer: `tool journal`, `tool checkpoint --a
 
 `tool check` also warns on session identity and entry shape, from the same readers `query sessions` and `query items` use:
 
-- `session-unrecorded`: a Shepherd of this workspace runs (a live Claude registry entry in the workspace whose name has the prefix and was named by the user, not derived by Claude Code) that is not the checkpoint's writer, not the `Updated:` name and not listed in Live sessions, retired or not. The message names the running session and all three records.
+- `session-unrecorded`: a Shepherd of this workspace runs (a live Claude registry entry in the workspace whose name has the prefix and was not derived by Claude Code, its `nameSource` other than `derived`) that is not the checkpoint's writer, not the `Updated:` name and not listed in Live sessions, retired or not. The message names the running session and all three records. A session whose name Claude Code derived is never a running Shepherd; status JSON marks it `derived: true`, and `query sessions` does not mark it.
 - `session-gone`: a Shepherd name listed live, with the prefix, is not running. A name marked as a subagent is never `session-gone`. The message names the running Shepherd, if any. Check reads the Claude registry only; a listed Codex session stays unchecked there, and `check --status` and `query sessions`, which read Herdr, report its drift too.
 - `status-entry-off-shape`: an Items bullet starts with a bold run that begins with a status word but is not `**WORD**` or `**WORD:**`; `query items` skips it.
 - `items-section-missing`: CURRENT has no `## Items` section, so it has no entries.
