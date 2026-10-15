@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -21,6 +23,7 @@ import {
 import { PROMPT_SEPARATOR } from "../lib/agent-format/schema";
 import {
 	compileAgent,
+	generateEntry,
 	inspectExtension,
 	loadAgentDefinition,
 } from "./agent-compiler";
@@ -1002,4 +1005,68 @@ export async function prepare(ctx) {
 			rmSync(tmp, { recursive: true, force: true });
 		}
 	}, 60_000);
+});
+
+describe("dispatch export (O11, D1)", () => {
+	const recorder = (record: string) =>
+		`#!/bin/sh\nprintf '%s\\n' "$@" > "${record}"\nprintf '%s' "$SHEPHERD_PACKAGE" >> "${record}"\nexit 3\n`;
+
+	test("inspectExtension reports dispatch as a reserved export", () => {
+		expect(
+			inspectExtension("agents/x.ts", "export function dispatch() {}").exports,
+		).toEqual(["dispatch"]);
+	});
+
+	test("the generated entry calls dispatch before resolveVersion and resolveCli", async () => {
+		write("agents/fixture/routed.md", `${header}---\nBody\n`);
+		write(
+			"agents/fixture/routed.ts",
+			"export function dispatch() { return undefined; }\n",
+		);
+		const agent = await loadAgentDefinition(root, "agents/fixture/routed.md");
+		const entry = generateEntry(agent);
+		const call = entry.indexOf("await dispatchAndExit(spec, extension, process.argv.slice(2));");
+		expect(call).toBeGreaterThan(0);
+		expect(call).toBeLessThan(entry.indexOf("resolveCli(spec"));
+		write("agents/fixture/plain.md", `${header}---\nBody\n`);
+		const plain = await loadAgentDefinition(root, "agents/fixture/plain.md");
+		expect(generateEntry(plain)).not.toContain("dispatchAndExit");
+	});
+
+	test("a dispatched run skips the CLI parser: the tool gets every argument and its code is returned", async () => {
+		const record = join(root, "record.txt");
+		write("tools/recorder", recorder(record));
+		chmodSync(join(root, "tools/recorder"), 0o755);
+		write("agents/fixture/routed.md", `${header}---\nBody\n`);
+		write(
+			"agents/fixture/routed.ts",
+			`export function dispatch(argv: readonly string[], ctx: { cwd: string }) {\n\tif (argv[0] !== "tool" || argv[1] !== "pkg") return undefined;\n\treturn { exec: { file: ${JSON.stringify(join(root, "tools/recorder"))}, args: argv.slice(3), cwd: ctx.cwd, env: { SHEPHERD_PACKAGE: "pkg" } } };\n}\n`,
+		);
+		const agent = await loadAgentDefinition(root, "agents/fixture/routed.md");
+		const entry = join(root, "routed-entry.ts");
+		writeFileSync(entry, generateEntry(agent));
+		const child = Bun.spawnSync(
+			[
+				process.execPath,
+				entry,
+				"tool",
+				"pkg",
+				"publish-check",
+				"--base",
+				"main",
+				"--json",
+				"-h",
+			],
+			{ cwd: root, stdout: "pipe", stderr: "pipe" },
+		);
+		expect(child.stderr.toString()).toBe("");
+		expect(child.exitCode).toBe(3);
+		expect(readFileSync(record, "utf8")).toBe("--base\nmain\n--json\n-h\npkg");
+		// Anything dispatch declines still meets the framework parser.
+		const declined = Bun.spawnSync(
+			[process.execPath, entry, "--no-such-flag"],
+			{ cwd: root, stdout: "pipe", stderr: "pipe" },
+		);
+		expect(declined.exitCode).toBe(2);
+	});
 });
