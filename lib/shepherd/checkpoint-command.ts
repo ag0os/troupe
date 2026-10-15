@@ -403,7 +403,7 @@ export async function runCheckpoint(
 						? JSON.stringify({
 								...next,
 								applied: true,
-								writer: writerFacts(caller),
+								caller: writerFacts(caller),
 								updatedName:
 									updated.status === "rewritten"
 										? { before: updated.before, after: writer }

@@ -1084,6 +1084,20 @@ test("--session overrides the calling session and says so", async () => {
 		"writer: forge-1015 (--session; the calling session is forge-1014)",
 	);
 	expect(f.written()).toBe("forge-1015");
+	const g = called({ name: "forge-1014" });
+	const json = JSON.parse(
+		(
+			await g.run({
+				apply: true,
+				token: g.token(),
+				session: "forge-1015",
+				json: true,
+			})
+		).text,
+	);
+	expect(json.session).toBe("forge-1015");
+	expect(json.caller.name).toBe("forge-1014");
+	expect(json.writer).toBeUndefined();
 });
 
 test("apply rewrites only the Updated: name, and start is then clean", async () => {
