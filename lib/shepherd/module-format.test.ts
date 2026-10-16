@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { parseModule } from "./module-format";
+import { MAIL_TOOLS, packageText } from "./test-support";
 
 const fields = "name: sample\ntype: domain\ndescription: A sample\nbudget: 3\n";
 const annotated = (yaml = fields, body = "one two three\n") =>
@@ -164,4 +165,100 @@ test("comments after the first field remain valid YAML", () => {
 			"sample.md",
 		).problems,
 	).toEqual([]);
+});
+
+describe("package fields (O6)", () => {
+	const pkg = (extra: string, contract = "contract: 1\n") =>
+		parseModule(packageText("mail", extra, "body\n", contract), "mail.md", {
+			package: true,
+		});
+	const codes = (parsed: ReturnType<typeof parseModule>) =>
+		parsed.problems.map((p) => `${p.code}: ${p.message}`);
+
+	test("the contract's mail example parses", () => {
+		const parsed = pkg(MAIL_TOOLS);
+		expect(parsed.problems).toEqual([]);
+		expect(parsed.metadata?.contract).toBe(1);
+		expect(parsed.metadata?.tools?.unread?.access).toBe("read");
+		expect(parsed.metadata?.guides?.triage?.description).toBe(
+			"How to triage the inbox, in order",
+		);
+	});
+
+	test.each([
+		[
+			"access: execute",
+			"tools:\n  unread:\n    description: List\n    access: execute\n",
+			"tools.unread.access",
+		],
+		[
+			"a missing tool description",
+			"tools:\n  unread:\n    access: read\n",
+			"tools.unread.description",
+		],
+		[
+			"a tool name with uppercase",
+			"tools:\n  Unread:\n    description: List\n    access: read\n",
+			"tools",
+		],
+		[
+			"an unknown tool key",
+			"tools:\n  unread:\n    description: List\n    access: read\n    shell: true\n",
+			"tools.unread.shell",
+		],
+		[
+			"a non-boolean network",
+			"tools:\n  unread:\n    description: List\n    access: read\n    network: yes\n",
+			"tools.unread.network",
+		],
+		[
+			"requires that is not a list of names",
+			"tools:\n  unread:\n    description: List\n    access: read\n    requires: hey\n",
+			"tools.unread.requires",
+		],
+		[
+			"a guide without a description",
+			"guides:\n  triage: {}\n",
+			"guides.triage.description",
+		],
+	])("rejects %s", (_, extra, field) => {
+		const parsed = pkg(extra);
+		expect(parsed.metadata).toBeUndefined();
+		// The field is known in a package; only its value is wrong.
+		for (const key of ["tools", "guides"])
+			expect(codes(parsed)).not.toContain(`module-schema: ${key}: unknown key`);
+		expect(
+			codes(parsed).some((c) => c.startsWith(`module-schema: ${field}`)),
+		).toBe(true);
+	});
+
+	test("contract other than the integer 1 is package-contract", () => {
+		for (const contract of ["contract: 2\n", 'contract: "1"\n', ""]) {
+			const parsed = pkg("", contract);
+			expect(parsed.body).toBeUndefined();
+			expect(parsed.problems.map((p) => p.code)).toEqual(["package-contract"]);
+		}
+	});
+
+	test("contract, tools and guides are module-schema errors in an integrations file", () => {
+		for (const extra of [
+			"contract: 1\n",
+			"tools:\n  unread:\n    description: List\n    access: read\n",
+			"guides:\n  triage:\n    description: Triage\n",
+		]) {
+			const parsed = parseModule(
+				annotated(
+					`name: mail\ntype: domain\ndescription: Mail\nbudget: 3\n${extra}`,
+				),
+				"mail.md",
+			);
+			const key = extra.split(":")[0];
+			expect(codes(parsed)).toContain(
+				`module-schema: ${key}: allowed only in a package MODULE.md`,
+			);
+		}
+		// An integrations file that opens with a package key is annotated, not legacy.
+		const opening = parseModule("---\ncontract: 1\n---\nbody\n", "x.md");
+		expect(opening.kind).toBe("annotated");
+	});
 });

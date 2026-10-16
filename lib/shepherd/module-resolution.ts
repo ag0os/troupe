@@ -21,6 +21,12 @@ import {
 	parseModule,
 } from "./module-format";
 import {
+	type PackageLocation,
+	type PackageRecord,
+	packageLocations,
+	packageModules,
+} from "./package-resolution";
+import {
 	declaredModules,
 	findChildWorkspaces,
 	findEnclosingWorkspace,
@@ -34,6 +40,8 @@ export type ModuleCandidate = ParsedModule & {
 	path: string;
 	layer: "builtin" | "inherited" | "local";
 	raw: string;
+	/** Present for a package's MODULE.md (docs/PACKAGES.md). */
+	package?: PackageRecord;
 };
 export type ResolutionProblem = ModuleProblem & { file: string };
 export type ModuleCatalog = {
@@ -92,17 +100,29 @@ export function workspaceModules(
 			};
 		});
 }
+/**
+ * Every module a launch in `cwd` could load: the embedded built-ins, then
+ * base packages, the enclosing workspace's integrations and packages, and
+ * the workspace's own integrations. `published` counts enclosing packages
+ * as well as enclosing integrations.
+ */
 export function moduleCatalog(
 	cwd: string,
 	enclosing: string | undefined = findEnclosingWorkspace(cwd),
 	tolerateUnreadable = false,
+	locations: readonly PackageLocation[] = packageLocations(enclosing),
 ): ModuleCatalog {
-	const inherited = enclosing
-		? workspaceModules(enclosing, "inherited", tolerateUnreadable)
-		: [];
+	const packages = packageModules(locations, tolerateUnreadable);
+	const inherited = [
+		...(enclosing
+			? workspaceModules(enclosing, "inherited", tolerateUnreadable)
+			: []),
+		...packages.filter((m) => m.layer === "inherited"),
+	];
 	return {
 		candidates: [
 			...builtInModules(),
+			...packages.filter((m) => m.layer === "builtin"),
 			...inherited,
 			...workspaceModules(cwd, "local", tolerateUnreadable),
 		],
@@ -134,8 +154,11 @@ export function resolveModules(
 	);
 	const problems: ResolutionProblem[] = [];
 	for (const module of surviving) {
+		// Embedded built-ins are tested before a build; a package on disk
+		// may be edited after it, so its problems are reported (D12).
 		if (
 			module.layer === "builtin" &&
+			!module.package &&
 			(!module.metadata || module.problems.length)
 		)
 			throw new Error(

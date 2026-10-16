@@ -14,6 +14,12 @@ import {
 	moduleProblemDetails,
 	resolveModules,
 } from "./module-resolution";
+import {
+	type PackageLocation,
+	type PackageRecord,
+	packageLocations,
+	selectedPackages,
+} from "./package-resolution";
 import { defaultSessionName } from "./session-name";
 import { words } from "./text";
 import { CHILD_DEPTH, findEnclosingWorkspace, STATE_DIR } from "./workspace";
@@ -37,6 +43,34 @@ export function modelHeaderLine(
 	return `- Model: ${label}; handoff ceiling: ${handoffCeiling(config, backend, model)}% of context window; delegates: Claude ${handoffCeiling(config, "claude")}%, Codex ${handoffCeiling(config, "codex")}%, other backends ${handoffCeiling(config, "other")}%${overrides ? `; model overrides: ${overrides}` : ""}`;
 }
 
+/** The header lines that tell a session what its packages offer (D14). */
+export function packageHeaderLines(
+	packages: readonly PackageRecord[],
+): string[] {
+	const tools = packages.flatMap((p) =>
+		Object.entries(p.tools).map(
+			([tool, { access }]) => `${p.name} ${tool} (${access})`,
+		),
+	);
+	const guides = packages.flatMap((p) =>
+		Object.entries(p.guides).map(
+			([guide, { description }]) => `${p.name} ${guide} (${description})`,
+		),
+	);
+	return [
+		...(tools.length
+			? [
+					`- Package tools: ${tools.join(", ")}; run as shepherd tool <package> <tool> [args], --help for usage; read tools need no permission prompt on Claude`,
+				]
+			: []),
+		...(guides.length
+			? [
+					`- Package guides: ${guides.join(", ")}; read with shepherd tool guide <package> <guide>`,
+				]
+			: []),
+	];
+}
+
 export function composeFragments(
 	cwd: string,
 	backend: string,
@@ -44,15 +78,43 @@ export function composeFragments(
 	headerLines: readonly string[] = [],
 	now: Date = new Date(),
 	onProblems?: (details: string) => void,
+	locations?: readonly PackageLocation[],
 ): string[] {
-	const catalog = moduleCatalog(cwd, enclosing);
+	return composeSession(
+		cwd,
+		backend,
+		enclosing,
+		headerLines,
+		now,
+		onProblems,
+		locations,
+	).fragments;
+}
+
+/** The prompt fragments, plus the packages they select. */
+export function composeSession(
+	cwd: string,
+	backend: string,
+	enclosing: string | undefined,
+	headerLines: readonly string[] = [],
+	now: Date = new Date(),
+	onProblems?: (details: string) => void,
+	locations: readonly PackageLocation[] = packageLocations(enclosing),
+): { fragments: string[]; packages: PackageRecord[] } {
+	const catalog = moduleCatalog(cwd, enclosing, false, locations);
 	const { selected, problems } = resolveModules(catalog);
 	const { charter, children } = catalog;
 	const inherited = selected.filter((m) => m.layer === "inherited");
 	const locals = selected.filter((m) => m.layer === "local");
 	const builtins = selected.filter((m) => m.layer === "builtin");
-	const gated = builtins
-		.filter((m) => ["nested.md", "root.md", "software.md"].includes(m.name))
+	const packages = selectedPackages(selected);
+	const gated = selected
+		.filter(
+			(m) =>
+				m.package ||
+				(m.layer === "builtin" &&
+					["nested.md", "root.md", "software.md"].includes(m.name)),
+		)
 		.map((m) => m.metadata?.name);
 	const details = moduleProblemDetails(problems);
 	if (details) onProblems?.(details);
@@ -65,10 +127,16 @@ export function composeFragments(
 		`- Backend: ${backend}`,
 		...headerLines,
 		enclosing
-			? `- Enclosing workspace: ${enclosing} (inherited integrations: ${inherited.map((m) => m.name).join(", ") || "none"})`
+			? `- Enclosing workspace: ${enclosing} (inherited integrations: ${
+					inherited
+						.filter((m) => !m.package)
+						.map((m) => m.name)
+						.join(", ") || "none"
+				})`
 			: "- Enclosing workspace: none",
 		`- Workspaces beneath: ${children.join(", ") || `none within ${CHILD_DEPTH} levels`}`,
 		`- Gated modules loaded: ${gated.join(", ") || "none"}`,
+		...packageHeaderLines(packages),
 		charter
 			? "- Charter: loaded"
 			: "- Charter: none, this workspace is uninitiated",
@@ -78,14 +146,17 @@ export function composeFragments(
 		...(details ? [`- Module problems: ${details}`] : []),
 	].join("\n");
 
-	return [
-		coreDoc,
-		...builtins.map((m) => m.body ?? ""),
-		...inherited.map((m) => m.body ?? ""),
-		...locals.map((l) => l.body ?? ""),
-		...(charter ? [charter] : []),
-		header,
-	];
+	return {
+		fragments: [
+			coreDoc,
+			...builtins.map((m) => m.body ?? ""),
+			...inherited.map((m) => m.body ?? ""),
+			...locals.map((l) => l.body ?? ""),
+			...(charter ? [charter] : []),
+			header,
+		],
+		packages,
+	};
 }
 
 /** Estimate the default Claude system prompt for a workspace. */

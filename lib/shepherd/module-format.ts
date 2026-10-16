@@ -16,7 +16,21 @@ const FIELDS = new Set([
 	"default",
 	"budget",
 	"charter-keys",
+	"contract",
+	"tools",
+	"guides",
 ]);
+/** Fields only a package's MODULE.md may carry (docs/PACKAGES.md). */
+const PACKAGE_FIELDS = new Set(["contract", "tools", "guides"]);
+/** The package contract version this binary implements. */
+export const PACKAGE_CONTRACT = 1;
+export type ToolDeclaration = {
+	description: string;
+	access: "read" | "write";
+	requires: string[];
+	network: boolean;
+};
+export type GuideDeclaration = { description: string };
 export type ModuleProblem = { code: string; message: string; line?: number };
 export type ModuleMetadata = {
 	name: string;
@@ -31,6 +45,9 @@ export type ModuleMetadata = {
 	provides?: string;
 	default: boolean;
 	"charter-keys": Record<string, "required" | "optional">;
+	contract?: number;
+	tools?: Record<string, ToolDeclaration>;
+	guides?: Record<string, GuideDeclaration>;
 };
 export type ParsedModule = {
 	kind: "legacy" | "annotated" | "malformed";
@@ -40,7 +57,17 @@ export type ParsedModule = {
 	problems: ModuleProblem[];
 };
 
-export function parseModule(raw: string, filename: string): ParsedModule {
+/**
+ * Parse a module file. With `package`, the file is a package's MODULE.md:
+ * `contract` must be the integer 1 before anything else is checked, so a
+ * newer package is refused with one problem, and `tools` and `guides` are
+ * allowed. Elsewhere those three fields are schema errors.
+ */
+export function parseModule(
+	raw: string,
+	filename: string,
+	options: { package?: boolean } = {},
+): ParsedModule {
 	const lines = [...raw.matchAll(/([^\n]*)(?:\n|$)/g)].filter(
 		(m) => m[0].length > 0,
 	);
@@ -52,12 +79,26 @@ export function parseModule(raw: string, filename: string): ParsedModule {
 		bodyLine: 1,
 		problems: [],
 	};
-	if (lineText(0) !== "---") return legacy;
+	const uncontracted = (found: string): ParsedModule => ({
+		kind: "malformed",
+		body: undefined,
+		bodyLine: 1,
+		problems: [
+			{
+				code: "package-contract",
+				message: `contract: ${found}; this binary implements contract ${PACKAGE_CONTRACT}; package excluded`,
+				line: 1,
+			},
+		],
+	});
+	if (lineText(0) !== "---")
+		return options.package ? uncontracted("missing (no frontmatter)") : legacy;
 	const significant = lines.findIndex(
 		(_, i) => i > 0 && !/^[ \t]*$/.test(lineText(i)),
 	);
 	const signature = lineText(significant).match(/^([a-z-]+):(?:\s|$)/)?.[1];
-	if (!signature || !FIELDS.has(signature)) return legacy;
+	if (!signature || !FIELDS.has(signature))
+		return options.package ? uncontracted("missing (no frontmatter)") : legacy;
 	const close = lines.findIndex((_, i) => i > 0 && lineText(i) === "---");
 	if (close < 0)
 		return {
@@ -169,8 +210,24 @@ export function parseModule(raw: string, filename: string): ParsedModule {
 	};
 	const invalid = (field: string, reason: string, code?: string) =>
 		issue(field, reason, offsetOf(field), code);
+	if (options.package && data.contract !== PACKAGE_CONTRACT) {
+		const found =
+			data.contract === undefined
+				? "missing"
+				: `found ${JSON.stringify(data.contract)}`;
+		const refused = uncontracted(found);
+		return {
+			...refused,
+			problems: refused.problems.map((p) => ({
+				...p,
+				line: "contract" in data ? lineAt(offsetOf("contract")) : 1,
+			})),
+		};
+	}
 	for (const key of Object.keys(data))
 		if (!FIELDS.has(key)) invalid(key, "unknown key");
+		else if (PACKAGE_FIELDS.has(key) && !options.package)
+			invalid(key, "allowed only in a package MODULE.md");
 	const name = data.name;
 	if (typeof name !== "string" || !IDENTIFIER.test(name))
 		invalid("name", "must be a module identifier");
@@ -250,6 +307,61 @@ export function parseModule(raw: string, filename: string): ParsedModule {
 					invalidKey(`key "${key}" must be required or optional`);
 			}
 	}
+	const singleLine = (value: unknown) =>
+		typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+	const declarations = (
+		field: "tools" | "guides",
+		keys: Record<string, (value: unknown) => string | undefined>,
+		required: readonly string[],
+	) => {
+		const value = data[field];
+		if (!options.package || value === undefined) return;
+		if (!mapping(value)) return invalid(field, "must be a mapping");
+		for (const [entry, declaration] of Object.entries(value)) {
+			const at = `${field}.${entry}`;
+			if (!IDENTIFIER.test(entry)) {
+				invalid(
+					field,
+					`${field === "tools" ? "tool" : "guide"} name "${entry}" must match ${IDENTIFIER.source}`,
+				);
+				continue;
+			}
+			if (!mapping(declaration)) {
+				invalid(at, "must be a mapping");
+				continue;
+			}
+			for (const key of required)
+				if (!(key in declaration)) invalid(`${at}.${key}`, "is required");
+			for (const [key, item] of Object.entries(declaration)) {
+				const check = keys[key];
+				const reason = check ? check(item) : "unknown key";
+				if (reason) invalid(`${at}.${key}`, reason);
+			}
+		}
+	};
+	const description = (value: unknown) =>
+		singleLine(value) ? undefined : "must be a nonblank single-line string";
+	declarations(
+		"tools",
+		{
+			description,
+			access: (value) =>
+				value === "read" || value === "write"
+					? undefined
+					: "must be read or write",
+			requires: (value) =>
+				Array.isArray(value) &&
+				value.every(
+					(item) => typeof item === "string" && /^[A-Za-z0-9._+-]+$/.test(item),
+				)
+					? undefined
+					: "must be a list of executable names",
+			network: (value) =>
+				typeof value === "boolean" ? undefined : "must be a boolean",
+		},
+		["description", "access"],
+	);
+	declarations("guides", { description }, ["description"]);
 	if (!result.problems.length)
 		result.metadata = {
 			...data,
