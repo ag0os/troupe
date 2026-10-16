@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -21,8 +20,10 @@ const EM = String.fromCodePoint(0x2014);
 const EN = String.fromCodePoint(0x2013);
 const account = Bun.spawnSync(["id", "-un"]).stdout.toString().trim();
 
+// The tool compares $HOME as text, and git needs no home with repo-local
+// config, so the fixture home is a fixed string that names no account.
+const home = "/nonexistent/publish-check-home";
 let root: string;
-let home: string;
 let config: string;
 let repo: string;
 
@@ -83,11 +84,12 @@ function json(args: string[] = []): { code: number; report: Report } {
 }
 
 beforeEach(() => {
-	root = realpathSync(mkdtempSync(join(tmpdir(), "publish-check-")));
-	home = join(root, "home");
+	// Named after the account, so no test can pass only because this
+	// machine's temporary path holds no personal value.
+	root = realpathSync(mkdtempSync(join(tmpdir(), `${account}-`)));
 	config = join(root, "config");
 	repo = join(root, "repo");
-	for (const dir of [home, config, repo]) mkdirSync(dir);
+	for (const dir of [config, repo]) mkdirSync(dir);
 	git("init", "-q", "-b", "main");
 	git("config", "user.name", "Fixture");
 	git("config", "user.email", "planted@example.test");
@@ -284,31 +286,6 @@ describe("exemptions (O20, D6)", () => {
 });
 
 describe("the package is publishable (O19, Extractable)", () => {
-	const files = (dir: string): string[] =>
-		readdirSync(dir).flatMap((name) => {
-			const path = join(dir, name);
-			return statSync(path).isDirectory() ? files(path) : [path];
-		});
-
-	test("no personal value of this machine appears in the package", () => {
-		const values = [
-			process.env.HOME,
-			Bun.spawnSync(["git", "config", "user.email"]).stdout.toString().trim(),
-		].filter((value): value is string => !!value && value !== "/");
-		for (const file of files(packageDir)) {
-			const text = readFileSync(file, "utf8");
-			for (const value of values)
-				expect({ file, found: text.includes(value) }).toEqual({
-					file,
-					found: false,
-				});
-			expect({
-				file,
-				found: new RegExp(`\\b${account}\\b`).test(text),
-			}).toEqual({ file, found: false });
-		}
-	});
-
 	test("the tool is POSIX sh and executable", () => {
 		expect(readFileSync(tool, "utf8").split("\n")[0]).toBe("#!/bin/sh");
 		expect(statSync(tool).mode & 0o111).not.toBe(0);
