@@ -60,11 +60,11 @@ Two modules load into every Shepherd and check their own availability at run tim
 | `inter-agent.md` | Messaging other agent sessions | always; checks for messaging tools itself |
 | `nested.md` | Living under an enclosing workspace's shared layer | an enclosing workspace exists and publishes at least one module |
 | `root.md` | Keeping that shared layer, and acting as the user's assistant across workspaces | workspaces sit beneath the launch directory |
-| `software.md` | Coordinating work that changes code | the charter has the line `Modules: software` |
+| `software` package (`packages/software/MODULE.md`) | Coordinating work that changes code; carries the `publish-check` tool | the charter has the line `Modules: software` |
 
 - **Nested.** A parent directory that has a `.shepherd/` but no `integrations/*.md` shares nothing, so it is named in the header and `nested.md` stays out.
 - **Root.** The launcher walks down from the launch directory for directories with their own `.shepherd/`, does not look inside one it finds, skips hidden directories, `node_modules` and symlinks, and stops three levels down. The header lists what it found as `- Workspaces beneath: <relative paths>`, or `none within 3 levels`. A further header line, `- Gated modules loaded: <names>` or `none`, shows which of `nested`, `root` and `software` this launch loaded, so a misspelt `Modules:` line is visible.
-- **Software.** Nothing on disk says what a workspace's work is, so the charter declares it: a line of its own reading `Modules: software`. Init names the module when it reaches the charter's Structure section. An existing charter needs the line added, with the user's agreement like any charter change.
+- **Software.** Nothing on disk says what a workspace's work is, so the charter declares it: a line of its own reading `Modules: software`. Init names the module when it reaches the charter's Structure section. An existing charter needs the line added, with the user's agreement like any charter change. Software is a package (see [PACKAGES.md](PACKAGES.md)): its text is read from `packages/software/MODULE.md` in the binary's checkout at run time, and a selected package's tools and guides are listed in the header as `- Package tools: ...` and `- Package guides: ...`.
 
 ## Init and the charter
 
@@ -82,7 +82,8 @@ Shepherd improves its own operating instructions over time, gated by agreement r
 
 ## Extending Shepherd
 
-- **Framework wide**: add a module to `system-prompts/shepherd/integrations/`, import it as text in `lib/shepherd/module-resolution.ts`, add it to `builtInModules()`, then recompile.
+- **Framework wide**: add a package to `packages/`: a directory holding `MODULE.md`, and optionally `tools/` and `guides/`, as [PACKAGES.md](PACKAGES.md) describes. Base packages are read from the checkout at run time, so no recompile is needed, and a charter loads one by naming it on its `Modules:` line. The four always-present built-ins (`herdr`, `inter-agent`, `nested`, `root`) stay embedded as text imports.
+- **Shared layer**: a master workspace may hold packages in `.shepherd/packages/`; the workspaces beneath it see them, each where its charter names them.
 - **Per workspace**: drop a `*.md` module into `.shepherd/integrations/` in that directory, or let Shepherd write one during init. Loaded on next launch, no recompile. Local modules are appended after built in and inherited ones and may extend or override them; the charter comes last.
 
 ### Module format
@@ -194,6 +195,8 @@ shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today
 shepherd tool init    [--master] [--json]
 shepherd tool doctor  [--json]
 shepherd tool guide   [<name>]
+shepherd tool guide   <package> [<guide>]
+shepherd tool <package> <tool> [args...]
 shepherd tool start      [--budget <words>] [--json]
 shepherd tool journal    (<text> | --stdin) [--json]
 shepherd tool checkpoint [--apply --token <token>] [--session <name>] [--accept-dropped <reason>] [--json]
@@ -232,6 +235,8 @@ The workspace lock serializes every writer: `tool journal`, `tool checkpoint --a
 - `session-gone`: a Shepherd name listed live, with the prefix, is not running. A name marked as a subagent is never `session-gone`. The message names the running Shepherd, if any. Check reads the Claude registry only; a listed Codex session stays unchecked there, and `check --status` and `query sessions`, which read Herdr, report its drift too.
 - `status-entry-off-shape`: an Items bullet starts with a bold run that begins with a status word but is not `**WORD**` or `**WORD:**`; `query items` skips it.
 - `items-section-missing`: CURRENT has no `## Items` section, so it has no entries.
+
+`tool check` also reports the packages the workspace can see, with absolute paths: `package-contract`, `package-tool-missing`, `package-tool-not-executable`, `package-guide-missing`, `package-name-reserved` and `package-duplicate` are errors, `package-requires-missing` a warning, `package-tool-undeclared` information. [PACKAGES.md](PACKAGES.md) has the table.
 
 `check --status` prints each drift as a `DRIFT` line and counts entries as `query items` does: only `## Items` entries in core's shape.
 
@@ -312,6 +317,7 @@ Init writes no `charter.md`. Launch Shepherd afterwards to agree the charter; `s
 | `path:herdr` | Herdr is executable on PATH; absence skips this and its hook checks |
 | `path:jq` | `jq` is executable on PATH for the status line |
 | `path:shepherd` | Shepherd on PATH resolves to this binary, comparing realpaths |
+| `packages:base` | The base package location, `packages/` in the binary's checkout, exists and holds at least one package; without it the binary composes without software |
 | `config:user` | User config is absent or valid; a configured `codex.homeFile` is readable and names an absolute existing directory; `CODEX_HOME`, if set, is absolute |
 | `claude:settings` | Claude settings are absent or a readable JSON object |
 | `claude:cross-session-inbound` | `crossSessionInbound` is `"accept"` |
@@ -326,7 +332,7 @@ Printed edits cover installation, PATH, JSON settings, logins and Herdr hooks. H
 
 ### Guides and exit codes
 
-`tool guide` lists three shipped guides. `tool guide <name>` prints one to stdout:
+`tool guide` lists three shipped guides, then the guides of the packages this workspace selects as `<package> <guide>: <description>`. `tool guide <name>` prints a shipped guide to stdout; `tool guide <package>` lists one package's guides and `tool guide <package> <guide>` prints one:
 
 | Name | Purpose |
 |------|---------|
@@ -336,7 +342,9 @@ Printed edits cover installation, PATH, JSON settings, logins and Herdr hooks. H
 
 Guide accepts no command flags. Init accepts only `--master` and `--json`; doctor accepts only `--json`. These three commands run without an existing workspace and use the launch directory, selected with `--cwd` if needed. `--model` applies only to launches and is refused with exit 2.
 
-For init, doctor and guide, exit 0 means done. Doctor exits 1 when it finds at least one gap; init exits 1 on a write failure and lists completed writes without rolling them back. Exit 2 means invalid usage, an unknown guide name or a flag belonging to another command. Under `--show-prompt`, a tool refusal exits 1, not 2.
+For init, doctor and guide, exit 0 means done. Doctor exits 1 when it finds at least one gap; init exits 1 on a write failure and lists completed writes without rolling them back. Exit 2 means invalid usage, an unknown guide name, a package guide refused (unknown package, undeclared guide, or a package the charter does not name) or a flag belonging to another command.
+
+A package tool, `shepherd tool <package> <tool> [args...]`, is routed before the framework parser, so its own flags reach it untouched, and it exits with the tool's code. A refusal (package not named by the charter, tool not declared, file missing or not executable, contract not 1, the name in two locations, no workspace) exits 2 with one `shepherd:` line. The workspace that authorizes the run is `SHEPHERD_WORKSPACE`, which every launch sets to its launch directory, else the nearest workspace from the working directory upward. The variable authorizes package runs and nothing else; it is inherited by nested sessions and forks started from the session, so it never identifies one. [PACKAGES.md](PACKAGES.md) is the contract. Under `--show-prompt`, a tool refusal exits 1, not 2.
 
 ### Configuration
 
@@ -364,7 +372,7 @@ The built-in Claude figure is the midpoint of the previous 40 to 50% advice. Cod
 
 Shepherd declares Claude first, so Claude is the default. Select Codex with `--backend codex`; backend selection is never taken from the environment. Both backends receive the same prompt layers, but the generated context header names the selected backend. Codex receives the composed prompt as `developer_instructions`. Backend executables are found on `PATH`.
 
-The Claude child receives neither a framework-root variable nor an inherited project-directory variable. Claude settings contain only the declared rules and any enclosing-workspace additions. Codex inherits its own configuration and adds `--skip-git-repo-check` for print mode outside a Git worktree.
+The Claude child receives neither a framework-root variable nor an inherited project-directory variable. Both backends receive `SHEPHERD_WORKSPACE`, the launch directory, which authorizes package tool runs. Claude settings contain only the declared rules, any enclosing-workspace additions, and one `Bash(shepherd tool <package> <tool> *)` rule per read tool of a selected package. Codex gets no package rules: it takes no per-session rules, and an exec-policy allow would run a tool outside the sandbox, so under `workspace-write` a tool that needs the network or writes outside the workspace may escalate; [PACKAGES.md](PACKAGES.md) says how to add a prompt rule by hand. Codex inherits its own configuration and adds `--skip-git-repo-check` for print mode outside a Git worktree.
 
 ## Evals
 

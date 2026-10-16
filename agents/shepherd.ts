@@ -11,11 +11,17 @@
  *                               always load and check their own availability. The
  *                               launcher adds the rest only when they apply: nested
  *                               under an enclosing workspace that publishes modules,
- *                               root above child workspaces, software when the
- *                               charter declares it
+ *                               root above child workspaces. Software is a base
+ *                               package, loaded when the charter declares it
  *   3. inherited modules      - the integrations/*.md of the nearest enclosing
  *                               workspace (a parent directory with its own
  *                               .shepherd/), shared by every workspace beneath it
+ *      packages              - a package's MODULE.md, from packages/ in the
+ *                               checkout (after the built-ins) or the enclosing
+ *                               workspace's .shepherd/packages/ (with layer 3),
+ *                               loaded only where the charter names it; its
+ *                               tools run as `shepherd tool <package> <tool>`
+ *                               through `dispatch` (docs/PACKAGES.md)
  *   4. .shepherd/integrations/*.md - workspace-local modules appended at launch,
  *                               so a directory can extend Shepherd without a recompile
  *   5. .shepherd/charter.md   - the workspace's agreed mission and way of working,
