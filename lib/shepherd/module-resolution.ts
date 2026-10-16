@@ -183,12 +183,14 @@ export function resolveModules(
 		),
 	);
 	const names = new Set(annotated.map((m) => m.metadata?.name));
-	const declares = (value: string) =>
+	// `direct` leaves out what a named provider contributes to its slot.
+	const declares = (value: string, direct = false) =>
 		tokens.has(value) ||
-		annotated.some(
-			(m) => m.metadata?.provides === value && tokens.has(m.metadata.name),
-		);
-	const eligible = (module: ModuleCandidate) => {
+		(!direct &&
+			annotated.some(
+				(m) => m.metadata?.provides === value && tokens.has(m.metadata.name),
+			));
+	const eligible = (module: ModuleCandidate, direct = false) => {
 		const predicates = module.metadata?.["applies-when"];
 		return (
 			!predicates ||
@@ -197,7 +199,7 @@ export function resolveModules(
 				(predicates["has-children"] === undefined ||
 					predicates["has-children"] === catalog.children.length > 0) &&
 				(predicates["charter-declares"] === undefined ||
-					declares(predicates["charter-declares"])))
+					declares(predicates["charter-declares"], direct)))
 		);
 	};
 	const chosen = new Set(
@@ -223,6 +225,18 @@ export function resolveModules(
 				code: "module-slot-unresolved",
 				message: `"${token}": ${reason}; no provider loaded for slot "${slot}"`,
 			});
+		// A slot may not take the name of a module that loads, or its
+		// provider would ride in on that module's token. The module stays
+		// only when it is eligible without the provider's name.
+		const namesake = [...chosen].filter(
+			(m) => !m.metadata?.provides && m.metadata?.name === slot,
+		);
+		if (namesake.length) {
+			for (const module of namesake)
+				if (!eligible(module, true)) chosen.delete(module);
+			conflict(`takes the name of module ${slot}`);
+			continue;
+		}
 		if (
 			explicitTokens.some(
 				(token) =>

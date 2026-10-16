@@ -281,15 +281,16 @@ export function parseModule(
 				} else invalid(`applies-when.${key}`, "unknown key");
 			}
 	}
-	// A package loads only where a charter names it, by name or by slot (R2 a).
+	// A package loads only where a charter names it (R2 a). A provider
+	// declares its slot, so the slot and its default can select it.
 	if (options.package) {
 		const declares = mapping(data["applies-when"])
 			? data["applies-when"]["charter-declares"]
 			: undefined;
-		if (declares !== name && (!data.provides || declares !== data.provides))
+		if (declares !== (data.provides ?? name))
 			issue(
 				"applies-when.charter-declares",
-				"a package must be selected by its own name or slot",
+				"a package must be selected by its slot when it provides one, else by its own name",
 				offsetOf("applies-when" in data ? "applies-when" : "name"),
 			);
 	}

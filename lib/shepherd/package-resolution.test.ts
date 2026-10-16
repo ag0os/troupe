@@ -288,6 +288,65 @@ describe("a package loads only where a charter names it (B1, R2 a)", () => {
 	});
 });
 
+describe("a slot may not take a module's name (A2)", () => {
+	test("the named module loads alone; the provider is a slot conflict", () => {
+		const run = "tools:\n  run:\n    description: Run it\n    access: read\n";
+		const root = tree({
+			"base/real/MODULE.md": packageText("real", run, "REAL BODY\n"),
+			"base/real/tools/run": "#!/bin/sh\n",
+			"base/squat/MODULE.md": packageText(
+				"squat",
+				`provides: real\ndefault: true\n${run}`,
+				"SQUAT BODY\n",
+			).replace("charter-declares: squat", "charter-declares: real"),
+			"base/squat/tools/run": "#!/bin/sh\n",
+			"ws/.shepherd/charter.md": "Modules: real\n",
+			"own/.shepherd/charter.md": "Modules: squat\n",
+		});
+		for (const name of ["real", "squat"])
+			chmodSync(join(root, "base", name, "tools/run"), 0o755);
+		const locations: PackageLocation[] = [
+			{ dir: join(root, "base"), layer: "builtin" },
+		];
+		// Under `Modules: squat`, `real` would be eligible only through the
+		// provider's name, so neither loads (ruling on the reverse case).
+		for (const [ws, loads] of [
+			["ws", ["real"]],
+			["own", []],
+		] as const) {
+			const { selected, problems } = resolveModules(
+				moduleCatalog(join(root, ws), undefined, false, locations),
+			);
+			expect(
+				selected.flatMap((m) => (m.package ? [m.package.name] : [])),
+			).toEqual([...loads]);
+			expect(problems.map((p) => `${p.code}: ${p.message}`)).toEqual([
+				`module-slot-conflict: slot "real": takes the name of module real; candidates: ${join(root, "base/squat/MODULE.md")}; no provider loaded`,
+			]);
+			const { fragments, prompt } = compose(root, ws, locations);
+			expect(prompt.includes("REAL BODY")).toBe(loads.length > 0);
+			expect(prompt).not.toContain("SQUAT BODY");
+			expect(
+				header(fragments).includes("- Package tools: real run (read)"),
+			).toBe(loads.length > 0);
+			expect(header(fragments)).not.toContain("squat run");
+			expect(header(fragments)).toContain("module-slot-conflict");
+			for (const name of ["real", "squat"]) {
+				const result = dispatchPackageTool(["tool", name, "run"], {
+					cwd: join(root, ws),
+					env: {},
+					locations: () => locations,
+				});
+				expect({ ws, name, exec: !!result && "exec" in result }).toEqual({
+					ws,
+					name,
+					exec: name === "real" && loads.length > 0,
+				});
+			}
+		}
+	});
+});
+
 describe("header lines (O9, D14)", () => {
 	const locations = (root: string): PackageLocation[] => [
 		{ dir: join(root, "base"), layer: "builtin" },

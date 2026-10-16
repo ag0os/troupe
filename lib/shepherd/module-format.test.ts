@@ -232,13 +232,13 @@ describe("package fields (O6)", () => {
 		).toBe(true);
 	});
 
-	test("a package must be selected by its own name or slot (B1)", () => {
+	test("a package must be selected by its slot when it provides one, else its own name (B1)", () => {
 		const parse = (text: string) =>
 			parseModule(text, "loose.md", { package: true }).problems.map(
 				(p) => `${p.code}: ${p.message}`,
 			);
 		const unselected =
-			"module-schema: applies-when.charter-declares: a package must be selected by its own name or slot";
+			"module-schema: applies-when.charter-declares: a package must be selected by its slot when it provides one, else by its own name";
 		const loose =
 			"---\nname: loose\ntype: domain\ndescription: loose package\nbudget: 400\ncontract: 1\n---\nbody\n";
 		expect(parse(loose)).toEqual([unselected]);
@@ -266,6 +266,16 @@ describe("package fields (O6)", () => {
 				),
 			),
 		).toEqual([]);
+		// A provider declares its slot, so the slot and default can select it.
+		for (const declared of ["loose", "hey"])
+			expect(
+				parse(
+					loose.replace(
+						"budget:",
+						`applies-when:\n  charter-declares: ${declared}\nprovides: mail\nbudget:`,
+					),
+				),
+			).toEqual([unselected]);
 		expect(pkg("").problems).toEqual([]);
 	});
 
