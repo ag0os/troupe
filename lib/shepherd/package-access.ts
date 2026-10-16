@@ -17,9 +17,10 @@ export function isWorkspace(dir: string): boolean {
 /**
  * The workspace whose charter authorizes a package run (D11):
  * `SHEPHERD_WORKSPACE` when it names a workspace, else the nearest directory
- * with `.shepherd/` from `cwd` upward. The variable decides nothing else. A
- * launcher variable is inherited by every process the session starts, nested
- * sessions and forks included, so it authorizes, and never identifies.
+ * with `.shepherd/` from `cwd` upward. The variable decides package runs and
+ * package guides, nothing else. A launcher variable is inherited by every
+ * process the session starts, nested sessions and forks included, so it
+ * authorizes, and never identifies.
  */
 export function authorizingWorkspace(
 	cwd: string,

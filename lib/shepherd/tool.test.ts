@@ -242,9 +242,10 @@ describe("runTool guide", () => {
 		const unreadable = () => {
 			throw new Error("guide must not read ToolEnv");
 		};
-		// The list reads the working directory for the selected packages' guides.
+		// The list reads the working directory and SHEPHERD_WORKSPACE for the
+		// selected packages' guides (S4, D11).
 		for (const [args, keys] of [
-			[["guide"], ["home", "env", "now"]],
+			[["guide"], ["home", "now"]],
 			[
 				["guide", "memory"],
 				["cwd", "home", "env", "now"],

@@ -474,15 +474,15 @@ async function runArchive(
 /**
  * `tool guide`: core guides by name, and the guides of the packages this
  * workspace selects as `<package> <guide>` (docs/PACKAGES.md). The workspace
- * is the nearest one from the working directory: SHEPHERD_WORKSPACE only
- * authorizes package runs (D11).
+ * is the one that authorizes a package run (D11), so a session outside its
+ * workspace reads the guides its header names.
  */
 function runGuide(args: readonly string[], toolEnv: ToolEnv): ToolResult {
 	const [name, guideName] = args;
 	const core = GUIDES.find((guide) => guide.name === name);
 	if (args.length > 2 || (core && guideName !== undefined)) return usage();
 	if (core) return { text: core.text, code: 0, stream: "stdout" };
-	const workspace = authorizingWorkspace(toolEnv.cwd, {});
+	const workspace = authorizingWorkspace(toolEnv.cwd, toolEnv.env);
 	const lines = (records: readonly PackageRecord[]) =>
 		records.flatMap((record) =>
 			Object.entries(record.guides).map(

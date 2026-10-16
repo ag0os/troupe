@@ -23,6 +23,18 @@ function workspace(charter: string) {
 	return fakeToolEnv({ home: join(tree.root, "home"), cwd });
 }
 
+/** A working directory outside any workspace, authorized by SHEPHERD_WORKSPACE. */
+function outside(charter: string) {
+	const inside = workspace(charter);
+	const tree = makeTree({ "repo/README.md": "" });
+	cleanups.push(tree.cleanup);
+	return fakeToolEnv({
+		home: inside.home,
+		cwd: join(realpathSync(tree.root), "repo"),
+		env: { SHEPHERD_WORKSPACE: inside.cwd },
+	});
+}
+
 const guide = (args: string[], env: ReturnType<typeof workspace>) =>
 	runTool(["guide", ...args], {}, env);
 
@@ -77,5 +89,18 @@ describe("tool guide reaches packages (O18, O3)", () => {
 		const tooMany = await guide(["mail", "triage", "x"], env);
 		expect(tooMany).toMatchObject({ code: 2, stream: "stderr" });
 		expect(tooMany.text).toContain("shepherd tool guide <package> [<guide>]");
+	});
+
+	test("guides follow SHEPHERD_WORKSPACE from a directory outside it (S4, D11)", async () => {
+		const env = outside("Modules: mail\n");
+		expect((await guide([], env)).text).toContain(
+			"mail triage: How to triage the inbox, in order",
+		);
+		expect(await guide(["mail", "triage"], env)).toEqual({
+			text: TRIAGE,
+			code: 0,
+			stream: "stdout",
+		});
+		expect((await guide(["mail"], outside("Modules: other\n"))).code).toBe(2);
 	});
 });

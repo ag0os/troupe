@@ -132,8 +132,8 @@ nearest directory with `.shepherd/` from the working directory upward, the worki
 launch sets `SHEPHERD_WORKSPACE` to its own launch directory, so a session that `cd`s into a repository outside its
 workspace can still run its packages' tools there.
 
-The variable decides which workspace authorizes a package run, and nothing else: no core tool, session name or
-identity reads it. A launcher variable is inherited by every process the session starts, nested sessions and forks
+The variable decides which workspace authorizes a package run and a package guide, and nothing else: no core tool,
+session name or identity reads it. A launcher variable is inherited by every process the session starts, nested sessions and forks
 included. A nested Shepherd launch replaces it with its own directory, but a delegate agent, a fork or a shell started
 from the session keeps the parent's value, and runs the parent workspace's package tools as that workspace authorizes
 them. That is the intended reach for a delegate working on the session's behalf; it is also why the variable is never
@@ -144,7 +144,7 @@ used to tell which session is running.
 `shepherd tool guide` lists the core guides and then the guides of every package the workspace selects, as
 `<package> <guide>: <description>`. `shepherd tool guide <package>` lists one package's guides.
 `shepherd tool guide <package> <guide>` prints `guides/<guide>.md` whole to stdout, exit 0. Guides are found from the
-workspace of the working directory, upward.
+workspace that authorizes a run, as above, so a session outside its workspace reads the guides its header lists.
 
 The session header carries one line per kind, present only when a selected package declares one:
 
