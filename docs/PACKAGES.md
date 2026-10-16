@@ -75,7 +75,7 @@ Rules:
   package or its slot, so a broken package does not change every session's prompt. `shepherd tool check` reports every
   package the workspace can see, named or not.
 - Tool and guide names match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
-- Every declared tool must exist as `tools/<tool>` with the executable bit; every declared guide as
+- Every declared tool must exist as `tools/<tool>`, a regular file with the executable bit; every declared guide as
   `guides/<guide>.md`. An executable in `tools/` that is not declared is never run.
 - `contract`, `tools` and `guides` are errors in a module that is not a package (a file in `.shepherd/integrations/`).
 
@@ -181,8 +181,8 @@ files display as absolute paths.
 |------|-------|-------|
 | `package-contract` | error | `contract` missing or not 1 |
 | `package-tool-missing` | error | a declared tool has no file |
-| `package-tool-not-executable` | error | a declared tool's file lacks the executable bit |
-| `package-tool-undeclared` | info | a file in `tools/` is not declared; it is never run |
+| `package-tool-not-executable` | error | a declared tool's path is not a regular file with the executable bit |
+| `package-tool-undeclared` | info | a regular file in `tools/` is not declared; it is never run (dotfiles and directories are skipped) |
 | `package-guide-missing` | error | a declared guide has no file |
 | `package-requires-missing` | warn | a `requires` entry is not on PATH (a PATH lookup only) |
 | `package-name-reserved` | error | the package takes a core command or guide name |

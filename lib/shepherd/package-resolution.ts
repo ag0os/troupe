@@ -1,4 +1,12 @@
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+	accessSync,
+	constants,
+	existsSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
 	type GuideDeclaration,
@@ -164,6 +172,16 @@ export function packageModules(
 		});
 	}
 	return found;
+}
+
+/** A tool file dispatch may run: a regular file with the executable bit. */
+export function executable(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
 }
 
 /** The package records of the loadable selected modules, in selection order. */

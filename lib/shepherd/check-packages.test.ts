@@ -45,6 +45,19 @@ function setup() {
 }
 
 describe("tool check validates packages (O17)", () => {
+	test("a directory at a tool's path is not executable; dotfiles and directories in tools/ are not tools (N3, F8)", () => {
+		const { put, findings, base } = setup();
+		rmSync(join(base, "mail/tools/send"));
+		mkdirSync(join(base, "mail/tools/send"));
+		put("mail/tools/.DS_Store", "");
+		mkdirSync(join(base, "mail/tools/lib"));
+		expect(
+			findings()
+				.filter((f) => f.code !== "package-requires-missing")
+				.map((f) => `${f.code} ${f.file}`),
+		).toEqual([`package-tool-not-executable ${join(base, "mail/tools/send")}`]);
+	});
+
 	test("a complete package has no package findings but a missing requirement", () => {
 		const { findings, base } = setup();
 		const missing = {

@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { Finding } from "./check";
 import { charterFindings } from "./check-charter";
@@ -9,6 +9,7 @@ import {
 	moduleCatalog,
 	resolveModules,
 } from "./module-resolution";
+import { executable } from "./package-resolution";
 import { words } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
@@ -16,7 +17,7 @@ import type { Workspace, WorkspaceTree } from "./tree";
  * What `MODULE.md` declares against what the package directory holds: each
  * declared tool a file with the executable bit, each declared guide a file,
  * each `requires` entry on PATH. Undeclared files in `tools/` are noted,
- * since dispatch never runs them. No tool is run (docs/PACKAGES.md).
+ * since dispatch never runs them; dotfiles and directories are not tools. No tool is run (docs/PACKAGES.md).
  */
 export function packageFileFindings(module: ModuleCandidate): Finding[] {
 	const record = module.package;
@@ -37,17 +38,13 @@ export function packageFileFindings(module: ModuleCandidate): Finding[] {
 				file,
 				`declared tool "${tool}" has no file`,
 			);
-		else
-			try {
-				accessSync(file, constants.X_OK);
-			} catch {
-				add(
-					"error",
-					"package-tool-not-executable",
-					file,
-					`declared tool "${tool}" is not executable`,
-				);
-			}
+		else if (!executable(file))
+			add(
+				"error",
+				"package-tool-not-executable",
+				file,
+				`declared tool "${tool}" is not executable`,
+			);
 		for (const name of declaration.requires)
 			if (!Bun.which(name))
 				add(
@@ -60,7 +57,11 @@ export function packageFileFindings(module: ModuleCandidate): Finding[] {
 	const toolsDir = join(record.dir, "tools");
 	if (existsSync(toolsDir))
 		for (const file of readdirSync(toolsDir).sort())
-			if (!Object.hasOwn(record.tools, file))
+			if (
+				!file.startsWith(".") &&
+				statSync(join(toolsDir, file), { throwIfNoEntry: false })?.isFile() &&
+				!Object.hasOwn(record.tools, file)
+			)
 				add(
 					"info",
 					"package-tool-undeclared",

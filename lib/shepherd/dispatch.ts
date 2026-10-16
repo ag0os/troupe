@@ -1,11 +1,11 @@
-import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DispatchResult } from "../agent-format/types";
 import { userConfigFile } from "./config";
 import { PACKAGE_CONTRACT } from "./module-format";
 import { authorizingWorkspace, packageAccess } from "./package-access";
-import type { PackageLocation } from "./package-resolution";
+import { executable, type PackageLocation } from "./package-resolution";
 import { isToolCommand } from "./tool";
 import { STATE_DIR } from "./workspace";
 
@@ -20,15 +20,6 @@ function refuse(message: string): DispatchResult {
 	return {
 		exit: { message: `shepherd: ${message}\n`, code: 2, stream: "stderr" },
 	};
-}
-
-function executable(path: string): boolean {
-	try {
-		accessSync(path, constants.X_OK);
-		return statSync(path).isFile();
-	} catch {
-		return false;
-	}
 }
 
 /**
