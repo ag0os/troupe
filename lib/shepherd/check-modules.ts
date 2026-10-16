@@ -1,14 +1,84 @@
+import { accessSync, constants, existsSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { Finding } from "./check";
 import { charterFindings } from "./check-charter";
 import type { Config } from "./config";
 import {
+	type ModuleCandidate,
 	type ModuleCatalog,
 	moduleCatalog,
 	resolveModules,
 } from "./module-resolution";
 import { words } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
+
+/**
+ * What `MODULE.md` declares against what the package directory holds: each
+ * declared tool a file with the executable bit, each declared guide a file,
+ * each `requires` entry on PATH. Undeclared files in `tools/` are noted,
+ * since dispatch never runs them. No tool is run (docs/PACKAGES.md).
+ */
+export function packageFileFindings(module: ModuleCandidate): Finding[] {
+	const record = module.package;
+	if (!record || module.body === undefined) return [];
+	const findings: Finding[] = [];
+	const add = (
+		level: Finding["level"],
+		code: string,
+		file: string,
+		message: string,
+	) => findings.push({ level, code, file, message });
+	for (const [tool, declaration] of Object.entries(record.tools)) {
+		const file = join(record.dir, "tools", tool);
+		if (!existsSync(file))
+			add(
+				"error",
+				"package-tool-missing",
+				file,
+				`declared tool "${tool}" has no file`,
+			);
+		else
+			try {
+				accessSync(file, constants.X_OK);
+			} catch {
+				add(
+					"error",
+					"package-tool-not-executable",
+					file,
+					`declared tool "${tool}" is not executable`,
+				);
+			}
+		for (const name of declaration.requires)
+			if (!Bun.which(name))
+				add(
+					"warn",
+					"package-requires-missing",
+					module.source,
+					`tool "${tool}" requires "${name}", which is not on PATH`,
+				);
+	}
+	const toolsDir = join(record.dir, "tools");
+	if (existsSync(toolsDir))
+		for (const file of readdirSync(toolsDir).sort())
+			if (!Object.hasOwn(record.tools, file))
+				add(
+					"info",
+					"package-tool-undeclared",
+					join(toolsDir, file),
+					`tools/${file} is not declared in MODULE.md; it is never run`,
+				);
+	for (const guide of Object.keys(record.guides)) {
+		const file = join(record.dir, "guides", `${guide}.md`);
+		if (!existsSync(file))
+			add(
+				"error",
+				"package-guide-missing",
+				file,
+				`declared guide "${guide}" has no file`,
+			);
+	}
+	return findings;
+}
 
 export function moduleFindings(
 	catalog: ModuleCatalog,
@@ -43,6 +113,7 @@ export function moduleFindings(
 				message:
 					"legacy module: loaded unchanged; metadata and budget unavailable",
 			});
+		findings.push(...packageFileFindings(module));
 		if (!module.metadata || module.body === undefined) continue;
 		const { name, budget, description } = module.metadata;
 		const count = words(module.body);
@@ -65,8 +136,9 @@ export function moduleFindings(
 	try {
 		const resolved = resolveModules(catalog, fileOf);
 		selected = resolved.selected;
+		// Candidate problems were reported above; resolution adds its own.
 		for (const problem of resolved.problems)
-			if (!["module-schema", "module-name"].includes(problem.code))
+			if (problem.file === "charter.md")
 				findings.push({
 					...problem,
 					level: problem.code === "module-token-unknown" ? "warn" : "error",

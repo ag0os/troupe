@@ -9,6 +9,7 @@ import {
 import { dirname, isAbsolute, join } from "node:path";
 import { codexDefaults, configuredHome } from "./codex-defaults";
 import { loadConfig, userConfigFile } from "./config";
+import { baseLocation } from "./package-resolution";
 import type { ToolEnv } from "./sessions";
 
 export type DoctorCheck = {
@@ -240,6 +241,26 @@ export function runDoctor(toolEnv: ToolEnv): DoctorResult {
 			shepherd ? "shepherd on PATH is not this binary" : "shepherd not on PATH",
 			undefined,
 			`add to your shell rc: export PATH=${quote(dirname(toolEnv.execPath))}:"$PATH"`,
+		);
+	// The binary reads base packages from its checkout at run time (D2).
+	const base = toolEnv.packageBase ?? baseLocation();
+	const hasPackage = (() => {
+		try {
+			return readdirSync(base).some((name) =>
+				isFile(join(base, name, "MODULE.md")),
+			);
+		} catch {
+			return false;
+		}
+	})();
+	if (hasPackage) add("packages:base", "ok", `base packages: ${base}`, base);
+	else
+		add(
+			"packages:base",
+			"gap",
+			`no base packages at ${base}; this binary composes without them (software included)`,
+			base,
+			"run the shepherd binary from its Troupe checkout, whose packages/ sits beside bin/",
 		);
 	for (const problem of config.problems) {
 		const edit = `${problem.file}: ${problem.key}: ${problem.problem}`;

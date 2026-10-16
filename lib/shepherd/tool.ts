@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	applyArchive,
@@ -27,6 +27,12 @@ import {
 	unlockState,
 	withStateLocks,
 } from "./lock";
+import {
+	authorizingWorkspace,
+	packageAccess,
+	selectedPackageRecords,
+} from "./package-access";
+import type { PackageRecord } from "./package-resolution";
 import { runQuery } from "./query";
 import { runningSessions, type ToolEnv } from "./sessions";
 import { runStart } from "./start";
@@ -54,6 +60,8 @@ const USAGE = [
 	"shepherd tool check   [<workspace>...] [--all] [--status | --context] [--json] [--today YYYY-MM-DD]",
 	"shepherd tool archive [<workspace>...] [--recursive] [--apply] [--json] [--today YYYY-MM-DD]",
 	"shepherd tool guide [<name>]",
+	"shepherd tool guide <package> [<guide>]",
+	"shepherd tool <package> <tool> [args...]",
 	"shepherd tool init [--master] [--json]",
 	"shepherd tool doctor [--json]",
 	"shepherd tool start      [--budget <words>] [--json]",
@@ -463,6 +471,63 @@ async function runArchive(
 	);
 }
 
+/**
+ * `tool guide`: core guides by name, and the guides of the packages this
+ * workspace selects as `<package> <guide>` (docs/PACKAGES.md). The workspace
+ * is the nearest one from the working directory: SHEPHERD_WORKSPACE only
+ * authorizes package runs (D11).
+ */
+function runGuide(args: readonly string[], toolEnv: ToolEnv): ToolResult {
+	const [name, guideName] = args;
+	const core = GUIDES.find((guide) => guide.name === name);
+	if (args.length > 2 || (core && guideName !== undefined)) return usage();
+	if (core) return { text: core.text, code: 0, stream: "stdout" };
+	const workspace = authorizingWorkspace(toolEnv.cwd, {});
+	const lines = (records: readonly PackageRecord[]) =>
+		records.flatMap((record) =>
+			Object.entries(record.guides).map(
+				([guide, { description }]) => `${record.name} ${guide}: ${description}`,
+			),
+		);
+	if (name === undefined)
+		return result(
+			[
+				...GUIDES.map((guide) => `${guide.name}: ${guide.purpose}`),
+				...lines(workspace ? selectedPackageRecords(workspace) : []),
+			].join("\n"),
+			0,
+		);
+	const access = packageAccess(name, workspace, "guides", toolEnv.cwd);
+	if (access.kind === "absent")
+		return result(
+			guideName === undefined
+				? `shepherd: no guide named "${name}"; guides: ${GUIDES.map((guide) => guide.name).join(", ")}`
+				: `shepherd: no package named "${name}"`,
+			2,
+			"stderr",
+		);
+	if (access.kind === "refused")
+		return result(`shepherd: ${access.message}`, 2, "stderr");
+	const { record } = access;
+	if (guideName === undefined) return result(lines([record]).join("\n"), 0);
+	if (!Object.hasOwn(record.guides, guideName))
+		return result(
+			`shepherd: package "${name}" declares no guide "${guideName}"; guides: ${Object.keys(record.guides).join(", ") || "none"}`,
+			2,
+			"stderr",
+		);
+	const file = join(record.dir, "guides", `${guideName}.md`);
+	try {
+		return { text: readFileSync(file, "utf8"), code: 0, stream: "stdout" };
+	} catch {
+		return result(
+			`shepherd: package "${name}" guide "${guideName}" is missing: ${file}`,
+			2,
+			"stderr",
+		);
+	}
+}
+
 /** Run a Shepherd maintenance command without launching an agent backend. */
 export async function runTool(
 	args: readonly string[],
@@ -476,24 +541,7 @@ export async function runTool(
 	const badFlag = invalidFlag(command, flags);
 	if (badFlag) return result(badFlag, 2, "stderr");
 	if (command === "query") return runQuery(args.slice(1), flags, toolEnv);
-	if (command === "guide") {
-		if (args.length > 2) return usage();
-		const name = args[1];
-		if (name === undefined) {
-			return result(
-				GUIDES.map((guide) => `${guide.name}: ${guide.purpose}`).join("\n"),
-				0,
-			);
-		}
-		const guide = GUIDES.find((guide) => guide.name === name);
-		return guide
-			? { text: guide.text, code: 0, stream: "stdout" }
-			: result(
-					`shepherd: no guide named "${name}"; guides: ${GUIDES.map((guide) => guide.name).join(", ")}`,
-					2,
-					"stderr",
-				);
-	}
+	if (command === "guide") return runGuide(args.slice(1), toolEnv);
 	if (command === "init") {
 		if (args.length > 1) return usage();
 		const initialized = applyInit(toolEnv.cwd, {
