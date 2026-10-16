@@ -16,8 +16,9 @@ import { dirname, join, resolve } from "node:path";
 
 const packageDir = resolve(import.meta.dir, "..");
 const tool = join(packageDir, "tools/publish-check");
-const EM = "—";
-const EN = "–";
+// Code points, so this file holds no dash for publish-check to find.
+const EM = String.fromCodePoint(0x2014);
+const EN = String.fromCodePoint(0x2013);
 const account = Bun.spawnSync(["id", "-un"]).stdout.toString().trim();
 
 let root: string;
