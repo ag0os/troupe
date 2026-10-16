@@ -281,6 +281,18 @@ export function parseModule(
 				} else invalid(`applies-when.${key}`, "unknown key");
 			}
 	}
+	// A package loads only where a charter names it, by name or by slot (R2 a).
+	if (options.package) {
+		const declares = mapping(data["applies-when"])
+			? data["applies-when"]["charter-declares"]
+			: undefined;
+		if (declares !== name && (!data.provides || declares !== data.provides))
+			issue(
+				"applies-when.charter-declares",
+				"a package must be selected by its own name or slot",
+				offsetOf("applies-when" in data ? "applies-when" : "name"),
+			);
+	}
 	if ("charter-keys" in data) {
 		if (!mapping(data["charter-keys"]))
 			invalid("charter-keys", "must be a mapping");

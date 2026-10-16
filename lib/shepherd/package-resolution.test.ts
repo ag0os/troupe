@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isSourcePath } from "../../scripts/shepherd-source";
 import { composeFragments, composeSession } from "./compose";
+import { dispatchPackageTool } from "./dispatch";
 import {
 	builtInModules,
 	moduleCatalog,
@@ -218,6 +219,51 @@ describe("a broken base package reports, it does not throw (O7)", () => {
 			`${join(root, "base/mail/MODULE.md")}: module-schema: `,
 		);
 		expect(problems.length).toBe(1);
+	});
+});
+
+describe("a package loads only where a charter names it (B1, R2 a)", () => {
+	test("no applies-when, or one naming another package, selects and dispatches nowhere", () => {
+		const run = "tools:\n  run:\n    description: Run it\n    access: read\n";
+		const root = tree({
+			"base/loose/MODULE.md": `---\nname: loose\ntype: domain\ndescription: loose package\nbudget: 400\ncontract: 1\n${run}---\nLOOSE BODY\n`,
+			"base/loose/tools/run": "#!/bin/sh\n",
+			"base/squatter/MODULE.md": packageText(
+				"squatter",
+				run,
+				"SQUATTER BODY\n",
+			).replace("charter-declares: squatter", "charter-declares: other"),
+			"base/squatter/tools/run": "#!/bin/sh\n",
+			"base/other/MODULE.md": packageText("other", "", "OTHER BODY\n"),
+			"ws1/.shepherd/charter.md": "Modules: other\n",
+			"ws2/.shepherd/charter.md": "# Charter\n",
+		});
+		for (const tool of ["loose", "squatter"])
+			chmodSync(join(root, "base", tool, "tools/run"), 0o755);
+		const locations: PackageLocation[] = [
+			{ dir: join(root, "base"), layer: "builtin" },
+		];
+		const selected = (ws: string) =>
+			resolveModules(
+				moduleCatalog(join(root, ws), undefined, false, locations),
+			).selected.flatMap((m) => (m.package ? [m.package.name] : []));
+		expect(selected("ws1")).toEqual(["other"]);
+		expect(selected("ws2")).toEqual([]);
+		expect(compose(root, "ws2", locations).prompt).not.toContain("BODY");
+		for (const ws of ["ws1", "ws2"])
+			for (const name of ["loose", "squatter"]) {
+				const result = dispatchPackageTool(["tool", name, "run"], {
+					cwd: join(root, ws),
+					env: {},
+					locations: () => locations,
+				});
+				expect({ ws, name, exec: result && "exec" in result }).toEqual({
+					ws,
+					name,
+					exec: false,
+				});
+				expect(result && "exit" in result && result.exit.code).toBe(2);
+			}
 	});
 });
 

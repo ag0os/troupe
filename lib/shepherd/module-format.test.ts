@@ -232,6 +232,43 @@ describe("package fields (O6)", () => {
 		).toBe(true);
 	});
 
+	test("a package must be selected by its own name or slot (B1)", () => {
+		const parse = (text: string) =>
+			parseModule(text, "loose.md", { package: true }).problems.map(
+				(p) => `${p.code}: ${p.message}`,
+			);
+		const unselected =
+			"module-schema: applies-when.charter-declares: a package must be selected by its own name or slot";
+		const loose =
+			"---\nname: loose\ntype: domain\ndescription: loose package\nbudget: 400\ncontract: 1\n---\nbody\n";
+		expect(parse(loose)).toEqual([unselected]);
+		expect(
+			parse(
+				loose.replace(
+					"budget:",
+					"applies-when:\n  has-children: true\nbudget:",
+				),
+			),
+		).toEqual([unselected]);
+		expect(
+			parse(
+				loose.replace(
+					"budget:",
+					"applies-when:\n  charter-declares: other\nbudget:",
+				),
+			),
+		).toEqual([unselected]);
+		expect(
+			parse(
+				loose.replace(
+					"budget:",
+					"applies-when:\n  charter-declares: mail\nprovides: mail\nbudget:",
+				),
+			),
+		).toEqual([]);
+		expect(pkg("").problems).toEqual([]);
+	});
+
 	test("contract other than the integer 1 is package-contract", () => {
 		for (const contract of ["contract: 2\n", 'contract: "1"\n', ""]) {
 			const parsed = pkg("", contract);
