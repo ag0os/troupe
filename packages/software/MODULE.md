@@ -16,7 +16,7 @@ charter-keys:
 contract: 1
 tools:
   publish-check:
-    description: Scan a branch's added lines, commit messages and PR body for personal values, dashes and attribution lines
+    description: Scan a branch's file names, added lines, commit messages and PR body for personal values, dashes and attribution lines
     access: read
     requires: [git]
 guides: {}

@@ -285,6 +285,83 @@ describe("exemptions (O20, D6)", () => {
 	});
 });
 
+describe("what the scan reads", () => {
+	const found = (args: string[] = []) =>
+		json(args).report.findings.map((f) => `${f.where} ${f.kind}`);
+
+	test("the account name at column 1 is found (S1)", () => {
+		write("a.md", `${account} wrote this.\nAsk ${account} here.\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "A");
+		expect(found()).toEqual(["a.md:1 account", "a.md:2 account"]);
+	});
+
+	test("an added line starting with ++ is a line, not a file header (F1, S2)", () => {
+		write("b.md", "keep\n-- old line\n");
+		git("add", "-A");
+		git("commit", "-q", "-m", "B");
+		git("tag", "start");
+		write("b.md", `keep\n++ new ${home}/x\n`);
+		git("commit", "-q", "-am", "Replace");
+		expect(found(["--base", "start"])).toEqual(["b.md:2 home"]);
+	});
+
+	test("a path holding a space keeps its line number (F2)", () => {
+		write("dir with space/a.md", `${home}/x\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "Space");
+		expect(found()).toEqual(["dir with space/a.md:1 home"]);
+	});
+
+	test("file names are scanned, renames included, and never repeated (F3)", () => {
+		const terms = join(root, "terms.txt");
+		writeFileSync(terms, "nightjar\n");
+		write("plain.md", "Plain text.\n");
+		git("add", "-A");
+		git("commit", "-q", "-m", "Plain");
+		git("tag", "start");
+		write(`${account}.md`, "Clean text.\n");
+		git("mv", "plain.md", "nightjar-notes.md");
+		git("add", "-A");
+		git("commit", "-q", "-m", "Names");
+		const { code, report } = json(["--base", "start", "--terms", terms]);
+		expect(code).toBe(1);
+		expect(report.findings.map((f) => f.kind).sort()).toEqual([
+			"account",
+			"term",
+		]);
+		for (const { where } of report.findings)
+			expect(where).toMatch(/^path \d+$/);
+		const text = run(["--base", "start", "--terms", terms]).stdout;
+		expect(text).not.toContain("nightjar");
+		expect(text).not.toMatch(new RegExp(`\\b${account}\\b`));
+	});
+
+	test("a dash in an ignored file name is exempt, as in its lines (F3, D6)", () => {
+		write(`fixtures/a${EM}b.md`, "Clean.\n");
+		write(`notes/a${EN}b.md`, "Clean.\n");
+		git("add", "-A");
+		git("commit", "-q", "-m", "Dashed names");
+		expect(found(["--ignore", "fixtures/"])).toEqual(["path 2 en-dash"]);
+	});
+
+	test("a branch with no merge base is an error, not clean (F5, S3)", () => {
+		git("checkout", "-q", "--orphan", "lonely");
+		write("c.md", "Alone.\n");
+		git("add", "-A");
+		git("commit", "-q", "-m", "Lonely");
+		const result = run([]);
+		expect(result.code).toBe(2);
+		expect(result.stderr).toContain("no merge base between main and HEAD");
+		expect(result.stdout).toBe("");
+	});
+
+	test("a relative --body shaped like an awk assignment is read as a file (F10)", () => {
+		writeFileSync(join(repo, "x=1"), `${home}/body\n`);
+		expect(found(["--body", "x=1"])).toEqual(["body:1 home"]);
+	});
+});
+
 describe("the package is publishable (O19, Extractable)", () => {
 	test("the tool is POSIX sh and executable", () => {
 		expect(readFileSync(tool, "utf8").split("\n")[0]).toBe("#!/bin/sh");

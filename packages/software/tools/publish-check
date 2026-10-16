@@ -1,15 +1,17 @@
 #!/bin/sh
 # publish-check: scan what a branch would publish for personal values, dashes
 # and harness attribution lines. Read only: it runs git queries and writes
-# nothing but its report. Contract: docs/PACKAGES.md (contract 1).
+# nothing but its report and a temporary directory. Needs git and mktemp -d
+# on PATH. Contract: docs/PACKAGES.md (contract 1).
 
 usage() {
 	cat <<'USAGE'
 usage: publish-check [--base <ref>] [--body <file>] [--terms <file>]
                      [--ignore <prefix>]... [--forbid-attribution] [--json]
 
-Scans the lines the branch adds (git diff -U0 <base>...HEAD), the branch's
-commit messages, and the --body file when given, for:
+Scans the names of the files the branch adds, changes or renames, the lines
+it adds (git diff -U0 <base>...HEAD), its commit messages, and the --body file
+when given, for:
   home         the home path ($HOME)
   account      the account name (id -un), as a whole word
   email        the git email (git config user.email)
@@ -24,10 +26,13 @@ commit messages, and the --body file when given, for:
 --terms      the terms file; default
              $SHEPHERD_CONFIG_DIR/packages/software/publish-check/terms
              (one term per line; blank lines and lines starting with # skipped)
---ignore     a path prefix whose files skip the dash check; repeatable, and
-             read from .publish-check-ignore at the repository root as well.
-             Personal values are never exempt.
+--ignore     a path prefix whose files and file names skip the dash check;
+             repeatable, and read from .publish-check-ignore at the repository
+             root as well. Personal values are never exempt.
 --json       one JSON object on stdout
+
+A finding's where is file:line for an added line, path <n> for the n-th file
+name (never the name itself), commit <hash>:line, or body:line.
 
 Exit: 0 clean, 1 failing findings, 2 usage or environment error.
 USAGE
@@ -102,32 +107,44 @@ trap 'rm -rf "$tmp"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Every scanned line as source<TAB>where<TAB>text, source one of diff,
-# commit or body. A diff line's where is file:line in the new file.
+# Every scanned line as source<TAB>where<TAB>text, source one of path, diff,
+# commit or body. A diff line's where is file:line in the new file; a path's
+# where is its ordinal, so the report never repeats a name it flags.
+git merge-base "$base" HEAD >/dev/null 2>&1 || fail "no merge base between $base and HEAD"
+git -c core.quotepath=off diff --name-only --diff-filter=d "$base...HEAD" >"$tmp/names" ||
+	fail "git could not list the branch's files against $base"
+git -c core.quotepath=off diff -U0 --no-color --no-ext-diff --no-textconv \
+	"$base...HEAD" >"$tmp/diff" || fail "git could not read the branch against $base"
+git log --no-color --format='%x01%h%n%B' "$base..HEAD" >"$tmp/log" ||
+	fail "git could not read the branch's commits against $base"
 {
-	git -c core.quotepath=off diff -U0 --no-color --no-ext-diff --no-textconv \
-		"$base...HEAD" | awk '
-		/^\+\+\+ / {
+	awk '{ printf "path\tpath %d\t%s\n", NR, $0 }' "$tmp/names"
+	awk '
+		/^diff --git / { header = 1; file = ""; next }
+		header && /^\+\+\+ / {
 			file = substr($0, 5)
+			sub(/\t$/, "", file)
 			if (file == "/dev/null") file = ""
 			else sub(/^b\//, "", file)
 			next
 		}
 		/^@@ / {
+			header = 0
 			split($3, range, ",")
 			line = substr(range[1], 2) + 0
 			next
 		}
-		/^\+/ && file != "" { printf "diff\t%s:%d\t%s\n", file, line, substr($0, 2); line++ }
-	'
-	git log --no-color --format='%x01%h%n%B' "$base..HEAD" | awk '
+		!header && /^\+/ && file != "" { printf "diff\t%s:%d\t%s\n", file, line, substr($0, 2); line++ }
+	' "$tmp/diff"
+	awk '
 		/^\001/ { commit = substr($0, 2); line = 0; next }
 		{ line++; printf "commit\tcommit %s:%d\t%s\n", commit, line, $0 }
-	'
+	' "$tmp/log"
 	if [ -n "$body" ]; then
+		case $body in /*) ;; *) body=./$body ;; esac
 		awk '{ printf "body\tbody:%d\t%s\n", NR, $0 }' "$body"
 	fi
-} >"$tmp/lines" || fail "git could not read the branch against $base"
+} >"$tmp/lines"
 
 PC_HOME=$HOME \
 	PC_ACCOUNT=$(id -un 2>/dev/null) \
@@ -148,7 +165,7 @@ PC_HOME=$HOME \
 	function word(text, value,    rest, at, before, after, offset) {
 		rest = text; offset = 0
 		while ((at = index(rest, value)) > 0) {
-			before = substr(text, offset + at - 1, 1)
+			before = offset + at > 1 ? substr(text, offset + at - 1, 1) : ""
 			after = substr(text, offset + at + length(value), 1)
 			if (before !~ /[A-Za-z0-9_]/ && after !~ /[A-Za-z0-9_]/) return 1
 			offset += at
@@ -184,9 +201,9 @@ PC_HOME=$HOME \
 		for (i = 1; i <= nterms; i++)
 			if (index(text, terms[i])) add("term", "line " termlines[i] " of the terms file", 1)
 		exempt = 0
-		if (source == "diff")
+		if (source == "diff" || source == "path")
 			for (i = 1; i <= nig; i++)
-				if (index(where, ignores[i]) == 1) exempt = 1
+				if (index(source == "path" ? text : where, ignores[i]) == 1) exempt = 1
 		if (!exempt && index(text, em)) add("em-dash", "an em dash", 1)
 		if (!exempt && index(text, en)) add("en-dash", "an en dash", 1)
 		lower = tolower(text)

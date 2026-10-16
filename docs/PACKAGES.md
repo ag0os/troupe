@@ -227,11 +227,12 @@ shepherd tool software publish-check [--base <ref>] [--body <file>] [--terms <fi
                                      [--ignore <prefix>]... [--forbid-attribution] [--json]
 ```
 
-It scans the lines a branch adds (`git diff -U0 <base>...HEAD`), the branch's commit messages and an optional pull
-request body for the home path, the account name (whole word), the git email, each line of
+It scans the names of the files a branch adds, changes or renames, the lines it adds (`git diff -U0 <base>...HEAD`),
+the branch's commit messages and an optional pull request body for the home path, the account name (whole word), the git email, each line of
 `$SHEPHERD_CONFIG_DIR/packages/software/publish-check/terms`, em and en dashes, and harness attribution lines. The base
 defaults to `origin/HEAD`, then `main`. Attribution lines are reported, and fail only under `--forbid-attribution`, so
 the agent reads the charter's `software.attribution` slot and passes the flag. Path prefixes in
-`.publish-check-ignore` at the repository root, and in `--ignore`, skip the dash check only; personal values are never
-exempt. Findings name where and what, never the value found. Exit 0 clean, 1 findings, 2 usage or not a git
-repository.
+`.publish-check-ignore` at the repository root, and in `--ignore`, skip the dash check only, for a file's lines and its
+name; personal values are never exempt. Findings name where and what, never the value found: a file name is reported
+as `path <n>`, its place in the list of names, never the name. Exit 0 clean, 1 findings, 2 usage, not a git
+repository, or a base with no merge base with `HEAD`.
