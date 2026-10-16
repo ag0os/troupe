@@ -26,6 +26,8 @@ A location is a directory of packages. Shepherd reads two:
 - the base location, `packages/` in the checkout that holds the running `shepherd` binary (`<bin>/../packages`);
 - the enclosing location, `<enclosing workspace>/.shepherd/packages/`, the shared layer of the workspace above.
 
+A master's own `.shepherd/packages/` is therefore seen by its children, not by the master itself.
+
 A workspace sees a package only when its charter names it on the `Modules:` line, exactly as it names built-in
 modules. That one selection decides all three things a package offers: its module text in the prompt, its tools and
 its guides. A package found in no location is unknown; a package found in two is refused (see below).
@@ -35,10 +37,8 @@ checkout still launches; it composes without the base packages, and `shepherd to
 
 ## MODULE.md frontmatter
 
-The frontmatter is strict YAML 1.2 between `---` lines, with the first key on the first nonblank line. The module
-fields keep the meaning they have for any Shepherd module (`name`, `type`, `description`, `budget`, `applies-when`,
-`provides`, `default`, `charter-keys`; see "Module format" in [SHEPHERD.md](SHEPHERD.md)). A package adds `contract`,
-`tools` and `guides`:
+The frontmatter is strict YAML 1.2 between `---` lines, with the first key on the first nonblank line. A package uses
+the fields of any Shepherd module and adds `contract`, `tools` and `guides`:
 
 ```yaml
 ---
@@ -46,7 +46,7 @@ name: mail                        # must equal the directory name
 type: domain
 description: Triage and answer email through hey
 applies-when:
-  charter-declares: mail          # loads where the charter says "Modules: mail"
+  charter-declares: mail          # required: loads only where the charter says "Modules: mail"
 budget: 400
 charter-keys: {}
 contract: 1                       # required; the version of this document
@@ -63,6 +63,25 @@ guides:                           # optional
 # Integration: Mail
 ...the module text...
 ```
+
+Every field a package's frontmatter may hold:
+
+| Field | Meaning in a package |
+|-------|----------------------|
+| `name` | Required. Equals the package directory's name. |
+| `type` | Required. One of `capability`, `method`, `role`, `domain` or `persona`; descriptive only. |
+| `description` | Required. One nonblank line, used by checks and never put in the prompt. |
+| `budget` | Required. A positive integer of prompt words. `shepherd tool check` warns `module-over-budget` when the module text has more words, and reports the cost as `module-cost` otherwise; the text still loads whole. |
+| `applies-when` | Required, with `charter-declares` equal to `name` or to `provides`: a package loads only where a charter names it, by name or by slot. Without it, or with any other value, the package is a `module-schema` problem and loads nothing. `has-children` and `enclosing-modules` (booleans) may be added as further conditions. |
+| `provides` | Optional. A slot the package fills, so a charter may name the slot instead of the package. |
+| `default` | Optional boolean, false by default, only with `provides`: the provider a slot request chooses when the charter names no provider. |
+| `charter-keys` | Optional mapping of the charter keys the module reads (`<name>.<key>`, `<provides>.<key>` or a `core.` key) to `required` or `optional`; `shepherd tool check` reports a required key the charter lacks. |
+| `contract` | Required. The integer 1. |
+| `tools` | Optional. The tools, as below. |
+| `guides` | Optional. The guides, as below. |
+
+"Module format" and "Predicates and provider selection" in [SHEPHERD.md](SHEPHERD.md) say how these fields behave for
+every module; for a package, this table is enough.
 
 Rules:
 
