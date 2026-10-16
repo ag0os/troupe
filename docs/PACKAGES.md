@@ -71,6 +71,9 @@ Rules:
   not read, so a newer package is refused for one reason, not a list of unknown keys.
 - Unknown keys are errors, at the top level and inside a tool or guide declaration. A package with any frontmatter
   problem loads nothing and is reported.
+- A package's problems reach the session header (`- Module problems:`) only in a workspace whose charter names the
+  package or its slot, so a broken package does not change every session's prompt. `shepherd tool check` reports every
+  package the workspace can see, named or not.
 - Tool and guide names match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every declared tool must exist as `tools/<tool>` with the executable bit; every declared guide as
   `guides/<guide>.md`. An executable in `tools/` that is not declared is never run.

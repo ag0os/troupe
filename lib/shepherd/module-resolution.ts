@@ -149,6 +149,13 @@ export function resolveModules(
 		(m) => !(m.layer === "local" && inheritedPaths.has(m.path)),
 	);
 	const problems: ResolutionProblem[] = [];
+	const tokens = declaredModules(catalog.charter);
+	// A package no charter names stays out of the header, broken or not:
+	// `tool check` reports every package it can see.
+	const named = (module: ModuleCandidate) =>
+		!module.package ||
+		tokens.has(module.package.name) ||
+		(!!module.metadata?.provides && tokens.has(module.metadata.provides));
 	for (const module of surviving) {
 		// Embedded built-ins are tested before a build; a package on disk
 		// may be edited after it, so its problems are reported (D12).
@@ -160,15 +167,15 @@ export function resolveModules(
 			throw new Error(
 				`${module.source}: invalid built-in metadata: ${module.problems.map((p) => p.message).join("; ")}`,
 			);
-		for (const problem of module.problems)
-			problems.push({
-				...problem,
-				file: module.source,
-				message: `${problem.message}${module.body === undefined ? "" : "; stripped body loaded ungated"}`,
-			});
+		if (named(module))
+			for (const problem of module.problems)
+				problems.push({
+					...problem,
+					file: module.source,
+					message: `${problem.message}${module.body === undefined ? "" : "; stripped body loaded ungated"}`,
+				});
 	}
 	const candidates = surviving.filter((m) => m.body !== undefined);
-	const tokens = declaredModules(catalog.charter);
 	const annotated = candidates.filter((m) => m.metadata);
 	const slots = new Set(
 		annotated.flatMap((m) =>

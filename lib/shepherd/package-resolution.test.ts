@@ -220,6 +220,24 @@ describe("a broken base package reports, it does not throw (O7)", () => {
 		);
 		expect(problems.length).toBe(1);
 	});
+
+	test("the problem line appears only where the charter names the package (F4)", () => {
+		const root = tree({
+			"base/zzz/MODULE.md": packageText("zzz", "", "ZZZ\n", "contract: 2\n"),
+			"named/.shepherd/charter.md": "Modules: zzz\n",
+			"plain/.shepherd/charter.md": "# Charter\n",
+		});
+		const locations: PackageLocation[] = [
+			{ dir: join(root, "base"), layer: "builtin" },
+		];
+		const named = compose(root, "named", locations);
+		expect(header(named.fragments)).toContain(
+			`- Module problems: ${join(root, "base/zzz/MODULE.md")}: package-contract: `,
+		);
+		const plain = compose(root, "plain", locations);
+		expect(header(plain.fragments)).not.toContain("Module problems");
+		expect(plain.problems).toEqual([]);
+	});
 });
 
 describe("a package loads only where a charter names it (B1, R2 a)", () => {
