@@ -253,5 +253,6 @@ defaults to `origin/HEAD`, then `main`. Attribution lines are reported, and fail
 the agent reads the charter's `software.attribution` slot and passes the flag. Path prefixes in
 `.publish-check-ignore` at the repository root, and in `--ignore`, skip the dash check only, for a file's lines and its
 name; personal values are never exempt. Findings name where and what, never the value found: a file name is reported
-as `path <n>`, its place in the list of names, never the name. Exit 0 clean, 1 findings, 2 usage, not a git
+as `path <n>`, its place in the list of names, never the name, and a line of a file whose name holds a personal value
+as `path <n>:<line>`. Exit 0 clean, 1 findings, 2 usage, not a git
 repository, or a base with no merge base with `HEAD`.

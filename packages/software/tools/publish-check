@@ -32,7 +32,8 @@ when given, for:
 --json       one JSON object on stdout
 
 A finding's where is file:line for an added line, path <n> for the n-th file
-name (never the name itself), commit <hash>:line, or body:line.
+name (never the name itself), commit <hash>:line, or body:line. A line of a
+file whose name holds a personal value is placed as path <n>:line.
 
 Exit: 0 clean, 1 failing findings, 2 usage or environment error.
 USAGE
@@ -193,17 +194,25 @@ PC_HOME=$HOME \
 			if (raw[i] !~ /^[ \t]*$/ && raw[i] !~ /^#/) ignores[++nig] = raw[i]
 	}
 	{
-		source = $1; where = $2
+		source = $1; where = $2; place = $2
 		text = substr($0, length($1) + length($2) + 3)
+		# A line of a file whose name holds a personal value is placed by the
+		# number of that name, so the report never repeats the name.
+		if (source == "diff") {
+			name = place; sub(/:[0-9]+$/, "", name)
+			if (name in flagged) where = flagged[name] substr(place, length(name) + 1)
+		}
+		first = n
 		if (home != "" && index(text, home)) add("home", "the home path", 1)
 		if (account != "" && word(text, account)) add("account", "the account name", 1)
 		if (email != "" && index(text, email)) add("email", "the git email", 1)
 		for (i = 1; i <= nterms; i++)
 			if (index(text, terms[i])) add("term", "line " termlines[i] " of the terms file", 1)
+		if (source == "path" && n > first) flagged[text] = where
 		exempt = 0
 		if (source == "diff" || source == "path")
 			for (i = 1; i <= nig; i++)
-				if (index(source == "path" ? text : where, ignores[i]) == 1) exempt = 1
+				if (index(source == "path" ? text : place, ignores[i]) == 1) exempt = 1
 		if (!exempt && index(text, em)) add("em-dash", "an em dash", 1)
 		if (!exempt && index(text, en)) add("en-dash", "an en dash", 1)
 		lower = tolower(text)

@@ -337,6 +337,13 @@ describe("what the scan reads", () => {
 		expect(text).not.toMatch(new RegExp(`\\b${account}\\b`));
 	});
 
+	test("a line in a file whose name holds a personal value is placed by the name's number", () => {
+		write(`notes-${account}.md`, `Clean.\nAn em${EM}dash.\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "Named notes");
+		expect(found()).toEqual(["path 1 account", "path 1:2 em-dash"]);
+	});
+
 	test("a dash in an ignored file name is exempt, as in its lines (F3, D6)", () => {
 		write(`fixtures/a${EM}b.md`, "Clean.\n");
 		write(`notes/a${EN}b.md`, "Clean.\n");
