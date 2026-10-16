@@ -18,7 +18,9 @@ const tool = join(packageDir, "tools/publish-check");
 // Code points, so this file holds no dash for publish-check to find.
 const EM = String.fromCodePoint(0x2014);
 const EN = String.fromCodePoint(0x2013);
-const account = Bun.spawnSync(["id", "-un"]).stdout.toString().trim();
+// A fake id first on PATH plants this account, so no test depends on the
+// account of the machine it runs on.
+const account = "plantedacct";
 
 // The tool compares $HOME as text, and git needs no home with repo-local
 // config, so the fixture home is a fixed string that names no account.
@@ -29,7 +31,7 @@ let repo: string;
 
 function env(extra: Record<string, string> = {}): Record<string, string> {
 	return {
-		PATH: process.env.PATH ?? "/usr/bin:/bin",
+		PATH: `${join(root, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}`,
 		HOME: home,
 		SHEPHERD_CONFIG_DIR: config,
 		GIT_CONFIG_NOSYSTEM: "1",
@@ -78,18 +80,24 @@ type Report = {
 	failing: number;
 };
 
-function json(args: string[] = []): { code: number; report: Report } {
-	const result = run([...args, "--json"]);
+function json(
+	args: string[] = [],
+	cwd = repo,
+): { code: number; report: Report } {
+	const result = run([...args, "--json"], cwd);
 	return { code: result.code, report: JSON.parse(result.stdout) as Report };
 }
 
 beforeEach(() => {
-	// Named after the account, so no test can pass only because this
-	// machine's temporary path holds no personal value.
+	// Named after the account, so a report that echoes or scans an
+	// absolute fixture path fails the exact finding lists.
 	root = realpathSync(mkdtempSync(join(tmpdir(), `${account}-`)));
 	config = join(root, "config");
 	repo = join(root, "repo");
-	for (const dir of [config, repo]) mkdirSync(dir);
+	for (const dir of [config, repo, join(root, "bin")]) mkdirSync(dir);
+	writeFileSync(join(root, "bin/id"), `#!/bin/sh\necho ${account}\n`, {
+		mode: 0o755,
+	});
 	git("init", "-q", "-b", "main");
 	git("config", "user.name", "Fixture");
 	git("config", "user.email", "planted@example.test");
@@ -341,6 +349,35 @@ describe("what the scan reads", () => {
 		write(`notes-${account}.md`, `Clean.\nAn em${EM}dash.\n`);
 		git("add", "-A");
 		git("commit", "-q", "-m", "Named notes");
+		expect(found()).toEqual(["path 1 account", "path 1:2 em-dash"]);
+	});
+
+	test("the caller's diff.noprefix changes no where (A1)", () => {
+		git("config", "diff.noprefix", "true");
+		write(`b/${account}.md`, `${home}/x\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "Prefix");
+		expect(found()).toEqual(["path 1 account", "path 1:1 home"]);
+	});
+
+	test("the caller's diff.relative does not narrow the scan to a subdirectory (A1)", () => {
+		git("config", "diff.relative", "true");
+		write("sub/in.md", "Clean.\n");
+		write(`out/${account}.md`, `${home}/x\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "Relative");
+		const { code, report } = json([], join(repo, "sub"));
+		expect(code).toBe(1);
+		expect(report.findings.map((f) => `${f.where} ${f.kind}`)).toEqual([
+			"path 1 account",
+			"path 1:1 home",
+		]);
+	});
+
+	test("a line of a C-quoted, personally named file is placed by the name's number (B4)", () => {
+		write(`q"${account}.md`, `Clean.\nAn em${EM}dash.\n`);
+		git("add", "-A");
+		git("commit", "-q", "-m", "Quoted name");
 		expect(found()).toEqual(["path 1 account", "path 1:2 em-dash"]);
 	});
 

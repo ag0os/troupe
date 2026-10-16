@@ -33,7 +33,8 @@ when given, for:
 
 A finding's where is file:line for an added line, path <n> for the n-th file
 name (never the name itself), commit <hash>:line, or body:line. A line of a
-file whose name holds a personal value is placed as path <n>:line.
+file whose name holds a personal value is placed as path <n>:line. <n> counts
+the lines of git diff --name-only --diff-filter=d <base>...HEAD.
 
 Exit: 0 clean, 1 failing findings, 2 usage or environment error.
 USAGE
@@ -112,10 +113,12 @@ trap 'exit 143' TERM
 # commit or body. A diff line's where is file:line in the new file; a path's
 # where is its ordinal, so the report never repeats a name it flags.
 git merge-base "$base" HEAD >/dev/null 2>&1 || fail "no merge base between $base and HEAD"
-git -c core.quotepath=off diff --name-only --diff-filter=d "$base...HEAD" >"$tmp/names" ||
+# --no-relative and the explicit prefixes override the caller's diff.relative,
+# diff.noprefix and diff.mnemonicPrefix, which would skip files or rename them.
+git -c core.quotepath=off diff --name-only --no-relative --diff-filter=d "$base...HEAD" >"$tmp/names" ||
 	fail "git could not list the branch's files against $base"
 git -c core.quotepath=off diff -U0 --no-color --no-ext-diff --no-textconv \
-	"$base...HEAD" >"$tmp/diff" || fail "git could not read the branch against $base"
+	--no-relative --src-prefix=a/ --dst-prefix=b/ "$base...HEAD" >"$tmp/diff" || fail "git could not read the branch against $base"
 git log --no-color --format='%x01%h%n%B' "$base..HEAD" >"$tmp/log" ||
 	fail "git could not read the branch's commits against $base"
 {
@@ -125,6 +128,8 @@ git log --no-color --format='%x01%h%n%B' "$base..HEAD" >"$tmp/log" ||
 		header && /^\+\+\+ / {
 			file = substr($0, 5)
 			sub(/\t$/, "", file)
+			# A C-quoted name takes the list form, "name", to match it.
+			if (file ~ /^"b\//) file = "\"" substr(file, 4)
 			if (file == "/dev/null") file = ""
 			else sub(/^b\//, "", file)
 			next
