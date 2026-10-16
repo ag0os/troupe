@@ -17,7 +17,8 @@ import type { Workspace, WorkspaceTree } from "./tree";
  * What `MODULE.md` declares against what the package directory holds: each
  * declared tool a file with the executable bit, each declared guide a file,
  * each `requires` entry on PATH. Undeclared files in `tools/` are noted,
- * since dispatch never runs them; dotfiles and directories are not tools. No tool is run (docs/PACKAGES.md).
+ * since dispatch never runs them; dotfiles and directories are not tools.
+ * No tool is run (docs/PACKAGES.md).
  */
 export function packageFileFindings(module: ModuleCandidate): Finding[] {
 	const record = module.package;

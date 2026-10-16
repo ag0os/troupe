@@ -71,11 +71,11 @@ Every field a package's frontmatter may hold:
 | `name` | Required. Equals the package directory's name. |
 | `type` | Required. One of `capability`, `method`, `role`, `domain` or `persona`; descriptive only. |
 | `description` | Required. One nonblank line, used by checks and never put in the prompt. |
-| `budget` | Required. A positive integer of prompt words. `shepherd tool check` warns `module-over-budget` when the module text has more words, and reports the cost as `module-cost` otherwise; the text still loads whole. |
-| `applies-when` | Required, with `charter-declares` equal to `name` or to `provides`: a package loads only where a charter names it, by name or by slot. Without it, or with any other value, the package is a `module-schema` problem and loads nothing. `has-children` and `enclosing-modules` (booleans) may be added as further conditions. |
-| `provides` | Optional. A slot the package fills, so a charter may name the slot instead of the package. |
-| `default` | Optional boolean, false by default, only with `provides`: the provider a slot request chooses when the charter names no provider. |
-| `charter-keys` | Optional mapping of the charter keys the module reads (`<name>.<key>`, `<provides>.<key>` or a `core.` key) to `required` or `optional`; `shepherd tool check` reports a required key the charter lacks. |
+| `budget` | Required. A positive integer of prompt words. `shepherd tool check` warns `module-over-budget` when the module text has more words and, for a package in an enclosing workspace, reports the cost as `module-cost`; the text still loads whole. |
+| `applies-when` | Required, with `charter-declares` equal to `provides` when the package has one, else to `name`: a package loads only where a charter names it, and a provider also where the charter names its slot. Without it, or with any other value, the package is a `module-schema` problem and loads nothing. `has-children` and `enclosing-modules` (booleans) may be added as further conditions. |
+| `provides` | Optional. A slot the package fills, so a charter may name the slot instead of the package; the package then declares the slot in `charter-declares`. A slot may not share its name with a module that provides nothing: that slot is a `module-slot-conflict`, no provider loads for it, and the module loads only where the charter names it itself. |
+| `default` | Optional boolean, false by default, only with `provides`: the provider a charter naming the slot gets when it names no provider. |
+| `charter-keys` | Optional mapping of the charter keys the module reads (`<name>.<key>`, `<provides>.<key>`, or a core key: `core.mission`, `core.role`, `core.what-lives-where`, `core.way-of-working`, `core.cadence`, `core.done`, `core.toolset` or `core.structure`) to `required` or `optional`; `shepherd tool check` reports a required key the charter lacks. |
 | `contract` | Required. The integer 1. |
 | `tools` | Optional. The tools, as below. |
 | `guides` | Optional. The guides, as below. |
@@ -91,8 +91,8 @@ Rules:
 - Unknown keys are errors, at the top level and inside a tool or guide declaration. A package with any frontmatter
   problem loads nothing and is reported.
 - A package's problems reach the session header (`- Module problems:`) only in a workspace whose charter names the
-  package or its slot, so a broken package does not change every session's prompt. `shepherd tool check` reports every
-  package the workspace can see, named or not.
+  package, or its slot when its frontmatter is valid, so a broken package does not change every session's prompt.
+  `shepherd tool check` reports every package the workspace can see, named or not.
 - Tool and guide names match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every declared tool must exist as `tools/<tool>`, a regular file with the executable bit; every declared guide as
   `guides/<guide>.md`. An executable in `tools/` that is not declared is never run.
@@ -152,11 +152,11 @@ launch sets `SHEPHERD_WORKSPACE` to its own launch directory, so a session that 
 workspace can still run its packages' tools there.
 
 The variable decides which workspace authorizes a package run and a package guide, and nothing else: no core tool,
-session name or identity reads it. A launcher variable is inherited by every process the session starts, nested sessions and forks
-included. A nested Shepherd launch replaces it with its own directory, but a delegate agent, a fork or a shell started
-from the session keeps the parent's value, and runs the parent workspace's package tools as that workspace authorizes
-them. That is the intended reach for a delegate working on the session's behalf; it is also why the variable is never
-used to tell which session is running.
+session name or identity reads it. A launcher variable is inherited by every process the session starts,
+nested sessions and forks included. A nested Shepherd launch replaces it with its own directory, but a delegate agent, a
+fork or a shell started from the session keeps the parent's value, and runs the parent workspace's package tools as that
+workspace authorizes them. That is the intended reach for a delegate working on the session's behalf; it is also why the
+variable is never used to tell which session is running.
 
 ## Guides
 
@@ -246,13 +246,14 @@ shepherd tool software publish-check [--base <ref>] [--body <file>] [--terms <fi
                                      [--ignore <prefix>]... [--forbid-attribution] [--json]
 ```
 
-It scans the names of the files a branch adds, changes or renames, the lines it adds (`git diff -U0 <base>...HEAD`),
-the branch's commit messages and an optional pull request body for the home path, the account name (whole word), the git email, each line of
-`$SHEPHERD_CONFIG_DIR/packages/software/publish-check/terms`, em and en dashes, and harness attribution lines. The base
-defaults to `origin/HEAD`, then `main`. Attribution lines are reported, and fail only under `--forbid-attribution`, so
-the agent reads the charter's `software.attribution` slot and passes the flag. Path prefixes in
-`.publish-check-ignore` at the repository root, and in `--ignore`, skip the dash check only, for a file's lines and its
-name; personal values are never exempt. Findings name where and what, never the value found: a file name is reported
-as `path <n>`, its place in the list of names, never the name, and a line of a file whose name holds a personal value
-as `path <n>:<line>`. Exit 0 clean, 1 findings, 2 usage, not a git
-repository, or a base with no merge base with `HEAD`.
+It scans the names of the files a branch adds, changes or renames, the lines it adds (`git diff -U0 <base>...HEAD`), the
+branch's commit messages and an optional pull request body for the home path, the account name (whole word), the git
+email, each line of `$SHEPHERD_CONFIG_DIR/packages/software/publish-check/terms`, em and en dashes, and harness
+attribution lines. The caller's `diff.relative` and `diff.noprefix` settings change nothing it scans. The base defaults
+to `origin/HEAD`, then `main`. Attribution lines are reported, and fail only under `--forbid-attribution`, so the agent
+reads the charter's `software.attribution` slot and passes the flag. Path prefixes in `.publish-check-ignore` at the
+repository root, and in `--ignore`, skip the dash check only, for a file's lines and its name; personal values are never
+exempt. Findings name where and what, never the value found: a file name is reported as `path <n>`, never the name, and
+a line of a file whose name holds a personal value as `path <n>:<line>`, where `<n>` counts the lines of
+`git diff --name-only --diff-filter=d <base>...HEAD`. Exit 0 clean, 1 findings, 2 usage, not a git repository, or a base
+with no merge base with `HEAD`.
