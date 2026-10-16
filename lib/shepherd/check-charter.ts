@@ -128,9 +128,10 @@ export function charterFindings(
 	const bodies = [
 		{ source: "core", body: coreDoc, bodyLine: 1 },
 		...resolved.selected.map((m) => ({
-			source: m.source.startsWith("builtin/")
-				? m.source
-				: relative(state, m.source),
+			source:
+				m.source.startsWith("builtin/") || m.package
+					? m.source
+					: relative(state, m.source),
 			body: m.body ?? "",
 			bodyLine: m.bodyLine,
 		})),

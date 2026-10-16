@@ -12,9 +12,6 @@ import nestedDoc from "../../system-prompts/shepherd/integrations/nested.md" wit
 import rootDoc from "../../system-prompts/shepherd/integrations/root.md" with {
 	type: "text",
 };
-import softwareDoc from "../../system-prompts/shepherd/integrations/software.md" with {
-	type: "text",
-};
 import {
 	type ModuleProblem,
 	type ParsedModule,
@@ -57,7 +54,6 @@ export function builtInModules(): ModuleCandidate[] {
 		["inter-agent", interAgentDoc],
 		["nested", nestedDoc],
 		["root", rootDoc],
-		["software", softwareDoc],
 	].map(([name, raw]) => {
 		const file = `${name}.md`;
 		const source = `builtin/${file}`;

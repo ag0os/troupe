@@ -3,7 +3,11 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isSourcePath } from "../../scripts/shepherd-source";
 import { composeFragments, composeSession } from "./compose";
-import { moduleCatalog, resolveModules } from "./module-resolution";
+import {
+	builtInModules,
+	moduleCatalog,
+	resolveModules,
+} from "./module-resolution";
 import {
 	baseLocation,
 	type PackageLocation,
@@ -279,6 +283,32 @@ describe("header lines (O9, D14)", () => {
 				locations(bare),
 			).packages,
 		).toEqual([]);
+	});
+});
+
+describe("software is a base package (O8, O2)", () => {
+	test("four embedded built-ins; software loads from packages/software", () => {
+		expect(builtInModules().map((m) => m.name)).toEqual([
+			"herdr.md",
+			"inter-agent.md",
+			"nested.md",
+			"root.md",
+		]);
+		const software = packageModules(packageLocations(undefined)).find(
+			(m) => m.package?.name === "software",
+		);
+		expect(software?.layer).toBe("builtin");
+		expect(software?.problems).toEqual([]);
+		expect(software?.source).toBe(
+			resolve(import.meta.dir, "../../packages/software/MODULE.md"),
+		);
+		expect(software?.package?.tools["publish-check"]).toEqual({
+			description: expect.any(String),
+			access: "read",
+			requires: ["git"],
+			network: false,
+		});
+		expect(software?.package?.guides).toEqual({});
 	});
 });
 

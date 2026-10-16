@@ -58,7 +58,9 @@ const STATIC_RULES = [
 ];
 
 const MODULE = (name: string) =>
-	`system-prompts/shepherd/integrations/${name}.md`;
+	name === "software"
+		? "packages/software/MODULE.md"
+		: `system-prompts/shepherd/integrations/${name}.md`;
 
 /** What every launch gets first: core, then the two modules that check themselves. */
 const ALWAYS_LAYERS = [
@@ -1303,9 +1305,11 @@ describe("launcher-gated modules", () => {
 
 	test("each gated module's source opens with the title the cases look for", () => {
 		for (const [name, title] of Object.entries(GATED_TITLES)) {
-			expect(parseModule(text(MODULE(name)), `${name}.md`).body).toStartWith(
-				`${title}\n`,
-			);
+			expect(
+				parseModule(text(MODULE(name)), `${name}.md`, {
+					package: name === "software",
+				}).body,
+			).toStartWith(`${title}\n`);
 		}
 	});
 

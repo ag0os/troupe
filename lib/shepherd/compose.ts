@@ -112,8 +112,7 @@ export function composeSession(
 		.filter(
 			(m) =>
 				m.package ||
-				(m.layer === "builtin" &&
-					["nested.md", "root.md", "software.md"].includes(m.name)),
+				(m.layer === "builtin" && ["nested.md", "root.md"].includes(m.name)),
 		)
 		.map((m) => m.metadata?.name);
 	const details = moduleProblemDetails(problems);

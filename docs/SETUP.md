@@ -23,7 +23,7 @@ Follow these steps on a fresh machine. Shepherd keeps workspace state on disk; m
 
 6. **Codex homes.** Keep a home per account. In `~/.config/shepherd/config.json`, or `$XDG_CONFIG_HOME/shepherd/config.json`, configure the `codex` section with `home` or `homeFile`, and optional `model` and `effort`. The full keys are `codex.home` and `codex.homeFile`; the latter names a file whose first non-empty line supplies the home path. See [Shepherd's Tools section](SHEPHERD.md#tools). Log in with the selected home in `CODEX_HOME`. Herdr's Codex integration installs into `~/.codex`; for other homes, link its `hooks.json` and `herdr-agent-state.sh`.
 
-7. **Code host.** Run `gh auth login` for each account you use and set up SSH keys. Follow the [software module's identity check rule](../system-prompts/shepherd/integrations/software.md#rules-of-engagement) before writes and before trusting a 404.
+7. **Code host.** Run `gh auth login` for each account you use and set up SSH keys. Follow the [software module's identity check rule](../packages/software/MODULE.md#rules-of-engagement) before writes and before trusting a 404.
 
 8. **Workspaces.** Restore `.shepherd/` directories from backup, or run `shepherd tool init --master` in a root such as `~/shepherds` and `shepherd tool init` in each workspace beneath it. Launch `shepherd` in each and run the init conversation to agree its charter. Claude auto-memory is keyed by absolute path and does not travel with the workspace.
 

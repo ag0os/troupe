@@ -95,8 +95,12 @@ describe("shipped guides and templates", () => {
 describe("charter boundary text", () => {
 	const charter = GUIDES.find(({ name }) => name === "charter")?.text ?? "";
 	const software = parseModule(
-		readFileSync(join(prompts, "integrations/software.md"), "utf8"),
+		readFileSync(
+			join(import.meta.dir, "../../packages/software/MODULE.md"),
+			"utf8",
+		),
 		"software.md",
+		{ package: true },
 	);
 
 	test("guide supplies a synthetic slot example and the eight core headings", () => {

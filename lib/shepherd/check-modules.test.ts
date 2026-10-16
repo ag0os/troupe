@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { checkWorkspace } from "./check";
 import { loadConfig } from "./config";
 import { builtInModules } from "./module-resolution";
+import { packageLocations, packageModules } from "./package-resolution";
 import { makeTree } from "./test-support";
 import { words } from "./text";
 import { discoverTree } from "./tree";
@@ -140,10 +141,13 @@ test("built-in metadata and body costs are pinned against budgets", () => {
 		["root", 631, 650],
 		["software", 2536, 2600],
 	];
-	const builtins = builtInModules();
+	const builtins = [
+		...builtInModules(),
+		...packageModules(packageLocations(undefined)),
+	];
 	for (const [index, [name, cost, budget]] of expected.entries()) {
 		const module = builtins[index];
-		expect(module?.name).toBe(`${name}.md`);
+		expect(module?.metadata?.name).toBe(name);
 		expect(module?.problems).toEqual([]);
 		expect(words(module?.body ?? "")).toBe(cost);
 		expect(module?.metadata?.budget).toBe(budget);
@@ -155,15 +159,15 @@ test("built-in finding paths stay literal and defects throw in resolution", asyn
 	const { moduleFindings } = await import("./check-modules");
 	const { resolveModules } = await import("./module-resolution");
 	const candidates = builtInModules();
-	const software = candidates.find((m) => m.name === "software.md");
-	if (!software?.metadata) throw new Error("missing software metadata");
+	const software = candidates.find((m) => m.name === "root.md");
+	if (!software?.metadata) throw new Error("missing root metadata");
 	software.metadata.budget = 1;
 	const catalog = { candidates, children: [], published: false };
 	expect(moduleFindings(catalog, "/workspace/.shepherd")).toContainEqual(
 		expect.objectContaining({
 			code: "module-over-budget",
 			level: "warn",
-			file: "builtin/software.md",
+			file: "builtin/root.md",
 		}),
 	);
 	software.metadata = undefined;
@@ -171,13 +175,13 @@ test("built-in finding paths stay literal and defects throw in resolution", asyn
 		{ code: "module-schema", message: "budget: invalid", line: 6 },
 	];
 	expect(() => resolveModules(catalog)).toThrow(
-		"builtin/software.md: invalid built-in metadata",
+		"builtin/root.md: invalid built-in metadata",
 	);
 	expect(moduleFindings(catalog, "/workspace/.shepherd")).toContainEqual(
 		expect.objectContaining({
 			code: "module-schema",
 			level: "error",
-			file: "builtin/software.md",
+			file: "builtin/root.md",
 			line: 6,
 		}),
 	);
@@ -384,7 +388,9 @@ test("restatement order includes core and selected built-ins before inherited an
 	).toContain(
 		`possible repeated rule: core:${core.slice(0, core.indexOf(block)).split("\n").length};`,
 	);
-	const software = builtInModules().find((m) => m.name === "software.md");
+	const software = packageModules(packageLocations(undefined)).find(
+		(m) => m.package?.name === "software",
+	);
 	const softwareBlock = software?.body
 		?.split(/\r?\n\s*\r?\n/)
 		.find((p) => !p.startsWith("#") && words(p) >= 20);
@@ -399,7 +405,7 @@ test("restatement order includes core and selected built-ins before inherited an
 		findings(files).find((f) => f.code === "charter-module-restatement")
 			?.message,
 	).toContain(
-		`possible repeated rule: builtin/software.md:${software.bodyLine + software.body.slice(0, software.body.indexOf(softwareBlock)).split("\n").length - 1};`,
+		`possible repeated rule: ${software.source}:${software.bodyLine + software.body.slice(0, software.body.indexOf(softwareBlock)).split("\n").length - 1};`,
 	);
 	const inactive = findings({
 		...files,

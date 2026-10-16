@@ -15,8 +15,14 @@ export function moduleFindings(
 	state: string,
 ): Finding[] {
 	const findings: Finding[] = [];
+	// A package's files display as absolute paths: they live outside the state dir (D17).
+	const packageSources = new Set(
+		catalog.candidates.filter((m) => m.package).map((m) => m.source),
+	);
 	const fileOf = (source: string) =>
-		source.startsWith("builtin/") || source === "charter.md"
+		source.startsWith("builtin/") ||
+		source === "charter.md" ||
+		packageSources.has(source)
 			? source
 			: relative(state, source);
 	const inheritedPaths = new Set(

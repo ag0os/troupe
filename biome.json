@@ -5,6 +5,7 @@
 		"includes": [
 			"./agents/**/*",
 			"./lib/shepherd/**/*",
+			"./packages/**/*.ts",
 			"./evals/**/*",
 			"!evals/shepherd/results/**",
 			"!evals/shepherd/artifacts/**",
