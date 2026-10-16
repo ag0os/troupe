@@ -88,7 +88,7 @@ export function packageAccess(
 	}
 	if (!selected)
 		return refused(
-			`package "${name}" is not named on this workspace's Modules: line; its ${offering} are unavailable here`,
+			`package "${name}" is not selected by this workspace's Modules: line; its ${offering} are unavailable here; if the line names it, see Module problems in the session header`,
 		);
 	return { kind: "selected", record: held };
 }

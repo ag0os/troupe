@@ -210,7 +210,7 @@ describe("one rule gates seeing and running (O3)", () => {
 			expect(existsSync(marker)).toBe(named);
 			if (!named)
 				expect(stderr).toBe(
-					`shepherd: package "mail" is not named on this workspace's Modules: line; its tools are unavailable here\n`,
+					`shepherd: package "mail" is not selected by this workspace's Modules: line; its tools are unavailable here; if the line names it, see Module problems in the session header\n`,
 				);
 		}
 	});
@@ -236,7 +236,7 @@ describe("refusals run nothing and exit 2 (O13)", () => {
 		await refused(
 			dispatch(["tool", "mail", "unread"], ws, locations),
 			marker,
-			`package "mail" is not named on this workspace's Modules: line; its tools are unavailable here`,
+			`package "mail" is not selected by this workspace's Modules: line; its tools are unavailable here; if the line names it, see Module problems in the session header`,
 		);
 	});
 

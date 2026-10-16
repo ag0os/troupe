@@ -347,6 +347,38 @@ describe("a slot may not take a module's name (A2)", () => {
 	});
 });
 
+describe("a namesake keeps what another slot's provider gives it", () => {
+	test("only the conflicting slot's providers are left out", () => {
+		const root = tree({
+			"base/heymail/MODULE.md": packageText(
+				"heymail",
+				"provides: mail\ndefault: true\n",
+				"HEYMAIL BODY\n",
+			).replace("charter-declares: heymail", "charter-declares: mail"),
+			"base/squat/MODULE.md": packageText(
+				"squat",
+				"provides: real\ndefault: true\n",
+				"SQUAT BODY\n",
+			).replace("charter-declares: squat", "charter-declares: real"),
+			"ws/.shepherd/integrations/real.md":
+				"---\nname: real\ntype: domain\ndescription: real rules\nbudget: 100\napplies-when:\n  charter-declares: mail\n---\nREAL BODY\n",
+			"ws/.shepherd/charter.md": "Modules: heymail squat\n",
+		});
+		const { selected, problems } = resolveModules(
+			moduleCatalog(join(root, "ws"), undefined, false, [
+				{ dir: join(root, "base"), layer: "builtin" },
+			]),
+		);
+		expect(
+			selected
+				.filter((m) => m.package || m.layer !== "builtin")
+				.map((m) => m.metadata?.name)
+				.sort(),
+		).toEqual(["heymail", "real"]);
+		expect(problems.map((p) => p.code)).toEqual(["module-slot-conflict"]);
+	});
+});
+
 describe("header lines (O9, D14)", () => {
 	const locations = (root: string): PackageLocation[] => [
 		{ dir: join(root, "base"), layer: "builtin" },

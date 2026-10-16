@@ -66,7 +66,7 @@ describe("tool guide reaches packages (O18, O3)", () => {
 		const env = workspace("Modules: other\n");
 		expect((await guide([], env)).text).not.toContain("mail triage");
 		const refusal = {
-			text: `shepherd: package "mail" is not named on this workspace's Modules: line; its guides are unavailable here\n`,
+			text: `shepherd: package "mail" is not selected by this workspace's Modules: line; its guides are unavailable here; if the line names it, see Module problems in the session header\n`,
 			code: 2,
 			stream: "stderr" as const,
 		};

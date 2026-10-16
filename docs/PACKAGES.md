@@ -73,7 +73,7 @@ Every field a package's frontmatter may hold:
 | `description` | Required. One nonblank line, used by checks and never put in the prompt. |
 | `budget` | Required. A positive integer of prompt words. `shepherd tool check` warns `module-over-budget` when the module text has more words and, for a package in an enclosing workspace, reports the cost as `module-cost`; the text still loads whole. |
 | `applies-when` | Required, with `charter-declares` equal to `provides` when the package has one, else to `name`: a package loads only where a charter names it, and a provider also where the charter names its slot. Without it, or with any other value, the package is a `module-schema` problem and loads nothing. `has-children` and `enclosing-modules` (booleans) may be added as further conditions. |
-| `provides` | Optional. A slot the package fills, so a charter may name the slot instead of the package; the package then declares the slot in `charter-declares`. A slot may not share its name with a module that provides nothing: that slot is a `module-slot-conflict`, no provider loads for it, and the module loads only where the charter names it itself. |
+| `provides` | Optional. A slot the package fills, so a charter may name the slot instead of the package; the package then declares the slot in `charter-declares`. A slot may not share its name with an eligible module that provides nothing: where a charter requests that slot, it is a `module-slot-conflict`, no provider loads for it, and the module stays only where it is eligible on its own, which for a package means where the charter names it. |
 | `default` | Optional boolean, false by default, only with `provides`: the provider a charter naming the slot gets when it names no provider. |
 | `charter-keys` | Optional mapping of the charter keys the module reads (`<name>.<key>`, `<provides>.<key>`, or a core key: `core.mission`, `core.role`, `core.what-lives-where`, `core.way-of-working`, `core.cadence`, `core.done`, `core.toolset` or `core.structure`) to `required` or `optional`; `shepherd tool check` reports a required key the charter lacks. |
 | `contract` | Required. The integer 1. |
@@ -178,7 +178,7 @@ Each refusal runs nothing, prints one line prefixed `shepherd:` on stderr and ex
 
 | Case | Message |
 |------|---------|
-| the charter does not name the package | `package "mail" is not named on this workspace's Modules: line; its tools are unavailable here` |
+| the charter does not name the package, or names it and selection refuses it | `package "mail" is not selected by this workspace's Modules: line; its tools are unavailable here; if the line names it, see Module problems in the session header` |
 | the tool is not declared, whether or not a file exists | `package "mail" declares no tool "send"; tools: unread` |
 | no tool is given | `package "mail" needs a tool: shepherd tool mail <tool> [args]; tools: unread` |
 | the declared file is missing | `package "mail" tool "unread" is missing: <path>` |
