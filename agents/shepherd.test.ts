@@ -336,7 +336,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		expect(agent.spec.id).toBe("shepherd");
 		expect(agent.extension).toEqual({
 			file: EXTENSION_FILE,
-			exports: ["prepare"],
+			exports: ["prepare", "dispatch"],
 		});
 		expect(agent.spec.backends).toEqual(["claude", "codex"]);
 		expect(agent.spec.promptMode).toBe("append");
@@ -433,9 +433,15 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 		expect(entry.agent.extension?.file).toBe(EXTENSION_FILE);
 		const generated = generateEntry(entry.agent);
 		expect(generated).toContain(
-			`import { prepare } from ${JSON.stringify(EXTENSION_FILE)};`,
+			`import { prepare, dispatch } from ${JSON.stringify(EXTENSION_FILE)};`,
 		);
-		expect(generated).toContain("const extension = { prepare };");
+		expect(generated).toContain("const extension = { prepare, dispatch };");
+		// O11: package runs are routed before the version check and the parser.
+		const routed = generated.indexOf(
+			"await dispatchAndExit(spec, extension, process.argv.slice(2));",
+		);
+		expect(routed).toBeGreaterThan(0);
+		expect(routed).toBeLessThan(generated.indexOf("resolveCli(spec"));
 	});
 
 	// A smoke test: it catches a top-level exit, output, a cwd write or a
@@ -470,7 +476,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 			code: child.exitCode,
 			stdout: child.stdout.toString(),
 			stderr: child.stderr.toString(),
-		}).toEqual({ code: 0, stdout: "imported prepare\n", stderr: "" });
+		}).toEqual({ code: 0, stdout: "imported dispatch,prepare\n", stderr: "" });
 		expect(existsSync(recordFile)).toBe(false);
 		expect(readdirSync(cwd)).toEqual([]);
 	});
@@ -2409,4 +2415,89 @@ describe("module failures degrade with notices on both backends", () => {
 				stderr.mockRestore();
 			}
 		});
+});
+
+describe("package tools at launch (O14, O15, O16)", () => {
+	const READ_RULE = "Bash(shepherd tool software publish-check *)";
+	function softwareWorkspace(enclosing: boolean): {
+		cwd: string;
+		parent: string;
+	} {
+		const parent = join(root, `pkg-${counter++}`);
+		const cwd = join(parent, "ws");
+		if (enclosing) write(join(parent, ".shepherd/charter.md"), "# Parent\n");
+		write(join(cwd, ".shepherd/charter.md"), "# Ws\n\nModules: software\n");
+		return { cwd, parent };
+	}
+
+	test("prepare sets SHEPHERD_WORKSPACE to the launch directory on both backends", () => {
+		const { cwd } = softwareWorkspace(false);
+		for (const backend of BACKENDS)
+			expect(extension.prepare(context(backend, cwd))).toMatchObject({
+				env: { SHEPHERD_WORKSPACE: cwd },
+			});
+		const plain = join(root, `plain-${counter++}`);
+		mkdirSync(plain);
+		expect(extension.prepare(context("claude", plain))).toMatchObject({
+			env: { SHEPHERD_WORKSPACE: plain },
+		});
+	});
+
+	test("Claude gets one Bash rule per selected read tool, with or without an enclosing workspace", async () => {
+		const alone = softwareWorkspace(false);
+		expect(
+			settingsOf((await preview(["--backend", "claude"], alone.cwd)).argv),
+		).toEqual({
+			permissions: { allow: [...STATIC_RULES, READ_RULE] },
+		});
+		const nested = softwareWorkspace(true);
+		const shared = `${realpathSync(nested.parent)}/.shepherd`;
+		expect(extension.prepare(context("claude", nested.cwd))).toMatchObject({
+			extraAllowRules: {
+				rules: [`Read(/${shared}/**)`, READ_RULE],
+				additionalDirectories: [shared],
+			},
+		});
+	});
+
+	test("a write tool gets no rule; an unselected package gets none", () => {
+		const { cwd, parent } = softwareWorkspace(true);
+		write(
+			join(parent, ".shepherd/packages/mail/MODULE.md"),
+			"---\nname: mail\ntype: domain\ndescription: Mail\napplies-when:\n  charter-declares: mail\nbudget: 100\ncontract: 1\ntools:\n  unread:\n    description: List unread\n    access: read\n  send:\n    description: Send a reply\n    access: write\n---\n# Mail\n",
+		);
+		const rules = (charter: string) => {
+			write(join(cwd, ".shepherd/charter.md"), charter);
+			const result = extension.prepare(context("claude", cwd));
+			return "extraAllowRules" in result ? result.extraAllowRules?.rules : [];
+		};
+		const shared = `Read(/${realpathSync(parent)}/.shepherd/**)`;
+		expect(rules("Modules: software, mail\n")).toEqual([
+			shared,
+			READ_RULE,
+			"Bash(shepherd tool mail unread *)",
+		]);
+		expect(rules("Modules: mail\n")).toEqual([
+			shared,
+			"Bash(shepherd tool mail unread *)",
+		]);
+		expect(rules("# none\n")).toEqual([shared]);
+	});
+
+	test("Codex gets no rule object and a software workspace previews with exit 0", async () => {
+		for (const enclosing of [false, true]) {
+			const { cwd } = softwareWorkspace(enclosing);
+			expect(extension.prepare(context("codex", cwd))).not.toHaveProperty(
+				"extraAllowRules",
+			);
+			const envelope = await preview(["--backend", "codex"], cwd);
+			expect({ code: envelope.code, stderr: envelope.stderr }).toEqual({
+				code: 0,
+				stderr: "",
+			});
+			expect(envelope.systemPrompt).toContain(
+				"- Package tools: software publish-check (read)",
+			);
+		}
+	});
 });

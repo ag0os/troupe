@@ -45,18 +45,25 @@
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { PrepareContext, PrepareResult } from "../lib/agent-format/types";
+import type {
+	DispatchContext,
+	DispatchResult,
+	PrepareContext,
+	PrepareResult,
+} from "../lib/agent-format/types";
 import {
 	codexDefaults,
 	passthroughModelToken,
 	passthroughModelValue,
 } from "../lib/shepherd/codex-defaults";
-import { composeFragments, modelHeaderLine } from "../lib/shepherd/compose";
+import { composeSession, modelHeaderLine } from "../lib/shepherd/compose";
 import {
 	type ConfigProblem,
 	loadConfig,
 	splitConfigProblems,
 } from "../lib/shepherd/config";
+import { dispatchPackageTool } from "../lib/shepherd/dispatch";
+import type { PackageRecord } from "../lib/shepherd/package-resolution";
 import { sessionNameFor } from "../lib/shepherd/session-name";
 import {
 	claudeSessions,
@@ -95,6 +102,27 @@ function enclosingAccess(enclosing: string): {
 } {
 	const shared = join(realpathSync(enclosing), STATE_DIR);
 	return { rules: [`Read(/${shared}/**)`], additionalDirectories: [shared] };
+}
+
+/**
+ * One Claude Bash rule per read tool of a selected package (R3 a): a read
+ * tool promises to change nothing for any argument, so its rule approves
+ * every argv. Write tools get none and prompt like any command.
+ */
+function packageToolRules(packages: readonly PackageRecord[]): string[] {
+	return packages.flatMap((p) =>
+		Object.entries(p.tools)
+			.filter(([, tool]) => tool.access === "read")
+			.map(([tool]) => `Bash(shepherd tool ${p.name} ${tool} *)`),
+	);
+}
+
+/** `shepherd tool <package> <tool> [args...]`, before the CLI parser (D1). */
+export function dispatch(
+	argv: readonly string[],
+	ctx: DispatchContext,
+): DispatchResult | undefined {
+	return dispatchPackageTool(argv, { cwd: ctx.cwd, env: ctx.env });
 }
 
 function workspaceChain(cwd: string): string[] {
@@ -301,7 +329,7 @@ export function prepare(
 	const model = ctx.modelFromFlag
 		? ctx.model
 		: (tailModel ?? defaults?.model ?? ctx.model);
-	const systemPromptFragments = composeFragments(
+	const { fragments: systemPromptFragments, packages } = composeSession(
 		ctx.cwd,
 		BACKEND_LABELS[ctx.backend],
 		enclosing,
@@ -320,22 +348,36 @@ export function prepare(
 			? configProblems.workspace.map(configProblemLine)
 			: [];
 
-	if (ctx.backend !== "claude" || !enclosing) {
-		return {
-			systemPromptFragments,
-			initialPrompt: prompt,
-			...(naming.sessionName ? { sessionName: naming.sessionName } : {}),
-			...(defaults?.codexHome ? { codexHome: defaults.codexHome } : {}),
-			...(defaults?.model !== undefined ? { model: defaults.model } : {}),
-			...(defaults?.effort !== undefined ? { effort: defaults.effort } : {}),
-			...(beforeRunMessages.length > 0 ? { beforeRunMessages } : {}),
-		};
-	}
+	// Rules are Claude's alone: Codex takes no per-session rules, and an
+	// exec-policy allow would run a tool outside its sandbox (D4).
+	const shared =
+		ctx.backend === "claude" && enclosing
+			? enclosingAccess(enclosing)
+			: undefined;
+	const rules = [
+		...(shared?.rules ?? []),
+		...(ctx.backend === "claude" ? packageToolRules(packages) : []),
+	];
 	return {
 		systemPromptFragments,
 		initialPrompt: prompt,
 		...(naming.sessionName ? { sessionName: naming.sessionName } : {}),
-		extraAllowRules: enclosingAccess(enclosing),
+		...(rules.length > 0
+			? {
+					extraAllowRules: {
+						rules,
+						...(shared
+							? { additionalDirectories: shared.additionalDirectories }
+							: {}),
+					},
+				}
+			: {}),
+		...(defaults?.codexHome ? { codexHome: defaults.codexHome } : {}),
+		...(defaults?.model !== undefined ? { model: defaults.model } : {}),
+		...(defaults?.effort !== undefined ? { effort: defaults.effort } : {}),
+		// Which workspace authorizes a package run started from this session
+		// (D11). It authorizes only: every child process inherits it.
+		env: { SHEPHERD_WORKSPACE: ctx.cwd },
 		...(beforeRunMessages.length > 0 ? { beforeRunMessages } : {}),
 	};
 }
