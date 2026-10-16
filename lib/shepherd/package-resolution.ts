@@ -33,7 +33,8 @@ export const PACKAGE_NAME = /^[a-z]+(?:-[a-z]+)*$/;
 
 /**
  * Names a package may not take: `shepherd tool <name>` would be a core
- * command, and `shepherd tool guide <name>` a core guide.
+ * command, and `shepherd tool guide <name>` a core guide. A hand copy, since
+ * importing `tool.ts` here would be a cycle; a test pins it to both.
  */
 export const RESERVED_PACKAGE_NAMES = new Set([
 	"check",

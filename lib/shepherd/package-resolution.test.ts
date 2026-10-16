@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { isSourcePath } from "../../scripts/shepherd-source";
 import { composeFragments, composeSession } from "./compose";
 import { dispatchPackageTool } from "./dispatch";
+import { GUIDES } from "./guides";
 import {
 	builtInModules,
 	moduleCatalog,
@@ -14,8 +15,10 @@ import {
 	type PackageLocation,
 	packageLocations,
 	packageModules,
+	RESERVED_PACKAGE_NAMES,
 } from "./package-resolution";
 import { MAIL_TOOLS, makeTree, packageText } from "./test-support";
+import { TOOL_COMMANDS } from "./tool";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -373,6 +376,14 @@ describe("software is a base package (O8, O2)", () => {
 			network: false,
 		});
 		expect(software?.package?.guides).toEqual({});
+	});
+});
+
+describe("reserved names (F7, N1)", () => {
+	test("are exactly the core tool commands and the core guide names", () => {
+		expect([...RESERVED_PACKAGE_NAMES].sort()).toEqual(
+			[...new Set([...TOOL_COMMANDS, ...GUIDES.map((g) => g.name)])].sort(),
+		);
 	});
 });
 

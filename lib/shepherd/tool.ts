@@ -93,6 +93,8 @@ const COMMAND_FLAGS = {
 	query: new Set(["json", "since", "max", "all"]),
 };
 type ToolCommand = keyof typeof COMMAND_FLAGS;
+/** The core `shepherd tool` commands, which no package may be named. */
+export const TOOL_COMMANDS = Object.keys(COMMAND_FLAGS) as ToolCommand[];
 const FLAG_OWNERS: Record<string, string> = {
 	all: "tool check and tool query",
 	status: "tool check",
