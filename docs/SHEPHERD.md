@@ -60,7 +60,7 @@ Two modules load into every Shepherd and check their own availability at run tim
 | `inter-agent.md` | Messaging other agent sessions | always; checks for messaging tools itself |
 | `nested.md` | Living under an enclosing workspace's shared layer | an enclosing workspace exists and publishes at least one module |
 | `root.md` | Keeping that shared layer, and acting as the user's assistant across workspaces | workspaces sit beneath the launch directory |
-| `software` package (`packages/software/MODULE.md`) | Coordinating work that changes code; carries the `publish-check` tool | the charter has the line `Modules: software` |
+| `software` package (`packages/software/MODULE.md`) | Coordinating work that changes code; carries the `publish-check` tool and three guides | the charter has the line `Modules: software` |
 
 - **Nested.** A parent directory that has a `.shepherd/` but no `integrations/*.md` shares nothing, so it is named in the header and `nested.md` stays out.
 - **Root.** The launcher walks down from the launch directory for directories with their own `.shepherd/`, does not look inside one it finds, skips hidden directories, `node_modules` and symlinks, and stops three levels down. The header lists what it found as `- Workspaces beneath: <relative paths>`, or `none within 3 levels`. A further header line, `- Gated modules loaded: <names>` or `none`, shows which of `nested`, `root` and the selected packages this launch loaded, so a misspelt `Modules:` line is visible.

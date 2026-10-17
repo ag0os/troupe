@@ -94,6 +94,7 @@ Rules:
   package, or its slot when its frontmatter is valid, so a broken package does not change every session's prompt.
   `shepherd tool check` reports every package the workspace can see, named or not.
 - Tool and guide names match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
+- A plain (unquoted) `description` that holds `: ` is a `module-schema` error; quote it. A semicolon needs no quoting.
 - Every declared tool must exist as `tools/<tool>`, a regular file with the executable bit; every declared guide as
   `guides/<guide>.md`. An executable in `tools/` that is not declared is never run.
 - `contract`, `tools` and `guides` are errors in a module that is not a package (a file in `.shepherd/integrations/`).
@@ -238,8 +239,19 @@ naming packages exactly as now.
 
 ## The software package
 
-`packages/software` is the first package. Its module text is the software coordination module, unchanged, and it
-carries one read tool:
+`packages/software` is the first package. Its module text is the software coordination module with the method of
+steps 3 to 9 moved out word for word: each step keeps its name, completion criterion, the user's part and its safety
+rules in the module, and the rest is in three guides, read with `shepherd tool guide software <guide>`:
+
+- `software build`: steps 3 to 5 and the skills rule; read before briefing a builder;
+- `software check`: steps 6 and 7;
+- `software ship`: steps 8 and 9, automatic merging and a parked task.
+
+A brief may tell a delegate to follow `shepherd tool guide software build`, since `SHEPHERD_WORKSPACE` reaches it from
+any directory. A guide holds method only, so a brief that points a delegate at one still states the module's stop rule
+(step 4) and the attribution rule.
+
+The package carries one read tool:
 
 ```
 shepherd tool software publish-check [--base <ref>] [--body <file>] [--terms <file>]
