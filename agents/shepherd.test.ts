@@ -2419,6 +2419,7 @@ describe("module failures degrade with notices on both backends", () => {
 
 describe("package tools at launch (O14, O15, O16)", () => {
 	const READ_RULE = "Bash(shepherd tool software publish-check *)";
+	const GUIDE_RULE = "Bash(shepherd tool guide *)";
 	function softwareWorkspace(enclosing: boolean): {
 		cwd: string;
 		parent: string;
@@ -2448,13 +2449,13 @@ describe("package tools at launch (O14, O15, O16)", () => {
 		expect(
 			settingsOf((await preview(["--backend", "claude"], alone.cwd)).argv),
 		).toEqual({
-			permissions: { allow: [...STATIC_RULES, READ_RULE] },
+			permissions: { allow: [...STATIC_RULES, READ_RULE, GUIDE_RULE] },
 		});
 		const nested = softwareWorkspace(true);
 		const shared = `${realpathSync(nested.parent)}/.shepherd`;
 		expect(extension.prepare(context("claude", nested.cwd))).toMatchObject({
 			extraAllowRules: {
-				rules: [`Read(/${shared}/**)`, READ_RULE],
+				rules: [`Read(/${shared}/**)`, READ_RULE, GUIDE_RULE],
 				additionalDirectories: [shared],
 			},
 		});
@@ -2476,12 +2477,43 @@ describe("package tools at launch (O14, O15, O16)", () => {
 			shared,
 			READ_RULE,
 			"Bash(shepherd tool mail unread *)",
+			GUIDE_RULE,
 		]);
 		expect(rules("Modules: mail\n")).toEqual([
 			shared,
 			"Bash(shepherd tool mail unread *)",
 		]);
 		expect(rules("# none\n")).toEqual([shared]);
+	});
+
+	test("one guide rule on Claude when a selected package declares a guide (D5)", () => {
+		const { cwd, parent } = softwareWorkspace(true);
+		write(
+			join(parent, ".shepherd/packages/notes/MODULE.md"),
+			"---\nname: notes\ntype: domain\ndescription: Notes\napplies-when:\n  charter-declares: notes\nbudget: 100\ncontract: 1\nguides:\n  filing:\n    description: How to file a note\n---\n# Notes\n",
+		);
+		write(
+			join(parent, ".shepherd/packages/notes/guides/filing.md"),
+			"# Filing\n",
+		);
+		const shared = `Read(/${realpathSync(parent)}/.shepherd/**)`;
+		write(join(cwd, ".shepherd/charter.md"), "Modules: notes\n");
+		expect(extension.prepare(context("claude", cwd))).toMatchObject({
+			extraAllowRules: { rules: [shared, GUIDE_RULE] },
+		});
+		write(join(cwd, ".shepherd/charter.md"), "Modules: software, notes\n");
+		expect(extension.prepare(context("claude", cwd))).toMatchObject({
+			extraAllowRules: { rules: [shared, READ_RULE, GUIDE_RULE] },
+		});
+		expect(extension.prepare(context("codex", cwd))).not.toHaveProperty(
+			"extraAllowRules",
+		);
+		for (const name of ["SHEPHERD.md", "PACKAGES.md"])
+			expect(
+				readFileSync(join(repo, "docs", name), "utf8").replace(/\s+/g, " "),
+			).toContain(
+				"`Bash(shepherd tool guide *)` once a selected package declares a guide",
+			);
 	});
 
 	test("Codex gets no rule object and a software workspace previews with exit 0", async () => {

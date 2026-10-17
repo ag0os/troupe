@@ -214,7 +214,9 @@ Frontmatter errors are `module-schema` and `module-name`, as for any module.
 
 - **Claude Code.** For every read tool of a selected package the launcher adds `Bash(shepherd tool <package> <tool> *)`
   to the session's allow rules, passed inline with `--settings`. The rule matches the command as written, so run
-  `shepherd tool ...`, not the binary's absolute path. Write tools get no rule.
+  `shepherd tool ...`, not the binary's absolute path. Write tools get no rule. The launcher also adds
+  `Bash(shepherd tool guide *)` once a selected package declares a guide; it covers the guide list and every guide
+  read, since a guide read prints a file and writes nothing.
 - **Codex.** The launcher writes no rule. Codex takes no per-session rules, and an exec-policy `allow` would run the
   tool outside the sandbox, which is more than a read tool should get. Under `sandbox_mode = "workspace-write"` a tool
   that writes only inside the workspace and temp runs without a prompt; a tool with `network: true`, or one that writes
