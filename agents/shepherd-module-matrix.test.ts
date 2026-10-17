@@ -34,6 +34,9 @@ const bodySources = {
 	nested: "system-prompts/shepherd/integrations/nested.md",
 	root: "system-prompts/shepherd/integrations/root.md",
 	software: "packages/software/MODULE.md",
+	"software-guides/build": "packages/software/guides/build.md",
+	"software-guides/check": "packages/software/guides/check.md",
+	"software-guides/ship": "packages/software/guides/ship.md",
 	"integrations-shared":
 		"system-prompts/shepherd/templates/integrations-shared.md",
 };
@@ -162,6 +165,17 @@ function normalize(prompt: string, name: string): string {
 		.replaceAll(root, "<test-root>");
 }
 
+/** The moved text of each software guide: every paragraph after its pointer paragraph that is not a heading. */
+function softwareGuideParagraphs(): string[] {
+	return (["build", "check", "ship"] as const).flatMap((name) =>
+		pinnedBody(`software-guides/${name}`)
+			.split("\n\n")
+			.filter((paragraph) => !paragraph.startsWith("#"))
+			.slice(1)
+			.map((paragraph) => paragraph.trim()),
+	);
+}
+
 function pinnedBody(name: keyof typeof bodySources): string {
 	return readFileSync(
 		join(fixtures, "builtin-bodies", `${name}.md.txt`),
@@ -225,6 +239,8 @@ describe("prechange full prompt matrix", () => {
 						for (const capability of ["herdr", "inter-agent"] as const) {
 							expect(prompt).toContain(pinnedBody(capability));
 						}
+						for (const paragraph of softwareGuideParagraphs())
+							expect(prompt).not.toContain(paragraph);
 						expect(prompt).toContain("# Shepherd session context\n");
 						expect(prompt).toContain("- Date: 2026-10-02\n");
 						expect(prompt).toContain(
