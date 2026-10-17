@@ -54,3 +54,23 @@ test("the docs name the SHEPHERD_WORKSPACE leak and use no em or en dashes (D11)
 	expect(doc("AGENT-FORMAT.md")).toContain("dispatch");
 	expect(doc("SHEPHERD.md")).toContain("packages/software/MODULE.md");
 });
+
+test("the docs describe software's guides and what a brief must still carry (O10, F6)", () => {
+	const packages = doc("PACKAGES.md").replace(/\s+/g, " ");
+	for (const bullet of [
+		"`software build`: steps 3 to 5 and the skills rule; read before briefing a builder",
+		"`software check`: steps 6 and 7",
+		"`software ship`: steps 8 and 9, automatic merging and a parked task",
+	])
+		expect(packages).toContain(bullet);
+	expect(packages).not.toContain("the software coordination module, unchanged");
+	expect(packages).toContain(
+		"still states the module's stop rule (step 4) and the attribution rule",
+	);
+	expect(packages).toContain(
+		"A plain (unquoted) `description` that holds `: ` is a `module-schema` error; quote it. A semicolon needs no quoting.",
+	);
+	expect(doc("SHEPHERD.md")).toContain(
+		"carries the `publish-check` tool and three guides",
+	);
+});

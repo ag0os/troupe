@@ -466,7 +466,28 @@ describe("software is a base package (O8, O2)", () => {
 			requires: ["git"],
 			network: false,
 		});
-		expect(software?.package?.guides).toEqual({});
+		expect(software?.package?.guides).toEqual({
+			build: {
+				description:
+					"steps 3 to 5 and the skills rule; read before briefing a builder",
+			},
+			check: { description: "steps 6 and 7" },
+			ship: {
+				description: "steps 8 and 9, automatic merging and a parked task",
+			},
+		});
+	});
+
+	test("a software workspace's header lists the three guides (O6)", () => {
+		const root = tree({ "w/.shepherd/charter.md": "Modules: software\n" });
+		const lines = header(
+			compose(root, "w", packageLocations(undefined)).fragments,
+		).split("\n");
+		const gated = lines.indexOf("- Gated modules loaded: software");
+		expect(gated).toBeGreaterThan(0);
+		expect(lines[gated + 2]).toBe(
+			"- Package guides: software build (steps 3 to 5 and the skills rule; read before briefing a builder), software check (steps 6 and 7), software ship (steps 8 and 9, automatic merging and a parked task); read with shepherd tool guide <package> <guide>",
+		);
 	});
 });
 

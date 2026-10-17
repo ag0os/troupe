@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { packageLocations, packageModules } from "./package-resolution";
 import { fakeToolEnv, MAIL_TOOLS, makeTree, packageText } from "./test-support";
 import { runTool } from "./tool";
 
@@ -102,5 +103,58 @@ describe("tool guide reaches packages (O18, O3)", () => {
 			stream: "stdout",
 		});
 		expect((await guide(["mail"], outside("Modules: other\n"))).code).toBe(2);
+	});
+});
+
+describe("software's guides are declared, listed and readable (O5)", () => {
+	function softwareWorkspace() {
+		const tree = makeTree({ "ws/.shepherd/charter.md": "Modules: software\n" });
+		cleanups.push(tree.cleanup);
+		return fakeToolEnv({
+			home: join(tree.root, "home"),
+			cwd: join(realpathSync(tree.root), "ws"),
+		});
+	}
+	const LISTED =
+		"software build: steps 3 to 5 and the skills rule; read before briefing a builder\nsoftware check: steps 6 and 7\nsoftware ship: steps 8 and 9, automatic merging and a parked task\n";
+	const build = () => {
+		const software = packageModules(packageLocations(undefined)).find(
+			(m) => m.package?.name === "software",
+		);
+		return readFileSync(
+			join(software?.package?.dir ?? "", "guides/build.md"),
+			"utf8",
+		);
+	};
+
+	test("the list ends with build, check and ship", async () => {
+		const env = softwareWorkspace();
+		expect((await guide([], env)).text).toEndWith(LISTED);
+		expect(await guide(["software"], env)).toEqual({
+			text: LISTED,
+			code: 0,
+			stream: "stdout",
+		});
+	});
+
+	test("a guide prints whole, also from outside the workspace", async () => {
+		const env = softwareWorkspace();
+		expect(await guide(["software", "build"], env)).toEqual({
+			text: build(),
+			code: 0,
+			stream: "stdout",
+		});
+		const tree = makeTree({ "repo/README.md": "" });
+		cleanups.push(tree.cleanup);
+		const away = fakeToolEnv({
+			home: env.home,
+			cwd: join(realpathSync(tree.root), "repo"),
+			env: { SHEPHERD_WORKSPACE: env.cwd },
+		});
+		expect(await guide(["software", "build"], away)).toEqual({
+			text: build(),
+			code: 0,
+			stream: "stdout",
+		});
 	});
 });

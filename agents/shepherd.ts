@@ -123,6 +123,18 @@ function packageToolRules(packages: readonly PackageRecord[]): string[] {
 	);
 }
 
+/**
+ * One Claude Bash rule for `shepherd tool guide` once a selected package
+ * declares a guide (D5): a guide read prints a compiled-in or declared file
+ * and writes nothing, the promise `access: read` makes. Sessions whose
+ * packages declare no guide keep their rules unchanged.
+ */
+function guideRule(packages: readonly PackageRecord[]): string[] {
+	return packages.some((p) => Object.keys(p.guides).length > 0)
+		? ["Bash(shepherd tool guide *)"]
+		: [];
+}
+
 /** `shepherd tool <package> <tool> [args...]`, before the CLI parser (D1). */
 export function dispatch(
 	argv: readonly string[],
@@ -362,7 +374,9 @@ export function prepare(
 			: undefined;
 	const rules = [
 		...(shared?.rules ?? []),
-		...(ctx.backend === "claude" ? packageToolRules(packages) : []),
+		...(ctx.backend === "claude"
+			? [...packageToolRules(packages), ...guideRule(packages)]
+			: []),
 	];
 	return {
 		systemPromptFragments,
