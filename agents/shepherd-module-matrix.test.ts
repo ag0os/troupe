@@ -33,7 +33,7 @@ const bodySources = {
 	"inter-agent": "system-prompts/shepherd/integrations/inter-agent.md",
 	nested: "system-prompts/shepherd/integrations/nested.md",
 	root: "system-prompts/shepherd/integrations/root.md",
-	software: "system-prompts/shepherd/integrations/software.md",
+	software: "packages/software/MODULE.md",
 	"integrations-shared":
 		"system-prompts/shepherd/templates/integrations-shared.md",
 };
@@ -270,7 +270,7 @@ function afterDelimiterBlock(source: string): string | undefined {
 		}
 		if (!signature && line.trim()) {
 			if (
-				!/^(name|type|description|applies-when|provides|default|budget|charter-keys):(?:\s|$)/.test(
+				!/^(name|type|description|applies-when|provides|default|budget|charter-keys|contract|tools|guides):(?:\s|$)/.test(
 					line,
 				)
 			) {

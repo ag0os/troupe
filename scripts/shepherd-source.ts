@@ -44,6 +44,7 @@ export const SOURCE_TREES = [
 	{ dir: "system-prompts/shepherd", tests: true },
 	{ dir: "lib/shepherd", tests: false },
 	{ dir: "lib/agent-format", tests: false },
+	{ dir: "packages", tests: true },
 ] as const;
 
 export interface ManifestEntry {

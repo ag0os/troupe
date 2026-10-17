@@ -12,14 +12,17 @@ import nestedDoc from "../../system-prompts/shepherd/integrations/nested.md" wit
 import rootDoc from "../../system-prompts/shepherd/integrations/root.md" with {
 	type: "text",
 };
-import softwareDoc from "../../system-prompts/shepherd/integrations/software.md" with {
-	type: "text",
-};
 import {
 	type ModuleProblem,
 	type ParsedModule,
 	parseModule,
 } from "./module-format";
+import {
+	type PackageLocation,
+	type PackageRecord,
+	packageLocations,
+	packageModules,
+} from "./package-resolution";
 import {
 	declaredModules,
 	findChildWorkspaces,
@@ -34,6 +37,8 @@ export type ModuleCandidate = ParsedModule & {
 	path: string;
 	layer: "builtin" | "inherited" | "local";
 	raw: string;
+	/** Present for a package's MODULE.md (docs/PACKAGES.md). */
+	package?: PackageRecord;
 };
 export type ResolutionProblem = ModuleProblem & { file: string };
 export type ModuleCatalog = {
@@ -49,7 +54,6 @@ export function builtInModules(): ModuleCandidate[] {
 		["inter-agent", interAgentDoc],
 		["nested", nestedDoc],
 		["root", rootDoc],
-		["software", softwareDoc],
 	].map(([name, raw]) => {
 		const file = `${name}.md`;
 		const source = `builtin/${file}`;
@@ -92,17 +96,29 @@ export function workspaceModules(
 			};
 		});
 }
+/**
+ * Every module a launch in `cwd` could load: the embedded built-ins, then
+ * base packages, the enclosing workspace's integrations and packages, and
+ * the workspace's own integrations. `published` counts enclosing packages
+ * as well as enclosing integrations.
+ */
 export function moduleCatalog(
 	cwd: string,
 	enclosing: string | undefined = findEnclosingWorkspace(cwd),
 	tolerateUnreadable = false,
+	locations: readonly PackageLocation[] = packageLocations(enclosing),
 ): ModuleCatalog {
-	const inherited = enclosing
-		? workspaceModules(enclosing, "inherited", tolerateUnreadable)
-		: [];
+	const packages = packageModules(locations, tolerateUnreadable);
+	const inherited = [
+		...(enclosing
+			? workspaceModules(enclosing, "inherited", tolerateUnreadable)
+			: []),
+		...packages.filter((m) => m.layer === "inherited"),
+	];
 	return {
 		candidates: [
 			...builtInModules(),
+			...packages.filter((m) => m.layer === "builtin"),
 			...inherited,
 			...workspaceModules(cwd, "local", tolerateUnreadable),
 		],
@@ -133,23 +149,33 @@ export function resolveModules(
 		(m) => !(m.layer === "local" && inheritedPaths.has(m.path)),
 	);
 	const problems: ResolutionProblem[] = [];
+	const tokens = declaredModules(catalog.charter);
+	// A package no charter names stays out of the header, broken or not:
+	// `tool check` reports every package it can see.
+	const named = (module: ModuleCandidate) =>
+		!module.package ||
+		tokens.has(module.package.name) ||
+		(!!module.metadata?.provides && tokens.has(module.metadata.provides));
 	for (const module of surviving) {
+		// Embedded built-ins are tested before a build; a package on disk
+		// may be edited after it, so its problems are reported (D12).
 		if (
 			module.layer === "builtin" &&
+			!module.package &&
 			(!module.metadata || module.problems.length)
 		)
 			throw new Error(
 				`${module.source}: invalid built-in metadata: ${module.problems.map((p) => p.message).join("; ")}`,
 			);
-		for (const problem of module.problems)
-			problems.push({
-				...problem,
-				file: module.source,
-				message: `${problem.message}${module.body === undefined ? "" : "; stripped body loaded ungated"}`,
-			});
+		if (named(module))
+			for (const problem of module.problems)
+				problems.push({
+					...problem,
+					file: module.source,
+					message: `${problem.message}${module.body === undefined ? "" : "; stripped body loaded ungated"}`,
+				});
 	}
 	const candidates = surviving.filter((m) => m.body !== undefined);
-	const tokens = declaredModules(catalog.charter);
 	const annotated = candidates.filter((m) => m.metadata);
 	const slots = new Set(
 		annotated.flatMap((m) =>
@@ -157,12 +183,14 @@ export function resolveModules(
 		),
 	);
 	const names = new Set(annotated.map((m) => m.metadata?.name));
-	const declares = (value: string) =>
+	// `exceptSlot` leaves out what that slot's named providers contribute.
+	const declares = (value: string, exceptSlot?: string) =>
 		tokens.has(value) ||
-		annotated.some(
-			(m) => m.metadata?.provides === value && tokens.has(m.metadata.name),
-		);
-	const eligible = (module: ModuleCandidate) => {
+		(value !== exceptSlot &&
+			annotated.some(
+				(m) => m.metadata?.provides === value && tokens.has(m.metadata.name),
+			));
+	const eligible = (module: ModuleCandidate, exceptSlot?: string) => {
 		const predicates = module.metadata?.["applies-when"];
 		return (
 			!predicates ||
@@ -171,7 +199,7 @@ export function resolveModules(
 				(predicates["has-children"] === undefined ||
 					predicates["has-children"] === catalog.children.length > 0) &&
 				(predicates["charter-declares"] === undefined ||
-					declares(predicates["charter-declares"])))
+					declares(predicates["charter-declares"], exceptSlot)))
 		);
 	};
 	const chosen = new Set(
@@ -197,6 +225,18 @@ export function resolveModules(
 				code: "module-slot-unresolved",
 				message: `"${token}": ${reason}; no provider loaded for slot "${slot}"`,
 			});
+		// A slot may not take the name of a module that loads, or its
+		// provider would ride in on that module's token. The module stays
+		// only when it is eligible without this slot's provider names.
+		const namesake = [...chosen].filter(
+			(m) => !m.metadata?.provides && m.metadata?.name === slot,
+		);
+		if (namesake.length) {
+			for (const module of namesake)
+				if (!eligible(module, slot)) chosen.delete(module);
+			conflict(`takes the name of module ${slot}`);
+			continue;
+		}
 		if (
 			explicitTokens.some(
 				(token) =>

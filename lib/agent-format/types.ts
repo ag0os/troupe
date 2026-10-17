@@ -146,6 +146,8 @@ export type PrepareResult =
 			effort?: string;
 			codexHome?: string;
 			cwd?: string;
+			/** Variables added to the backend's environment, on any backend. */
+			env?: Record<string, string>;
 			flagOverrides?: Record<string, string | boolean>;
 			beforeRunMessages?: string[];
 			afterRunMessages?: string[];
@@ -177,6 +179,36 @@ export type Finish = (
 	ctx: PrepareContext,
 ) => FinishResult | Promise<FinishResult>;
 
+/** What `dispatch` sees: the caller's directory and environment. */
+export interface DispatchContext {
+	readonly cwd: string;
+	readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * A raw-argv route that runs before the CLI parser (D1). `exec` describes a
+ * program the runner spawns with inherited stdio: an absolute `file`, its
+ * `args` unchanged, an absolute `cwd`, and variables `env` adds to the
+ * caller's environment. Extensions describe the program, never spawn it
+ * (D-015).
+ */
+export type DispatchResult =
+	| {
+			exec: {
+				file: string;
+				args: string[];
+				cwd: string;
+				env: Record<string, string>;
+			};
+	  }
+	| { exit: { message: string; code: number; stream: "stdout" | "stderr" } };
+
+/** Returns undefined to leave the argv to the CLI parser. */
+export type Dispatch = (
+	argv: readonly string[],
+	ctx: DispatchContext,
+) => DispatchResult | undefined | Promise<DispatchResult | undefined>;
+
 /** Names a sibling extension may export for the generated entry to import. */
-export const EXTENSION_EXPORTS = ["prepare", "finish"] as const;
+export const EXTENSION_EXPORTS = ["prepare", "finish", "dispatch"] as const;
 export type ExtensionExport = (typeof EXTENSION_EXPORTS)[number];

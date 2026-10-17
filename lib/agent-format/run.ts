@@ -24,6 +24,7 @@ import type {
 	Backend,
 	CommandRequest,
 	CommandResult,
+	Dispatch,
 	Finish,
 	FinishResult,
 	McpServer,
@@ -37,6 +38,7 @@ import type {
 export interface AgentExtension {
 	prepare?: Prepare;
 	finish?: Finish;
+	dispatch?: Dispatch;
 }
 
 export type RunCommand = PrepareContext["runCommand"];
@@ -206,6 +208,7 @@ export interface Prepared {
 	model?: string;
 	effort?: string;
 	codexHome?: string;
+	env?: Record<string, string>;
 	beforeRunMessages: string[];
 	afterRunMessages: string[];
 }
@@ -221,6 +224,15 @@ export type PrepareOutcome =
 	| { kind: "exit"; exit: EarlyExit };
 
 const stringList = z.array(z.string());
+const envVariables = z.record(
+	z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be a variable name"),
+	z.string(),
+);
+const EXIT = z.strictObject({
+	message: z.string(),
+	code: z.number().int().min(0).max(255),
+	stream: z.enum(["stdout", "stderr"]),
+});
 
 /**
  * The exact shapes `prepare` may return (Design §4). Anything else, such as
@@ -228,13 +240,7 @@ const stringList = z.array(z.string());
  * commands (D-015).
  */
 const PREPARE_RESULT = z.union([
-	z.strictObject({
-		exit: z.strictObject({
-			message: z.string(),
-			code: z.number().int().min(0).max(255),
-			stream: z.enum(["stdout", "stderr"]),
-		}),
-	}),
+	z.strictObject({ exit: EXIT }),
 	z.strictObject({
 		systemPromptFragments: stringList.optional(),
 		initialPrompt: z.string().optional(),
@@ -249,6 +255,7 @@ const PREPARE_RESULT = z.union([
 		effort: z.string().regex(/^[a-z]+$/).optional(),
 		codexHome: z.string().optional(),
 		cwd: z.string().min(1).optional(),
+		env: envVariables.optional(),
 		flagOverrides: z
 			.record(z.string(), z.union([z.string(), z.boolean()]))
 			.optional(),
@@ -338,6 +345,7 @@ export async function runPrepare(
 	}
 	if (result.model !== undefined) prepared.model = result.model;
 	if (result.effort !== undefined) prepared.effort = result.effort;
+	if (result.env !== undefined) prepared.env = { ...result.env };
 	if (result.codexHome !== undefined) {
 		if (ctx.backend !== "codex") {
 			throw new Error("codexHome is allowed only for Codex launches");
@@ -1059,6 +1067,7 @@ async function lifecycle(
 			...(prepared.codexHome === undefined
 				? {}
 				: { CODEX_HOME: prepared.codexHome }),
+			...prepared.env,
 			...interpolated.env,
 			...plan.env,
 		});
@@ -1211,6 +1220,117 @@ export async function runAndExit(
 		signals: processSignals,
 		flush: flushStdio,
 	});
+	await flushStdio();
+	process.exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch (D1): a raw-argv route the extension describes and the runner runs
+// ---------------------------------------------------------------------------
+
+const DISPATCH_RESULT = z.union([
+	z.strictObject({ exit: EXIT }),
+	z.strictObject({
+		exec: z.strictObject({
+			file: z.string().refine(isAbsolute, "must be an absolute path"),
+			args: stringList,
+			cwd: z.string().refine(isAbsolute, "must be an absolute path"),
+			env: envVariables,
+		}),
+	}),
+]);
+
+export interface DispatchIo {
+	cwd: string;
+	env: Readonly<Record<string, string | undefined>>;
+	stdout: (text: string) => void;
+	stderr: (text: string) => void;
+	/** Signals forwarded to the program; none by default. */
+	signals?: SignalSource;
+}
+
+/**
+ * Offer the raw argv to the extension's `dispatch`. Undefined means the
+ * argv is not a dispatched run and the CLI parser takes it. An `exit` is
+ * written as a prepare exit is. An `exec` is validated, then spawned with
+ * inherited stdio and the caller's environment plus its `env`; runner
+ * signals are forwarded to it, and the code is its exit code, or 128 plus
+ * the number of the signal that ended it.
+ */
+export async function runDispatch(
+	spec: Readonly<AgentSpec>,
+	extension: AgentExtension,
+	argv: readonly string[],
+	io: DispatchIo,
+): Promise<number | undefined> {
+	if (!extension.dispatch) return undefined;
+	let returned: unknown;
+	try {
+		returned = await extension.dispatch([...argv], {
+			cwd: io.cwd,
+			env: io.env,
+		});
+	} catch (error) {
+		io.stderr(`${spec.id}: dispatch failed: ${messageOf(error)}\n`);
+		return 1;
+	}
+	if (returned === undefined) return undefined;
+	const parsed = DISPATCH_RESULT.safeParse(returned);
+	if (!parsed.success) {
+		io.stderr(
+			`${spec.id}: dispatch returned an invalid result: ${parsed.error.issues
+				.map((issue) => `${issue.path.join(".") || "result"}: ${issue.message}`)
+				.join("; ")}\n`,
+		);
+		return 1;
+	}
+	if ("exit" in parsed.data) {
+		const { message, code, stream } = parsed.data.exit;
+		(stream === "stdout" ? io.stdout : io.stderr)(message);
+		return code;
+	}
+	const { file, args, cwd, env } = parsed.data.exec;
+	let child: Subprocess;
+	try {
+		child = Bun.spawn([file, ...args], {
+			cwd,
+			env: definedEnv({ ...io.env, ...env }),
+			stdin: "inherit",
+			stdout: "inherit",
+			stderr: "inherit",
+		});
+	} catch (error) {
+		io.stderr(`${spec.id}: ${file}: ${messageOf(error)}\n`);
+		return 126;
+	}
+	const unsubscribe = io.signals?.((signal) => child.kill(signal));
+	try {
+		const code = await child.exited;
+		const signal = child.signalCode;
+		if (signal) {
+			const number = (osConstants.signals as Record<string, number>)[signal];
+			return 128 + (number ?? 0);
+		}
+		return code;
+	} finally {
+		unsubscribe?.();
+	}
+}
+
+/** The generated entry's dispatch route: returns only when it declines. */
+export async function dispatchAndExit(
+	spec: Readonly<AgentSpec>,
+	extension: AgentExtension,
+	argv: readonly string[],
+): Promise<void> {
+	const code = await runDispatch(spec, extension, argv, {
+		cwd: process.cwd(),
+		env: process.env,
+		stdout: (text) => process.stdout.write(text),
+		stderr: (text) => process.stderr.write(text),
+		signals: processSignals,
+	});
+	if (code === undefined) return;
 	await flushStdio();
 	process.exit(code);
 }

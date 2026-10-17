@@ -73,7 +73,7 @@ test("conflicts suppress only affected slot; unknown tokens keep software", () =
 			"module-slot-conflict",
 			"module-token-unknown",
 		]);
-		expect(r.selected.map((m) => m.name)).toContain("software.md");
+		expect(r.selected.map((m) => m.package?.name)).toContain("software");
 		expect(r.selected.some((m) => m.metadata?.provides === "craft")).toBe(
 			false,
 		);

@@ -270,6 +270,32 @@ describe("prepare invocation data (AC #1, #3; B-006, D-016)", () => {
 		]);
 	});
 
+	test("a prepared env reaches the backend's environment on both backends", async () => {
+		gitInit(workspace);
+		for (const backend of ["claude", "codex"]) {
+			rmSync(recordFile, { force: true });
+			const result = await run(
+				fixtureSpec(),
+				["hi", "--print", "--backend", backend],
+				{ prepare: () => ({ env: { TROUPE_PREPARED: "from-prepare" } }) },
+				{ env: { TROUPE_PREPARED: "from-launcher" } },
+			);
+			expect(result.code).toBe(0);
+			expect(readRecords(recordFile)[0]?.troupeEnv).toEqual({
+				TROUPE_PREPARED: "from-prepare",
+			});
+		}
+	});
+
+	test("a prepared env with an invalid variable name is a prepare failure", async () => {
+		const result = await run(fixtureSpec(), ["--print", "hi"], {
+			prepare: () => ({ env: { "NOT-A-NAME": "x" } }),
+		});
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("prepare returned an invalid result");
+		expect(readRecords(recordFile)).toEqual([]);
+	});
+
 	test("prepared data is frozen: later mutation by the extension changes nothing", async () => {
 		const returned = {
 			systemPromptFragments: ["EARLY"],

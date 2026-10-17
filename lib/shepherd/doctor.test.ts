@@ -247,7 +247,7 @@ describe("doctor filesystem checks", () => {
 		const f = fixture();
 		complete(f);
 		const result = f.run();
-		expect(result.totals).toEqual({ ok: 12, gap: 0, skip: 0 });
+		expect(result.totals).toEqual({ ok: 13, gap: 0, skip: 0 });
 		expect(doctorExitCode(result)).toBe(0);
 		expect(result.checks.map((entry) => entry.id)).toEqual([
 			"path:claude",
@@ -255,6 +255,7 @@ describe("doctor filesystem checks", () => {
 			"path:herdr",
 			"path:jq",
 			"path:shepherd",
+			"packages:base",
 			"config:user",
 			"claude:settings",
 			"claude:cross-session-inbound",
@@ -619,4 +620,39 @@ test("human mixed rendering and JSON schema", () => {
 	expect(JSON.parse(JSON.stringify(doctorJson(result)))).toEqual(
 		doctorJson(result),
 	);
+});
+
+describe("packages:base (O21, D2)", () => {
+	test("ok with the path when the base location holds a package", () => {
+		const f = fixture();
+		const base = join(f.root, "checkout/packages");
+		mkdirSync(join(base, "software"), { recursive: true });
+		writeFileSync(join(base, "software/MODULE.md"), "---\n---\n");
+		f.toolEnv.packageBase = base;
+		expect(check(f.run(), "packages:base")).toMatchObject({
+			status: "ok",
+			summary: `base packages: ${base}`,
+		});
+	});
+
+	test("a gap with the expected path when it is missing or empty", () => {
+		for (const make of [false, true]) {
+			const f = fixture();
+			const base = join(f.root, "copied/packages");
+			if (make) mkdirSync(base, { recursive: true });
+			f.toolEnv.packageBase = base;
+			expect(check(f.run(), "packages:base")).toMatchObject({
+				status: "gap",
+				summary: `no base packages at ${base}; this binary composes without them (software included)`,
+			});
+		}
+	});
+
+	test("by default the base is the one the binary reads", () => {
+		const f = fixture();
+		expect(check(f.run(), "packages:base")).toMatchObject({
+			status: "ok",
+			summary: `base packages: ${join(import.meta.dir, "../../packages")}`,
+		});
+	});
 });

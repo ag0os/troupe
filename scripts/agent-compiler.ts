@@ -766,7 +766,8 @@ function isSideEffectFree(expression: ts.Expression): boolean {
 
 /**
  * Entry source for a compiled agent. It embeds the spec and imports only the
- * reserved extension exports. It parses its argv with the shared CLI (help
+ * reserved extension exports. A `dispatch` export sees the raw argv first
+ * and may claim the run (D1). Otherwise it parses its argv with the shared CLI (help
  * and parse errors exit there), serves `--show-prompt` through the runner's
  * preview and otherwise hands the invocation to the runner's lifecycle.
  * Given provenance, Shepherd's entry answers `--version` with the stamp
@@ -783,12 +784,13 @@ export function generateEntry(
 		new URL("../lib/agent-format/run.ts", import.meta.url),
 	);
 	const stamped = agent.id === SHEPHERD_ID && provenance !== undefined;
+	const names = agent.extension?.exports ?? [];
+	const dispatched = names.includes("dispatch");
 	const lines: string[] = [
 		'import { statSync } from "node:fs";',
 		`import { ${stamped ? "resolveCli, resolveVersion" : "resolveCli"} } from ${JSON.stringify(cli)};`,
-		`import { previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
+		`import { ${dispatched ? "dispatchAndExit, " : ""}previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
 	];
-	const names = agent.extension?.exports ?? [];
 	if (agent.extension && names.length > 0) {
 		lines.push(
 			`import { ${names.join(", ")} } from ${JSON.stringify(agent.extension.file)};`,
@@ -798,6 +800,11 @@ export function generateEntry(
 		`const spec = ${JSON.stringify(agent.spec, null, "\t")};`,
 		`const extension = { ${names.join(", ")} };`,
 	);
+	if (dispatched) {
+		lines.push(
+			"await dispatchAndExit(spec, extension, process.argv.slice(2));",
+		);
+	}
 	if (stamped) {
 		lines.push(
 			`const versioned = resolveVersion(spec.id, ${JSON.stringify(versionLine(provenance))}, process.argv.slice(2), {`,

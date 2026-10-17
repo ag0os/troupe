@@ -23,6 +23,8 @@ export type ToolEnv = {
 	now: Date;
 	clock: () => Date;
 	execPath?: string;
+	/** The base package location doctor reports; the binary's own by default. */
+	packageBase?: string;
 	runCommand: (request: CommandRequest) => Promise<CommandResult>;
 	pidAlive: (pid: number) => boolean;
 };

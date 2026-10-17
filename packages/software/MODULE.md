@@ -13,6 +13,13 @@ charter-keys:
   software.plans: optional
   core.done: optional
   software.attribution: optional
+contract: 1
+tools:
+  publish-check:
+    description: Scan a branch's file names, added lines, commit messages and PR body for personal values, dashes and attribution lines
+    access: read
+    requires: [git]
+guides: {}
 ---
 # Integration: Software coordination
 

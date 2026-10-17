@@ -346,5 +346,6 @@ Coordinate this workspace.
 - Enclosing workspace: <workspace-fixture>/parent (inherited integrations: none)
 - Workspaces beneath: child
 - Gated modules loaded: root, software
+- Package tools: software publish-check (read); run as shepherd tool <package> <tool> [args], --help for usage; read tools need no permission prompt on Claude
 - Charter: loaded
 - Workspace-local integrations loaded: local.md

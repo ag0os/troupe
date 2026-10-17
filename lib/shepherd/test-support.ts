@@ -128,3 +128,16 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
 		...overrides,
 	};
 }
+
+/** The contract's mail example (docs/PACKAGES.md), with `extra` frontmatter appended. */
+export function packageText(
+	name: string,
+	extra = "",
+	body = `# Integration: ${name}\n\n${name} package body.\n`,
+	contract = "contract: 1\n",
+): string {
+	return `---\nname: ${name}\ntype: domain\ndescription: ${name} package\napplies-when:\n  charter-declares: ${name}\nbudget: 400\ncharter-keys: {}\n${contract}${extra}---\n${body}`;
+}
+
+export const MAIL_TOOLS =
+	"tools:\n  unread:\n    description: List unread threads in the inbox\n    access: read\n    requires: [hey]\n    network: true\n  send:\n    description: Send a drafted reply\n    access: write\nguides:\n  triage:\n    description: How to triage the inbox, in order\n";

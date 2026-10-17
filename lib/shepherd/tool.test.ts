@@ -238,15 +238,23 @@ describe("runTool guide", () => {
 		}
 	});
 
-	test("reads no workspace, config, or clock input", async () => {
-		const { env } = fixture();
+	test("reads no config or clock input, and a core guide reads no workspace", async () => {
 		const unreadable = () => {
 			throw new Error("guide must not read ToolEnv");
 		};
-		for (const key of ["cwd", "home", "env", "now"]) {
-			Object.defineProperty(env, key, { get: unreadable });
-		}
-		for (const args of [["guide"], ["guide", "memory"]]) {
+		// The list reads the working directory and SHEPHERD_WORKSPACE for the
+		// selected packages' guides (S4, D11).
+		for (const [args, keys] of [
+			[["guide"], ["home", "now"]],
+			[
+				["guide", "memory"],
+				["cwd", "home", "env", "now"],
+			],
+		] as const) {
+			const { env } = fixture();
+			for (const key of keys) {
+				Object.defineProperty(env, key, { get: unreadable });
+			}
 			expect(await runTool(args, {}, env)).toMatchObject({ code: 0 });
 		}
 	});

@@ -1,0 +1,241 @@
+#!/bin/sh
+# publish-check: scan what a branch would publish for personal values, dashes
+# and harness attribution lines. Read only: it runs git queries and writes
+# nothing but its report and a temporary directory. Needs git and mktemp -d
+# on PATH. Contract: docs/PACKAGES.md (contract 1).
+
+usage() {
+	cat <<'USAGE'
+usage: publish-check [--base <ref>] [--body <file>] [--terms <file>]
+                     [--ignore <prefix>]... [--forbid-attribution] [--json]
+
+Scans the names of the files the branch adds, changes or renames, the lines
+it adds (git diff -U0 <base>...HEAD), its commit messages, and the --body file
+when given, for:
+  home         the home path ($HOME)
+  account      the account name (id -un), as a whole word
+  email        the git email (git config user.email)
+  term         each line of the terms file
+  em-dash      an em dash
+  en-dash      an en dash
+  attribution  a harness attribution line (Co-Authored-By or Generated with
+               Claude or Codex); fails only under --forbid-attribution
+
+--base       the base ref; default origin/HEAD, then main
+--body       a pull request body to scan as well
+--terms      the terms file; default
+             $SHEPHERD_CONFIG_DIR/packages/software/publish-check/terms
+             (one term per line; blank lines and lines starting with # skipped)
+--ignore     a path prefix whose files and file names skip the dash check;
+             repeatable, and read from .publish-check-ignore at the repository
+             root as well. Personal values are never exempt.
+--json       one JSON object on stdout
+
+A finding's where is file:line for an added line, path <n> for the n-th file
+name (never the name itself), commit <hash>:line, or body:line. A line of a
+file whose name holds a personal value is placed as path <n>:line. <n> counts
+the lines of git diff --name-only --diff-filter=d <base>...HEAD.
+
+Exit: 0 clean, 1 failing findings, 2 usage or environment error.
+USAGE
+}
+
+fail() {
+	printf 'publish-check: %s\n' "$1" >&2
+	exit 2
+}
+
+base=
+body=
+terms=
+json=0
+forbid=0
+ignores=
+nl='
+'
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--base | --body | --terms | --ignore)
+		[ $# -ge 2 ] || fail "$1 needs a value; see --help"
+		case $1 in
+		--base) base=$2 ;;
+		--body) body=$2 ;;
+		--terms) terms=$2 ;;
+		--ignore) ignores="$ignores$2$nl" ;;
+		esac
+		shift 2
+		;;
+	--json)
+		json=1
+		shift
+		;;
+	--forbid-attribution)
+		forbid=1
+		shift
+		;;
+	*) fail "unknown argument: $1; see --help" ;;
+	esac
+done
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not a git repository: $(pwd)"
+if [ -z "$base" ]; then
+	if git rev-parse -q --verify origin/HEAD >/dev/null 2>&1; then
+		base=origin/HEAD
+	else
+		base=main
+	fi
+fi
+git rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1 || fail "base not found: $base"
+if [ -n "$body" ] && [ ! -r "$body" ]; then
+	fail "body file not readable: $body"
+fi
+if [ -z "$terms" ]; then
+	config=${SHEPHERD_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/shepherd}
+	terms=$config/packages/software/publish-check/terms
+	[ -r "$terms" ] || terms=
+elif [ ! -r "$terms" ]; then
+	fail "terms file not readable: $terms"
+fi
+if [ -r "$top/.publish-check-ignore" ]; then
+	ignores="$ignores$(cat "$top/.publish-check-ignore")$nl"
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/publish-check.XXXXXX") || fail "cannot create a temporary directory"
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Every scanned line as source<TAB>where<TAB>text, source one of path, diff,
+# commit or body. A diff line's where is file:line in the new file; a path's
+# where is its ordinal, so the report never repeats a name it flags.
+git merge-base "$base" HEAD >/dev/null 2>&1 || fail "no merge base between $base and HEAD"
+# --no-relative and the explicit prefixes override the caller's diff.relative,
+# diff.noprefix and diff.mnemonicPrefix, which would skip files or rename them.
+git -c core.quotepath=off diff --name-only --no-relative --diff-filter=d "$base...HEAD" >"$tmp/names" ||
+	fail "git could not list the branch's files against $base"
+git -c core.quotepath=off diff -U0 --no-color --no-ext-diff --no-textconv \
+	--no-relative --src-prefix=a/ --dst-prefix=b/ "$base...HEAD" >"$tmp/diff" || fail "git could not read the branch against $base"
+git log --no-color --format='%x01%h%n%B' "$base..HEAD" >"$tmp/log" ||
+	fail "git could not read the branch's commits against $base"
+{
+	awk '{ printf "path\tpath %d\t%s\n", NR, $0 }' "$tmp/names"
+	awk '
+		/^diff --git / { header = 1; file = ""; next }
+		header && /^\+\+\+ / {
+			file = substr($0, 5)
+			sub(/\t$/, "", file)
+			# A C-quoted name takes the list form, "name", to match it.
+			if (file ~ /^"b\//) file = "\"" substr(file, 4)
+			if (file == "/dev/null") file = ""
+			else sub(/^b\//, "", file)
+			next
+		}
+		/^@@ / {
+			header = 0
+			split($3, range, ",")
+			line = substr(range[1], 2) + 0
+			next
+		}
+		!header && /^\+/ && file != "" { printf "diff\t%s:%d\t%s\n", file, line, substr($0, 2); line++ }
+	' "$tmp/diff"
+	awk '
+		/^\001/ { commit = substr($0, 2); line = 0; next }
+		{ line++; printf "commit\tcommit %s:%d\t%s\n", commit, line, $0 }
+	' "$tmp/log"
+	if [ -n "$body" ]; then
+		case $body in /*) ;; *) body=./$body ;; esac
+		awk '{ printf "body\tbody:%d\t%s\n", NR, $0 }' "$body"
+	fi
+} >"$tmp/lines"
+
+PC_HOME=$HOME \
+	PC_ACCOUNT=$(id -un 2>/dev/null) \
+	PC_EMAIL=$(git config user.email 2>/dev/null) \
+	PC_TERMS=$terms \
+	PC_IGNORES=$ignores \
+	PC_EM=$(printf '\342\200\224') \
+	PC_EN=$(printf '\342\200\223') \
+	PC_BASE=$base \
+	PC_JSON=$json \
+	PC_FORBID=$forbid \
+	LC_ALL=C awk -F '\t' '
+	function add(kind, detail, failing) {
+		n++
+		kinds[n] = kind; wheres[n] = where; details[n] = detail
+		if (failing) failed++
+	}
+	function word(text, value,    rest, at, before, after, offset) {
+		rest = text; offset = 0
+		while ((at = index(rest, value)) > 0) {
+			before = offset + at > 1 ? substr(text, offset + at - 1, 1) : ""
+			after = substr(text, offset + at + length(value), 1)
+			if (before !~ /[A-Za-z0-9_]/ && after !~ /[A-Za-z0-9_]/) return 1
+			offset += at
+			rest = substr(text, offset + 1)
+		}
+		return 0
+	}
+	function quote(s) {
+		gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s)
+		return "\"" s "\""
+	}
+	BEGIN {
+		home = ENVIRON["PC_HOME"]; if (home == "/") home = ""
+		account = ENVIRON["PC_ACCOUNT"]; email = ENVIRON["PC_EMAIL"]
+		em = ENVIRON["PC_EM"]; en = ENVIRON["PC_EN"]
+		nterms = 0
+		if (ENVIRON["PC_TERMS"] != "")
+			while ((getline t < ENVIRON["PC_TERMS"]) > 0) {
+				termline++
+				if (t ~ /^[ \t]*$/ || t ~ /^#/) continue
+				terms[++nterms] = t; termlines[nterms] = termline
+			}
+		nignores = split(ENVIRON["PC_IGNORES"], raw, "\n")
+		for (i = 1; i <= nignores; i++)
+			if (raw[i] !~ /^[ \t]*$/ && raw[i] !~ /^#/) ignores[++nig] = raw[i]
+	}
+	{
+		source = $1; where = $2; place = $2
+		text = substr($0, length($1) + length($2) + 3)
+		# A line of a file whose name holds a personal value is placed by the
+		# number of that name, so the report never repeats the name.
+		if (source == "diff") {
+			name = place; sub(/:[0-9]+$/, "", name)
+			if (name in flagged) where = flagged[name] substr(place, length(name) + 1)
+		}
+		first = n
+		if (home != "" && index(text, home)) add("home", "the home path", 1)
+		if (account != "" && word(text, account)) add("account", "the account name", 1)
+		if (email != "" && index(text, email)) add("email", "the git email", 1)
+		for (i = 1; i <= nterms; i++)
+			if (index(text, terms[i])) add("term", "line " termlines[i] " of the terms file", 1)
+		if (source == "path" && n > first) flagged[text] = where
+		exempt = 0
+		if (source == "diff" || source == "path")
+			for (i = 1; i <= nig; i++)
+				if (index(source == "path" ? text : place, ignores[i]) == 1) exempt = 1
+		if (!exempt && index(text, em)) add("em-dash", "an em dash", 1)
+		if (!exempt && index(text, en)) add("en-dash", "an en dash", 1)
+		lower = tolower(text)
+		if (lower ~ /co-authored-by:[ \t]*(claude|codex)/ || lower ~ /generated with[ \t]+\[?(claude|codex)/)
+			add("attribution", "a harness attribution line" (ENVIRON["PC_FORBID"] == "1" ? "" : "; reported, not failing"), ENVIRON["PC_FORBID"] == "1")
+	}
+	END {
+		base = ENVIRON["PC_BASE"]
+		if (ENVIRON["PC_JSON"] == "1") {
+			printf "{\"contract\":1,\"tool\":\"publish-check\",\"base\":%s,\"findings\":[", quote(base)
+			for (i = 1; i <= n; i++)
+				printf "%s{\"where\":%s,\"kind\":%s,\"detail\":%s}", (i > 1 ? "," : ""), quote(wheres[i]), quote(kinds[i]), quote(details[i])
+			printf "],\"failing\":%d}\n", failed
+		} else {
+			for (i = 1; i <= n; i++) printf "%s: %s: %s\n", wheres[i], kinds[i], details[i]
+			if (n == 0) printf "publish-check: clean against %s\n", base
+			else printf "publish-check: %d findings, %d failing, against %s\n", n, failed, base
+		}
+		exit (failed > 0 ? 1 : 0)
+	}
+' "$tmp/lines"

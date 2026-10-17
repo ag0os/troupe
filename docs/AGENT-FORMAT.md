@@ -1,6 +1,6 @@
 # Agent Format
 
-Troupe agents are strict Markdown declarations under `agents/`. The path becomes the binary name: `agents/design/diagram/all.md` builds `bin/design:diagram:all`. A declaration may have a same-stem TypeScript extension that exports `prepare` or `finish`. The shared runner validates the declaration, composes prompts, selects a backend adapter, and owns execution and cleanup.
+Troupe agents are strict Markdown declarations under `agents/`. The path becomes the binary name: `agents/design/diagram/all.md` builds `bin/design:diagram:all`. A declaration may have a same-stem TypeScript extension that exports `prepare`, `finish` or `dispatch`. The shared runner validates the declaration, composes prompts, selects a backend adapter, and owns execution and cleanup.
 
 The compiler accepts only the fixed roster, the `ROSTER` list in `scripts/agent-compiler.ts`. This repository is not a registry for arbitrary extra binaries.
 
@@ -118,8 +118,11 @@ A declaration may have a same-stem `.ts` file that exports `prepare`, `finish`, 
 - a launch model or effort, with an explicit framework `--model` taking precedence;
 - an absolute Codex home, passed to Codex as `CODEX_HOME` and never put on argv;
 - a new cwd or validated flag overrides;
+- `env`, variables added to the backend's environment on either backend;
 - messages for before or after execution;
 - an early exit with an exact message, stream, and code.
+
+`dispatch(argv, ctx)` sees the raw argv before the CLI parser, with the caller's `cwd` and `env`, so a routed program receives flags the framework would reject or answer itself. It returns `undefined` to leave the argv to the parser, or data: `{ exec: { file, args, cwd, env } }`, an absolute file run with no shell, its arguments unchanged, an absolute working directory and variables added to the caller's environment; or `{ exit: { message, code, stream } }`. The runner validates the result, spawns `exec` with inherited stdio, forwards SIGHUP, SIGINT and SIGTERM, and exits with the program's code, or 128 plus the signal that ended it. The extension never spawns. Shepherd uses it for `shepherd tool <package> <tool>`.
 
 `finish(result, ctx)` runs only in print mode. `result` contains captured stdout, stderr, exit status, and any operational failure. The hook returns the final streams and exit code. Preparation commands and backend children are tracked by the runner so cancellation, waiting, listener removal, and temporary-resource cleanup have one owner.
 
