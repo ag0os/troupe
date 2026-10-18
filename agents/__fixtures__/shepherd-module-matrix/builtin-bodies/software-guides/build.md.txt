@@ -1,10 +1,19 @@
 # Guide: the software cycle, steps 3 to 5
 
-The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the rest of steps 3 to 5, in order, and the rest of the skills rule.
+The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the shape table's Contract timing and Checks rows, then the rest of steps 3 to 5, in order, and the rest of the skills rule.
+
+## Shapes: the Contract and the checks
+
+| | Bug | Feature | Chore |
+|---|---|---|---|
+| Contract timing | the missing obligation first, its test red on the unfixed code, then the fix | pin what the code does now; the builder writes each agreed obligation into the Contract during the inhale (rule 20); a pass of its own only when the user reserved the obligations | the pins stay green |
+| Checks | gates; mutation scoped to the fixed code, the new test killing the mutant that matches the bug | gates; mutation scoped to the change; health against floors | gates; health against floors |
+
+Red first stays for bugs and for pins; a feature's new obligations are written and made executable as the build goes and checked against the agreement on the exhale.
 
 ## 3. The Contract
 
-Grow it per change into the docs that exist, starting one where none does; where scope or shape is a decision the user reserved, work it out with them in an editable document. The obligations agreed before the build enter the Contract first, each with its test red against the unchanged code: red is the evidence, needing no tool, that a new test bites. What the build discovers enters as it is found (step 4). A pass of its own for this, before the build, is for the change whose obligations the user reserved to see before the work is spent, or the depth you chose for a foundational change (step 7); otherwise it is the builder's first move, and you read its obligations in the backbrief (step 4) before the build goes on. A production bug enters the same way: its new test fails on the unfixed code, then the fix. A refactor, changing no behavior, keeps its pinned tests green throughout; a pin the change is meant to break is rewritten as the new obligation's test, not deleted. The agreed feature authorizes the changes to obligations it clearly describes, and the builder makes them as it goes. Any other change to an established obligation or decision, one first accepted as a routine default included, is flagged in the pull request for the user's acceptance. Each change's reason traces to the agreed direction or to a proposal the pull request names.
+Grow it per change into the component's file, starting one where none exists; where scope or shape is a decision the user reserved, work it out with them in an editable document. The agreed obligations are listed with ids in the agreement and the backbrief; the builder writes each into the Contract as it builds, sentence and test, and what it discovers enters as it is found (step 4). A pass of its own before the build, each agreed obligation's test red against the unchanged code, is for the change whose obligations the user reserved to see before the work is spent, or the depth you chose for a foundational change (step 7). Where mutation cannot run, each new test is shown red against the base before merge, and the pull request says how. A refactor, changing no behavior, keeps its pinned tests green throughout; a pin the change is meant to break is rewritten as the new obligation's test, not deleted. The agreed feature authorizes the changes to obligations it clearly describes, and the builder makes them as it goes. Any other change to an established obligation or decision, one first accepted as a routine default included, is flagged in the pull request for the user's acceptance. Each change's reason traces to the agreed direction or to a proposal the pull request names.
 
 ## 4. Inhale: the delegate's brief and backbrief
 

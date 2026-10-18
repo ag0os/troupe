@@ -58,9 +58,9 @@ test("the docs name the SHEPHERD_WORKSPACE leak and use no em or en dashes (D11)
 test("the docs describe software's guides and what a brief must still carry (O10, F6)", () => {
 	const packages = doc("PACKAGES.md").replace(/\s+/g, " ");
 	for (const bullet of [
-		"`software build`: steps 3 to 5 and the skills rule; read before briefing a builder",
+		"`software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder",
 		"`software check`: steps 6 and 7",
-		"`software ship`: steps 8 and 9, automatic merging and a parked task",
+		"`software ship`: steps 8 and 9, the grants' journal and a parked task",
 	])
 		expect(packages).toContain(bullet);
 	expect(packages).not.toContain("the software coordination module, unchanged");

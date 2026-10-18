@@ -245,9 +245,10 @@ naming packages exactly as now.
 steps 3 to 9 moved out word for word: each step keeps its name, completion criterion, the user's part and its safety
 rules in the module, and the rest is in three guides, read with `shepherd tool guide software <guide>`:
 
-- `software build`: steps 3 to 5 and the skills rule; read before briefing a builder;
+- `software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before
+  briefing a builder;
 - `software check`: steps 6 and 7;
-- `software ship`: steps 8 and 9, automatic merging and a parked task.
+- `software ship`: steps 8 and 9, the grants' journal and a parked task.
 
 A brief may tell a delegate to follow `shepherd tool guide software build`, since `SHEPHERD_WORKSPACE` reaches it from
 any directory. A guide holds method only, so a brief that points a delegate at one still states the module's stop rule
