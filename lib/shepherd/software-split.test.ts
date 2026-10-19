@@ -271,16 +271,50 @@ const SOURCES: Record<string, string> = {
 	"A task that waits on the user": "Each step ends at its completion criterion",
 };
 
+/**
+ * The only departures from the draft: the user's rulings of 2026-10-17, which
+ * postdate its Checks row. Mutation runs on every subject where that runs in
+ * reasonable time, so the row defers to step 6.
+ */
+const RULINGS: Array<{ draft: string; now: string }> = [
+	{
+		draft: "| gates; mutation scoped to the fixed code,",
+		now: "| gates; mutation as step 6,",
+	},
+	{
+		draft: "| gates; mutation scoped to the change;",
+		now: "| gates; mutation as step 6;",
+	},
+];
+
 // Lifetime: the tests in this block and __fixtures__/software-body-shapes-draft.md
 // hold the module and its guides to the words of the shapes draft
-// (codename-impatient's module-shapes.md, section 1). Delete the block and the
-// fixture in the next change that edits the software text on purpose; the
-// tests above stay.
+// (codename-impatient's module-shapes.md, section 1), less the RULINGS above.
+// Delete the block and the fixture in the next change that edits the software
+// text on purpose; the tests above stay.
 describe("software's shapes carry the draft's words without rewriting them (O3)", () => {
-	const before = readFileSync(
+	const draft = readFileSync(
 		join(import.meta.dir, "__fixtures__/software-body-shapes-draft.md"),
 		"utf8",
 	);
+	const before = RULINGS.reduce(
+		(text, { draft, now }) => text.replace(draft, now),
+		draft,
+	);
+
+	test("each ruling replaces one passage of the draft and lands in the build guide's Checks row", () => {
+		const checks =
+			guide("build")
+				.split("\n")
+				.find((line) => line.startsWith("| Checks |")) ?? "";
+		for (const ruling of RULINGS) {
+			expect({ ruling, inDraft: draft.split(ruling.draft).length - 1 }).toEqual(
+				{ ruling, inDraft: 1 },
+			);
+			expect(checks).toContain(ruling.now);
+			expect(checks).not.toContain(ruling.draft);
+		}
+	});
 
 	function source(heading: string): string {
 		const number = heading.match(/^(\d)\. /)?.[1];
