@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
+	cpSync,
+	existsSync,
 	mkdirSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import type { Finding } from "./check";
 import { moduleFindings } from "./check-modules";
 import { moduleCatalog } from "./module-resolution";
 import { fakeToolEnv, MAIL_TOOLS, makeTree, packageText } from "./test-support";
@@ -143,6 +147,56 @@ describe("tool check validates packages (O17)", () => {
 			message:
 				'tool "unread" requires "no-such-binary-for-shepherd", which is not on PATH',
 		});
+	});
+
+	test("the software package's contract tool warns when bun is missing and is never run (CT-1)", () => {
+		const { root, base } = setup();
+		cpSync(
+			resolve(import.meta.dir, "../../packages/software"),
+			join(base, "software"),
+			{
+				recursive: true,
+			},
+		);
+		const marker = join(root, "ran");
+		writeFileSync(
+			join(base, "software/tools/contract"),
+			`#!/bin/sh\ntouch "${marker}"\n`,
+		);
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		symlinkSync(Bun.which("git") ?? "/usr/bin/git", join(bin, "git"));
+		// Bun.which reads the PATH the process started with, so the check runs
+		// in a child whose PATH holds git and no bun.
+		const script = join(root, "check.ts");
+		writeFileSync(
+			script,
+			[
+				`import { moduleFindings } from ${JSON.stringify(join(import.meta.dir, "check-modules.ts"))};`,
+				`import { moduleCatalog } from ${JSON.stringify(join(import.meta.dir, "module-resolution.ts"))};`,
+				`const ws = ${JSON.stringify(join(root, "ws"))};`,
+				`const found = moduleFindings(moduleCatalog(ws, undefined, true, [{ dir: ${JSON.stringify(base)}, layer: "builtin" }]), ws + "/.shepherd");`,
+				"console.log(JSON.stringify(found));",
+			].join("\n"),
+		);
+		const child = Bun.spawnSync([process.execPath, script], {
+			env: { PATH: bin, HOME: root },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(child.stderr.toString()).toBe("");
+		const all = JSON.parse(child.stdout.toString()) as Finding[];
+		expect(
+			all.filter((f) => f.file === join(base, "software/MODULE.md")),
+		).toEqual([
+			{
+				level: "warn",
+				code: "package-requires-missing",
+				file: join(base, "software/MODULE.md"),
+				message: 'tool "contract" requires "bun", which is not on PATH',
+			},
+		]);
+		expect(existsSync(marker)).toBe(false);
 	});
 
 	test("package-name-reserved", () => {

@@ -2418,7 +2418,10 @@ describe("module failures degrade with notices on both backends", () => {
 });
 
 describe("package tools at launch (O14, O15, O16)", () => {
-	const READ_RULE = "Bash(shepherd tool software publish-check *)";
+	const READ_RULES = [
+		"Bash(shepherd tool software publish-check *)",
+		"Bash(shepherd tool software contract *)",
+	];
 	const GUIDE_RULE = "Bash(shepherd tool guide *)";
 	function softwareWorkspace(enclosing: boolean): {
 		cwd: string;
@@ -2449,13 +2452,13 @@ describe("package tools at launch (O14, O15, O16)", () => {
 		expect(
 			settingsOf((await preview(["--backend", "claude"], alone.cwd)).argv),
 		).toEqual({
-			permissions: { allow: [...STATIC_RULES, READ_RULE, GUIDE_RULE] },
+			permissions: { allow: [...STATIC_RULES, ...READ_RULES, GUIDE_RULE] },
 		});
 		const nested = softwareWorkspace(true);
 		const shared = `${realpathSync(nested.parent)}/.shepherd`;
 		expect(extension.prepare(context("claude", nested.cwd))).toMatchObject({
 			extraAllowRules: {
-				rules: [`Read(/${shared}/**)`, READ_RULE, GUIDE_RULE],
+				rules: [`Read(/${shared}/**)`, ...READ_RULES, GUIDE_RULE],
 				additionalDirectories: [shared],
 			},
 		});
@@ -2475,7 +2478,7 @@ describe("package tools at launch (O14, O15, O16)", () => {
 		const shared = `Read(/${realpathSync(parent)}/.shepherd/**)`;
 		expect(rules("Modules: software, mail\n")).toEqual([
 			shared,
-			READ_RULE,
+			...READ_RULES,
 			"Bash(shepherd tool mail unread *)",
 			GUIDE_RULE,
 		]);
@@ -2503,7 +2506,7 @@ describe("package tools at launch (O14, O15, O16)", () => {
 		});
 		write(join(cwd, ".shepherd/charter.md"), "Modules: software, notes\n");
 		expect(extension.prepare(context("claude", cwd))).toMatchObject({
-			extraAllowRules: { rules: [shared, READ_RULE, GUIDE_RULE] },
+			extraAllowRules: { rules: [shared, ...READ_RULES, GUIDE_RULE] },
 		});
 		expect(extension.prepare(context("codex", cwd))).not.toHaveProperty(
 			"extraAllowRules",

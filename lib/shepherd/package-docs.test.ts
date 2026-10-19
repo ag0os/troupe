@@ -71,6 +71,6 @@ test("the docs describe software's guides and what a brief must still carry (O10
 		"A plain (unquoted) `description` that holds `: ` is a `module-schema` error; quote it. A semicolon needs no quoting.",
 	);
 	expect(doc("SHEPHERD.md")).toContain(
-		"carries the `publish-check` tool and three guides",
+		"carries the `publish-check` and `contract` tools and three guides",
 	);
 });

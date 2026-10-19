@@ -255,7 +255,7 @@ A brief may tell a delegate to follow `shepherd tool guide software build`, sinc
 any directory. A guide holds method only, so a brief that points a delegate at one still states the module's stop rule
 (step 4) and the attribution rule.
 
-The package carries one read tool:
+The package carries two read tools. The first:
 
 ```
 shepherd tool software publish-check [--base <ref>] [--body <file>] [--terms <file>]
@@ -273,3 +273,23 @@ exempt. Findings name where and what, never the value found: a file name is repo
 a line of a file whose name holds a personal value as `path <n>:<line>`, where `<n>` counts the lines of
 `git diff --name-only --diff-filter=d <base>...HEAD`. Exit 0 clean, 1 findings, 2 usage, not a git repository, or a base
 with no merge base with `HEAD`.
+
+The second, `contract`, reads a repository's Contract files (`docs/contracts/<component>.md`, `README.md` excluded) and
+the `## Contract:` sections of its root `PRODUCT.md`:
+
+```
+shepherd tool software contract lint [file...] [--json]
+shepherd tool software contract coverage [file...] [--line] [--json]
+shepherd tool software contract map [--json]
+shepherd tool software contract diff [--base <ref>] [--head <ref>] [--json]
+```
+
+`lint` checks each file's four-field front matter (a restricted YAML subset: other YAML is refused, not guessed), its
+coverage line, obligations, proofs and Decisions index, and accepts a legacy file (no front matter, with a "Code it
+covers" paragraph or the old heading separator) with warnings; `coverage` counts active obligations by proof and compares
+the coverage line, and `--line` prints only the computed line for one component; `map` lists components, their covers,
+dependencies and directory conflicts; `diff` reports the Contract changes between `--head` (default `HEAD`) and its merge
+base with `--base` (default `origin/HEAD`, then `main`), read from committed trees only, as a report with no policy.
+PRODUCT sections are read by name and obligation ID only. It needs `bun` and `git`: a launcher runs its TypeScript from
+`tools/contract.d/` with `--no-install --env-file=/dev/null`, so the target's `bunfig.toml`, preloads and `.env` never
+load. Exit 0 clean or warnings only, 1 error findings (`diff` never), 2 usage or environment error.
