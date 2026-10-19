@@ -91,6 +91,7 @@ const KEEPERS = {
 		"merge only with the user's explicit permission for this pull request, its open choices settled and the project's required checks satisfied",
 		"Green checks alone authorize no merge.",
 		"A grant covers small blast radius only, unless its text names the large kinds it covers.",
+		"or a check the project lacks that the grant's text does not name as accepted, is presented",
 	],
 	bug: "A production bug enters first: its sentence, its test failing on the unfixed code, then the fix.",
 };
@@ -278,7 +279,9 @@ const SOURCES: Record<string, string> = {
  * runs on every subject where that runs in reasonable time, so the row defers
  * to step 6; a pull request's health gate compares its tip with its merge base,
  * not with floors. Of 2026-10-19, on the pull request's questions: a grant
- * covers large blast radius only where its text names it.
+ * covers large blast radius only where its text names it, and a check the
+ * project lacks puts a pull request outside a grant unless the grant accepts
+ * the lack.
  */
 const RULINGS: Array<{ draft: string; now: string; at: string }> = [
 	{
@@ -300,6 +303,12 @@ const RULINGS: Array<{ draft: string; now: string; at: string }> = [
 		draft:
 			"it ends when the user withdraws it, and when its own text says a lapse condition has been met.",
 		now: "it ends when the user withdraws it, and when its own text says a lapse condition has been met. A grant covers small blast radius only, unless its text names the large kinds it covers.",
+		at: "9. **",
+	},
+	{
+		draft:
+			"or with an open choice, a departure from the agreed design, or a check that could not run, is presented",
+		now: "or with an open choice, a departure from the agreed design, a check that could not run, or a check the project lacks that the grant's text does not name as accepted, is presented",
 		at: "9. **",
 	},
 ];
