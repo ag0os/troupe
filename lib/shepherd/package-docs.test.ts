@@ -60,7 +60,7 @@ test("the docs describe software's guides and what a brief must still carry (O10
 	for (const bullet of [
 		"`software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder",
 		"`software check`: steps 6 and 7",
-		"`software ship`: steps 8 and 9, the grants' journal and a parked task",
+		"`software ship`: step 8, the grants' journal and a parked task",
 	])
 		expect(packages).toContain(bullet);
 	expect(packages).not.toContain("the software coordination module, unchanged");

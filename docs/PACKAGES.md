@@ -249,7 +249,7 @@ whole there, and the rest is in three guides, read with `shepherd tool guide sof
 - `software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before
   briefing a builder;
 - `software check`: steps 6 and 7;
-- `software ship`: steps 8 and 9, the grants' journal and a parked task.
+- `software ship`: step 8, the grants' journal and a parked task.
 
 A brief may tell a delegate to follow `shepherd tool guide software build`, since `SHEPHERD_WORKSPACE` reaches it from
 any directory. A guide holds method only, so a brief that points a delegate at one still states the module's stop rule

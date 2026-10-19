@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { packageLocations, packageModules } from "./package-resolution";
 
 const POINTER =
-	"The rest of steps 3 to 9 is in guides, read when the plan reaches the step and before any brief for it: `shepherd tool guide software build` holds the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; `software check` steps 6 and 7; `software ship` steps 8 and 9, the grants' journal, and a task that waits on the user, read also when a task parks or resumes.";
+	"The rest of steps 3 to 8 is in guides, read when the plan reaches the step and before any brief for it: `shepherd tool guide software build` holds the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; `software check` steps 6 and 7; `software ship` step 8, the grants' journal, and a task that waits on the user, read also when a task parks or resumes.";
 const SHAPES_POINTER =
 	"The table's Contract timing and Checks rows are in `shepherd tool guide software build`, read before briefing a builder.";
 const KEEPS =
@@ -29,7 +29,7 @@ const NEW_TEXT = [
 	"This guide holds the rest of steps 6 and 7, in order. Which checks each shape runs is the shape table's Checks row, in `shepherd tool guide software build`.",
 	"## 6. Checks before done",
 	"## 7. Review by blast radius",
-	"# Guide: the software cycle, steps 8 and 9",
+	"# Guide: the software cycle, step 8",
 	KEEPS,
 	"This guide holds the rest of step 8, then the grants' journal and the task that waits on the user.",
 	"## 8. The pull request",
@@ -137,7 +137,7 @@ describe("software's guide split keeps steps whole and safety rules loaded (O4)"
 		expect(guideNames).toEqual(["build", "check", "ship"]);
 	});
 
-	test("the pointer sits between the core preamble and step 1 and names the guide for steps 3, 6 and 9 (K2)", () => {
+	test("the pointer sits between the core preamble and step 1 and names the guide for steps 3, 6 and 8, step 9 whole in the module (K2)", () => {
 		expect(remainder.split(POINTER).length - 1).toBe(1);
 		expect(remainder).toContain(
 			`keep it current.\n\n${POINTER}\n\n1. **Story straight.**`,
@@ -146,7 +146,7 @@ describe("software's guide split keeps steps whole and safety rules loaded (O4)"
 			"`shepherd tool guide software build` holds",
 			"steps 3 to 5",
 			"`software check` steps 6 and 7",
-			"`software ship` steps 8 and 9",
+			"`software ship` step 8",
 		])
 			expect(POINTER).toContain(pointer);
 	});

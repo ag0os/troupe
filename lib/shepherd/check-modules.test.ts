@@ -139,7 +139,7 @@ test("built-in metadata and body costs are pinned against budgets", () => {
 		["inter-agent", 364, 400],
 		["nested", 392, 450],
 		["root", 631, 650],
-		["software", 2144, 2200],
+		["software", 2142, 2200],
 	];
 	const builtins = [
 		...builtInModules(),

@@ -1,4 +1,4 @@
-# Guide: the software cycle, steps 8 and 9
+# Guide: the software cycle, step 8
 
 The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the rest of step 8, then the grants' journal and the task that waits on the user.
 

@@ -116,7 +116,7 @@ describe("software's guides are declared, listed and readable (O5)", () => {
 		});
 	}
 	const LISTED =
-		"software build: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder\nsoftware check: steps 6 and 7\nsoftware ship: steps 8 and 9, the grants' journal and a parked task\n";
+		"software build: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder\nsoftware check: steps 6 and 7\nsoftware ship: step 8, the grants' journal and a parked task\n";
 	const build = () => {
 		const software = packageModules(packageLocations(undefined)).find(
 			(m) => m.package?.name === "software",
