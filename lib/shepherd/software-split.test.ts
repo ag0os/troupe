@@ -281,7 +281,9 @@ const SOURCES: Record<string, string> = {
  * not with floors. Of 2026-10-19, on the pull request's questions: a grant
  * covers large blast radius only where its text names it, and a check the
  * project lacks puts a pull request outside a grant unless the grant accepts
- * the lack.
+ * the lack. And three minor ones: the Feature cell's pass of its own also
+ * allows foundational depth, as step 3 does; a small build is an S build, by
+ * the size axis; the axes drop the eval's budgets, which guide no action.
  */
 const RULINGS: Array<{ draft: string; now: string; at: string }> = [
 	{
@@ -310,6 +312,22 @@ const RULINGS: Array<{ draft: string; now: string; at: string }> = [
 			"or with an open choice, a departure from the agreed design, or a check that could not run, is presented",
 		now: "or with an open choice, a departure from the agreed design, a check that could not run, or a check the project lacks that the grant's text does not name as accepted, is presented",
 		at: "9. **",
+	},
+	{
+		draft: "a pass of its own only when the user reserved the obligations",
+		now: "a pass of its own when the user reserved the obligations, or for foundational depth (step 7)",
+		at: "| Contract timing |",
+	},
+	{
+		draft: "A small build restates done in one line",
+		now: "An S build restates done in one line",
+		at: "Its brief names the base revision",
+	},
+	{
+		draft:
+			"sets the backbrief (M and L) and the budgets the method eval records.",
+		now: "sets the backbrief (M and L).",
+		at: "Judge both before the work is spent",
 	},
 ];
 
