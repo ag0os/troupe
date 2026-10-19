@@ -90,6 +90,7 @@ const KEEPERS = {
 		"When a grant covers this pull request and every condition it names holds",
 		"merge only with the user's explicit permission for this pull request, its open choices settled and the project's required checks satisfied",
 		"Green checks alone authorize no merge.",
+		"A grant covers small blast radius only, unless its text names the large kinds it covers.",
 	],
 	bug: "A production bug enters first: its sentence, its test failing on the unfixed code, then the fix.",
 };
@@ -272,23 +273,34 @@ const SOURCES: Record<string, string> = {
 };
 
 /**
- * The only departures from the draft: the user's rulings of 2026-10-17, which
- * postdate its Checks row. Mutation runs on every subject where that runs in
- * reasonable time, so the row defers to step 6; a pull request's health gate
- * compares its tip with its merge base, not with floors.
+ * The only departures from the draft, each on the user's rulings, and the line
+ * each lands in. Of 2026-10-17, which postdate the draft's Checks row: mutation
+ * runs on every subject where that runs in reasonable time, so the row defers
+ * to step 6; a pull request's health gate compares its tip with its merge base,
+ * not with floors. Of 2026-10-19, on the pull request's questions: a grant
+ * covers large blast radius only where its text names it.
  */
-const RULINGS: Array<{ draft: string; now: string }> = [
+const RULINGS: Array<{ draft: string; now: string; at: string }> = [
 	{
 		draft: "| gates; mutation scoped to the fixed code,",
 		now: "| gates; mutation as step 6,",
+		at: "| Checks |",
 	},
 	{
 		draft: "| gates; mutation scoped to the change;",
 		now: "| gates; mutation as step 6;",
+		at: "| Checks |",
 	},
 	{
 		draft: "health against floors | gates; health against floors |",
 		now: "health against the merge base | gates; health against the merge base |",
+		at: "| Checks |",
+	},
+	{
+		draft:
+			"it ends when the user withdraws it, and when its own text says a lapse condition has been met.",
+		now: "it ends when the user withdraws it, and when its own text says a lapse condition has been met. A grant covers small blast radius only, unless its text names the large kinds it covers.",
+		at: "9. **",
 	},
 ];
 
@@ -307,17 +319,17 @@ describe("software's shapes carry the draft's words without rewriting them (O3)"
 		draft,
 	);
 
-	test("each ruling replaces one passage of the draft and lands in the build guide's Checks row", () => {
-		const checks =
-			guide("build")
-				.split("\n")
-				.find((line) => line.startsWith("| Checks |")) ?? "";
+	test("each ruling replaces one passage of the draft and lands in its line", () => {
+		const lines = [remainder, ...guides].join("\n").split("\n");
 		for (const ruling of RULINGS) {
 			expect({ ruling, inDraft: draft.split(ruling.draft).length - 1 }).toEqual(
 				{ ruling, inDraft: 1 },
 			);
-			expect(checks).toContain(ruling.now);
-			expect(checks).not.toContain(ruling.draft);
+			const at = lines.filter((line) => line.startsWith(ruling.at));
+			expect({ ruling, lines: at.length }).toEqual({ ruling, lines: 1 });
+			expect(at[0]).toContain(ruling.now);
+			if (!ruling.now.includes(ruling.draft))
+				expect(at[0]).not.toContain(ruling.draft);
 		}
 	});
 
