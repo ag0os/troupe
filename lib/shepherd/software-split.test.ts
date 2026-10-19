@@ -274,7 +274,8 @@ const SOURCES: Record<string, string> = {
 /**
  * The only departures from the draft: the user's rulings of 2026-10-17, which
  * postdate its Checks row. Mutation runs on every subject where that runs in
- * reasonable time, so the row defers to step 6.
+ * reasonable time, so the row defers to step 6; a pull request's health gate
+ * compares its tip with its merge base, not with floors.
  */
 const RULINGS: Array<{ draft: string; now: string }> = [
 	{
@@ -284,6 +285,10 @@ const RULINGS: Array<{ draft: string; now: string }> = [
 	{
 		draft: "| gates; mutation scoped to the change;",
 		now: "| gates; mutation as step 6;",
+	},
+	{
+		draft: "health against floors | gates; health against floors |",
+		now: "health against the merge base | gates; health against the merge base |",
 	},
 ];
 

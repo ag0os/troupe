@@ -7,7 +7,7 @@ The module keeps each step's name, completion criterion, the user's part and its
 | | Bug | Feature | Chore |
 |---|---|---|---|
 | Contract timing | the missing obligation first, its test red on the unfixed code, then the fix | pin what the code does now; the builder writes each agreed obligation into the Contract during the inhale (rule 20); a pass of its own only when the user reserved the obligations | the pins stay green |
-| Checks | gates; mutation as step 6, the new test killing the mutant that matches the bug | gates; mutation as step 6; health against floors | gates; health against floors |
+| Checks | gates; mutation as step 6, the new test killing the mutant that matches the bug | gates; mutation as step 6; health against the merge base | gates; health against the merge base |
 
 Red first stays for bugs and for pins; a feature's new obligations are written and made executable as the build goes and checked against the agreement on the exhale.
 
