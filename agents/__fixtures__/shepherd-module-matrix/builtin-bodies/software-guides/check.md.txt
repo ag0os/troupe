@@ -1,6 +1,6 @@
 # Guide: the software cycle, steps 6 and 7
 
-The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the rest of steps 6 and 7, in order.
+The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the rest of steps 6 and 7, in order. Which checks each shape runs is the shape table's Checks row, in `shepherd tool guide software build`.
 
 ## 6. Checks before done
 

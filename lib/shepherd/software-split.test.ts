@@ -26,7 +26,7 @@ const NEW_TEXT = [
 	"## Skills are the delegate's craft",
 	"# Guide: the software cycle, steps 6 and 7",
 	KEEPS,
-	"This guide holds the rest of steps 6 and 7, in order.",
+	"This guide holds the rest of steps 6 and 7, in order. Which checks each shape runs is the shape table's Checks row, in `shepherd tool guide software build`.",
 	"## 6. Checks before done",
 	"## 7. Review by blast radius",
 	"# Guide: the software cycle, steps 8 and 9",
@@ -186,6 +186,27 @@ describe("software's guide split keeps steps whole and safety rules loaded (O4)"
 			expect(remainder).toContain(literal);
 			inNoGuide(literal);
 		}
+	});
+
+	test("each guide holds its own sections, in order", () => {
+		const headings = (text: string) =>
+			text.split("\n").filter((line) => line.startsWith("## "));
+		expect(headings(guide("build"))).toEqual([
+			"## Shapes: the Contract and the checks",
+			"## 3. The Contract",
+			"## 4. Inhale: the delegate's brief and backbrief",
+			"## 5. Exhale, same PR",
+			"## Skills are the delegate's craft",
+		]);
+		expect(headings(guide("check"))).toEqual([
+			"## 6. Checks before done",
+			"## 7. Review by blast radius",
+		]);
+		expect(headings(guide("ship"))).toEqual([
+			"## 8. The pull request",
+			"## Widening or narrowing the grants",
+			"## A task that waits on the user",
+		]);
 	});
 });
 

@@ -241,9 +241,10 @@ naming packages exactly as now.
 
 ## The software package
 
-`packages/software` is the first package. Its module text is the software coordination module with the method of
-steps 3 to 9 moved out word for word: each step keeps its name, completion criterion, the user's part and its safety
-rules in the module, and the rest is in three guides, read with `shepherd tool guide software <guide>`:
+`packages/software` is the first package. Its module text is the software coordination module, a core of nine steps plus
+bug, feature and chore shapes, with the method of steps 3 to 8 and the shape table's last two rows moved out word for
+word: each step keeps its name, completion criterion, the user's part and its safety rules in the module, step 9 stays
+whole there, and the rest is in three guides, read with `shepherd tool guide software <guide>`:
 
 - `software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before
   briefing a builder;
