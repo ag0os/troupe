@@ -75,19 +75,35 @@ function checkDestination(runDir: string, repo: string, gitDirs: string[]) {
  * The fixed wrapper a hook's settings command names: it holds the launcher,
  * manifest and log paths and answers in the hook's own protocol when the
  * launcher is gone, so the command the model sees prefixed to every hook
- * failure is the wrapper's path alone.
+ * failure is the wrapper's path alone. A fallback line, its own or the
+ * launcher's, goes to the log only while the run directory is still the
+ * real path prepare made, outside the repository's real path resolved now,
+ * and the manifest is byte for byte the one prepare wrote.
  */
 function wrapper(
 	launcher: string,
+	runDir: string,
+	repo: string,
 	manifest: string,
-	log: string,
 	mode: "guard" | "health" | "stop",
 ): string {
-	const run = `env SHEPHERD_HOOK_MANIFEST=${shq(manifest)} SHEPHERD_HOOK_LOG=${shq(log)} ${shq(launcher)} ${mode}`;
 	const why = `the launcher ${launcher} is missing or not executable`;
 	const logged = (reason: string) =>
-		`printf '%s ${mode} launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>${shq(log)} 2>/dev/null`;
-	const head = `#!/bin/sh\n# builder-hooks ${mode} hook for this run, written by prepare.\n`;
+		`[ -z "$log" ] || printf '%s ${mode} launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>"$log" 2>/dev/null`;
+	const head = `#!/bin/sh
+# builder-hooks ${mode} hook for this run, written by prepare.
+PATH=$PATH:/usr/bin:/bin
+log=
+if run=$(cd ${shq(runDir)} 2>/dev/null && pwd -P) && [ "$run" = ${shq(runDir)} ] &&
+	real=$(cd ${shq(repo)} 2>/dev/null && pwd -P); then
+	case "$run/" in
+	"$real"/* | ${shq(repo)}/*) ;;
+	*) printf '%s' ${shq(manifest)} | cmp -s - "$run/${MANIFEST}" && log=${shq(join(runDir, LOG))} ;;
+	esac
+fi
+export SHEPHERD_HOOK_MANIFEST=${shq(join(runDir, MANIFEST))} SHEPHERD_HOOK_LOG="$log"
+`;
+	const run = `${shq(launcher)} ${mode}`;
 	if (mode === "guard") {
 		const refused = `Role guard could not run: ${why}. The call is refused until the host repairs the hooks.`;
 		return `${head}[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(refused)} >&2; exit 2; }\nexec ${run}\n`;
@@ -99,12 +115,11 @@ function wrapper(
 				additionalContext: `health check could not run on the edited file: ${why}`,
 			},
 		});
-		return `${head}[ -x ${shq(launcher)} ] || {\n\tPATH=$PATH:/usr/bin:/bin\n\tprintf '%s\\n' ${shq(context)}\n\t${logged(shq(why))}\n\texit 0\n}\nexec ${run}\n`;
+		return `${head}[ -x ${shq(launcher)} ] || {\n\tprintf '%s\\n' ${shq(context)}\n\t${logged(shq(why))}\n\texit 0\n}\nexec ${run}\n`;
 	}
 	// Stop answers by exit 0 or 2; anything else, or no launcher, ends the
 	// gate without blocking and leaves a line for the host.
 	return `${head}unable() {
-\tPATH=$PATH:/usr/bin:/bin
 \tprintf 'Stop gate could not run: %s. Not blocking; the host will re-check.\\n' "$1" >&2
 \t${logged('"$1"')}
 \texit 0
@@ -260,11 +275,12 @@ export function prepare(
 		],
 	});
 
-	publish(manifestPath, `${JSON.stringify(policy, null, 2)}\n`);
+	const manifestText = `${JSON.stringify(policy, null, 2)}\n`;
+	publish(manifestPath, manifestText);
 	for (const mode of ["guard", "health", "stop"] as const)
 		publish(
 			wrappers[mode],
-			wrapper(launcher, manifestPath, logPath, mode),
+			wrapper(launcher, real, repo, manifestText, mode),
 			0o700,
 		);
 	if (process.env.BUILDER_HOOKS_TEST_INTERRUPT === "before-settings")

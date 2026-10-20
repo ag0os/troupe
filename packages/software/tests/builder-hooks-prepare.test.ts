@@ -446,7 +446,7 @@ describe("BH-4: settings artifacts", () => {
 			expect(text).toStartWith("#!/bin/sh\n");
 			expect(text).toContain(`'${tool}'`);
 			expect(text).toContain(`SHEPHERD_HOOK_MANIFEST='${f.manifest}'`);
-			expect(text).toContain(`SHEPHERD_HOOK_LOG='${f.log}'`);
+			expect(text).toContain(`log='${f.log}'`);
 		}
 	});
 

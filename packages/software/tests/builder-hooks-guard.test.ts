@@ -6,11 +6,12 @@ import {
 	mkdirSync,
 	readFileSync,
 	renameSync,
+	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Fixture, tool } from "./builder-hooks-fixture";
+import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
 const HISTORY =
 	"Role guard: commits, pushes and pull requests belong to the host, not the builder. Leave your change in the worktree.";
@@ -224,6 +225,107 @@ describe("BH-5: guard infrastructure", () => {
 			readFileSync(join(f.runDir, "builder-hooks.settings.json"), "utf8"),
 		);
 		expect(s.hooks.PreToolUse[0].hooks[0].onFailure).toBe("block");
+	});
+});
+
+describe("BH-5: fallback log destinations", () => {
+	const noBun = { PATH: "/usr/bin:/bin" };
+	const wrapper = (
+		g: Fixture,
+		mode: string,
+		event: unknown,
+		env: Record<string, string> = {},
+	) =>
+		spawn(["/bin/sh", "-c", `'${join(g.runDir, `${mode}.sh`)}'`], {
+			cwd: g.root,
+			env: g.env(env),
+			input: JSON.stringify(event),
+		});
+	const commit = {
+		session_id: "s1",
+		tool_name: "Bash",
+		tool_input: { command: "git commit" },
+	};
+	const edited = (g: Fixture) => ({
+		session_id: "s1",
+		tool_name: "Edit",
+		tool_input: { file_path: join(g.repo, "README.md") },
+	});
+	const closed = (r: { code: number; stdout: string }) => {
+		expect(r.code).toBe(2);
+		expect(r.stdout).toBe("");
+	};
+	const asContext = (r: { code: number; stdout: string }) => {
+		expect(r.code).toBe(0);
+		expect(
+			JSON.parse(r.stdout).hookSpecificOutput.additionalContext,
+		).toStartWith("health check could not run on ");
+	};
+
+	test("a run directory redirected into the repository gets no fallback line", () => {
+		const g = new Fixture();
+		try {
+			const launcher = g.ownPackage();
+			g.prepare(g.input());
+			const inner = join(g.repo, "inner");
+			renameSync(g.runDir, inner);
+			symlinkSync(inner, g.runDir);
+			closed(wrapper(g, "guard", commit, noBun));
+			renameSync(launcher, `${launcher}-gone`);
+			asContext(wrapper(g, "health", edited(g)));
+			const stop = wrapper(g, "stop", { session_id: "s1" });
+			expect(stop.code).toBe(0);
+			expect(stop.stdout).toBe("");
+			expect(existsSync(join(inner, "hooks.log"))).toBe(false);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a moved repository behind a symlink gets no fallback line", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			const moved = join(g.root, "repo2");
+			renameSync(g.repo, moved);
+			symlinkSync(moved, g.repo);
+			const inner = join(moved, "inner");
+			renameSync(g.runDir, inner);
+			symlinkSync(inner, g.runDir);
+			closed(wrapper(g, "guard", commit, noBun));
+			asContext(wrapper(g, "health", edited(g), noBun));
+			closed(g.hook("guard", commit, noBun));
+			asContext(g.hook("health", edited(g), noBun));
+			expect(existsSync(join(inner, "hooks.log"))).toBe(false);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a malformed manifest that keeps its repo line gets no fallback line", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			writeFileSync(g.manifest, `${readFileSync(g.manifest, "utf8")}{\n`);
+			closed(wrapper(g, "guard", commit, noBun));
+			asContext(wrapper(g, "health", edited(g), noBun));
+			expect(existsSync(g.log)).toBe(false);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("an absent manifest leaves no log and still answers closed or as context", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			rmSync(g.manifest);
+			closed(wrapper(g, "guard", commit));
+			asContext(wrapper(g, "health", edited(g)));
+			expect(existsSync(g.log)).toBe(false);
+		} finally {
+			g.cleanup();
+		}
 	});
 });
 

@@ -44,14 +44,19 @@ fail() {
 		log=$SHEPHERD_HOOK_LOG
 		case $log in
 		/*/hooks.log)
-			# Only beside a manifest whose repository does not hold the run
-			# directory's real path: a redirected run directory gets no log.
+			# Only beside a manifest whose repository, as named and as its
+			# real path now, does not hold the run directory's real path: a
+			# redirected run directory or a moved repository gets no log. The
+			# wrapper passes an empty log unless the manifest is the one
+			# prepare wrote.
 			rundir=$(cd "${log%/hooks.log}" 2>/dev/null && pwd -P) || rundir=
 			repo=
 			[ -z "$rundir" ] || repo=$(sed -n 's/^  "repo": "\([^"\\]*\)",$/\1/p' "$rundir/builder-manifest.json" 2>/dev/null | head -n 1)
-			if [ -n "$repo" ]; then
+			real=
+			[ -z "$repo" ] || real=$(cd "$repo" 2>/dev/null && pwd -P) || real=
+			if [ -n "$real" ]; then
 				case "$rundir/" in
-				"$repo"/*) ;;
+				"$repo"/* | "$real"/*) ;;
 				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$1" >>"$rundir/hooks.log" 2>/dev/null ;;
 				esac
 			fi
