@@ -909,10 +909,36 @@ describe("record rules", () => {
 		expect(codes({ [`${item}/STATUS.md`]: done("Merged as #23.") })).toEqual([
 			"record-note-missing",
 		]);
-		for (const method of ["None", "pilot", "none, pre-pilot"])
+		for (const method of [
+			"None",
+			"pilot",
+			"none, pre-pilot",
+			"none#pilot",
+			'"none"',
+			"'none'",
+		])
 			expect(codes({ [`${item}/STATUS.md`]: methodDone(method) })).toEqual([
 				"record-note-missing",
 			]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]: methodDone("none#pilot"),
+				[`${item}/measurements.md`]: "# Measurements",
+			}),
+		).toEqual(["record-logs-missing"]);
+		for (const method of ["none  # pre-pilot", "none\t#pre-pilot", "none  "])
+			expect(
+				codes({
+					[`${item}/STATUS.md`]: methodDone(method),
+					[`${item}/measurements.md`]: "# Measurements",
+				}),
+			).toEqual([]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]:
+					"---\nstate: done\nrecord:\n  method: none\n---\n# Item\n\n## Outcome\nMerged as #23.\n",
+			}),
+		).toEqual(["record-note-missing"]);
 		expect(
 			codes({
 				[`${item}/STATUS.md`]: methodDone("pilot"),
@@ -946,6 +972,7 @@ describe("record rules", () => {
 			"Raw logs: none, the builder ran before the eval asked for them.",
 			"- Raw logs: none, kept only in /private/tmp",
 			"* Raw logs: none, see the report",
+			"+ Raw logs: none, the gate ran in CI only",
 			"- **Raw logs:** none, the gate output was not kept",
 			"**Raw logs:** none, lost",
 		])
@@ -956,6 +983,14 @@ describe("record rules", () => {
 			logs(
 				`# Note\n\n## 1. Task\n${"Text.\n".repeat(50)}## 5. Evidence\nRaw logs: none, the run predates the eval.\n`,
 			),
+		).toEqual([]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]: done("Merged as #23."),
+				[`${item}/measurements.md`]: "# Note\nNo logs line here.\n",
+				[`${item}/t2-measurements.md`]:
+					"# Note\nRaw logs: none, the second try was not kept.\n",
+			}),
 		).toEqual([]);
 		for (const line of [
 			"Raw logs: none",

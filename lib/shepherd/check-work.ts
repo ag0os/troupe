@@ -71,6 +71,8 @@ const NOT_LANDED_HEAD =
 /** A landed signal in a status line outranks the stale phrases beside it. */
 const LANDED_LABELLED =
 	/^[\s*_]*landed\b|\bmerged\s+as\s+#\d+|#\d+\s+merged\b|\bmerged[\s:(`]+[0-9a-f]{7,40}\b/i;
+/** Judged on the raw line: the frontmatter parser cuts at any `#`, so `none#pilot` would read as `none`. */
+const METHOD_NONE = /^method:[ \t]*none(?:[ \t]*|[ \t]+#.*)$/;
 const NO_RAW_LOGS =
 	/^[ \t]*(?:[-*+][ \t]+)?(?:\*\*Raw logs:\*\*|Raw logs:)[ \t]*none,[ \t]*\S/;
 
@@ -239,7 +241,10 @@ export function checkWork(
 		const record = itemRecord(statusText, texts);
 		if (!record.prs.length && !record.shas.length) return;
 		// `method: none` marks an item that was not a method task: no note or logs are owed.
-		const owed = frontmatter(statusText ?? "")?.method !== "none";
+		const owed = !(statusText ?? "")
+			.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1]
+			?.split(/\r?\n/)
+			.some((line) => METHOD_NONE.test(line));
 		if (state === "done" && record.done && owed) {
 			if (!notes.length)
 				add(
