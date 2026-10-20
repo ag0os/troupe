@@ -9,6 +9,7 @@ import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
 import { lockStatus } from "./lock";
+import { moduleCatalog } from "./module-resolution";
 import { currentItems, updatedName } from "./query-items";
 import { sessionPrefixFor } from "./session-name";
 import { sessionView } from "./session-view";
@@ -384,7 +385,8 @@ export function checkWorkspace(
 		);
 	}
 
-	findings.push(...checkModules(workspace, tree, config));
+	const catalog = moduleCatalog(workspace.dir, undefined, true);
+	findings.push(...checkModules(workspace, tree, config, catalog));
 
 	for (const link of symlinksUnder(workspace.state)) {
 		if (!existsSync(link)) {
@@ -565,7 +567,7 @@ export function checkWorkspace(
 		);
 	}
 
-	findings.push(...checkWork(workspace, config, today));
+	findings.push(...checkWork(workspace, config, today, catalog));
 	findings.push(...checkLinks(workspace, tree, home));
 
 	return findings;
