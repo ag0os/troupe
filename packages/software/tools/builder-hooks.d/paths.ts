@@ -55,8 +55,32 @@ export function matches(pattern: string, rel: string): boolean {
 }
 
 /**
+ * Resolve an absolute path as the system would: segment by segment, each
+ * symlink resolved before a following `..` is collapsed, the missing suffix
+ * kept.
+ */
+export function resolveOs(path: string): string {
+	let head = "/";
+	for (const seg of path.split("/")) {
+		if (seg === "" || seg === ".") continue;
+		head = seg === ".." ? dirname(head) : resolveDeep(join(head, seg));
+	}
+	return head;
+}
+
+/** The forms of `path` under `root`, relative, for a glob to match. */
+function relativeUnder(forms: string[], roots: string[]): string[] {
+	return forms.flatMap((f) =>
+		roots
+			.filter((r) => f !== r && under(f, r))
+			.map((r) => f.slice(r.length + 1)),
+	);
+}
+
+/**
  * The exclusion an edit of `file` (absolute, or relative to `repo`) falls
- * under, or null. Exclusions are repository-relative or absolute.
+ * under, or null. Exclusions are repository-relative globs or literals; the
+ * guard's fixed run-directory rule passes an absolute one.
  */
 export function excludedBy(
 	repo: string,
@@ -64,33 +88,49 @@ export function excludedBy(
 	excluded: string[],
 ): string | null {
 	const repoReal = resolveDeep(repo);
-	const lexical = normalize(isAbsolute(file) ? file : join(repo, file));
-	const forms = [lexical, resolveDeep(lexical)].map((f) => f.toLowerCase());
+	const given = isAbsolute(file) ? file : `${repo}/${file}`;
+	const forms = [normalize(given), resolveOs(given)].map((f) =>
+		f.toLowerCase(),
+	);
 	const roots = [repo, repoReal].map((r) => r.toLowerCase());
+	const globMatch = (regex: RegExp, rels: string[]) =>
+		rels.some((rel) => prefixes(rel).some((p) => regex.test(p)));
 	for (const e of excluded) {
 		const pattern = e.replace(/\/+$/, "");
 		if (GLOB.test(pattern)) {
-			const regex = new RegExp(globRegex(pattern).source, "i");
-			const hit = isAbsolute(pattern)
-				? forms.some((f) =>
+			if (isAbsolute(pattern)) {
+				const regex = new RegExp(globRegex(pattern).source, "i");
+				if (
+					forms.some((f) =>
 						prefixes(f.slice(1)).some((p) => regex.test(`/${p}`)),
 					)
-				: forms.some((f) =>
-						roots.some(
-							(r) =>
-								f !== r &&
-								under(f, r) &&
-								prefixes(f.slice(r.length + 1)).some((p) => regex.test(p)),
-						),
-					);
-			if (hit) return e;
+				)
+					return e;
+				continue;
+			}
+			const regex = new RegExp(globRegex(pattern).source, "i");
+			if (globMatch(regex, relativeUnder(forms, roots))) return e;
+			// The static directory prefix, resolved, with the rest under it.
+			const segments = pattern.split("/");
+			const first = segments.findIndex((seg) => GLOB.test(seg));
+			if (first > 0) {
+				const prefix = segments.slice(0, first).join("/");
+				const rest = new RegExp(
+					globRegex(segments.slice(first).join("/")).source,
+					"i",
+				);
+				const resolved = [repo, repoReal].map((r) =>
+					resolveOs(`${r}/${prefix}`).toLowerCase(),
+				);
+				if (globMatch(rest, relativeUnder(forms, resolved))) return e;
+			}
 			continue;
 		}
 		const lex = normalize(isAbsolute(pattern) ? pattern : join(repo, pattern));
 		const targets = [
 			lex,
 			isAbsolute(pattern) ? lex : join(repoReal, pattern),
-			resolveDeep(lex),
+			resolveOs(isAbsolute(pattern) ? pattern : `${repo}/${pattern}`),
 		].map((t) => t.toLowerCase());
 		if (forms.some((f) => targets.some((t) => under(f, t)))) return e;
 	}

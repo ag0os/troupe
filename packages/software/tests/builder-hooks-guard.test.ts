@@ -351,6 +351,48 @@ describe("BH-7: excluded edits", () => {
 			}).toEqual({ path, d: "deny" });
 	});
 
+	test("resolution walks segments, resolving a symlink before collapsing ..", () => {
+		const g = new Fixture();
+		try {
+			mkdirSync(join(g.repo, "protected/sub"), { recursive: true });
+			symlinkSync(join(g.repo, "protected/sub"), join(g.repo, "alias"));
+			g.prepare(g.input({ excluded: ["protected/"] }));
+			const r = g.hook("guard", {
+				tool_name: "Write",
+				tool_input: { file_path: "alias/../secret.rb" },
+			});
+			expect(denial(r)?.permissionDecisionReason).toBe(
+				excludedReason("alias/../secret.rb"),
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a glob exclusion's static prefix is resolved and the rest matched under it", () => {
+		const g = new Fixture();
+		try {
+			const outside = join(g.root, "outside");
+			mkdirSync(outside);
+			mkdirSync(join(g.repo, "config"));
+			symlinkSync(outside, join(g.repo, "linked"));
+			symlinkSync(join(g.repo, "config"), join(g.repo, "alias"));
+			g.prepare(g.input({ excluded: ["linked/*.rb", "alias/*.rb"] }));
+			for (const path of [join(outside, "a.rb"), "config/x.rb"]) {
+				const r = g.hook("guard", {
+					tool_name: "Write",
+					tool_input: { file_path: path },
+				});
+				expect({ path, d: denial(r)?.permissionDecision }).toEqual({
+					path,
+					d: "deny",
+				});
+			}
+		} finally {
+			g.cleanup();
+		}
+	});
+
 	test("unexcluded paths, inside and outside the repo, are allowed silently", () => {
 		for (const path of [
 			"app/models/user.rb",

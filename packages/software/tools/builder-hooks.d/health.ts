@@ -8,7 +8,7 @@ import { extname, isAbsolute, join, normalize, relative } from "node:path";
 import { git } from "../contract.d/repo";
 import { logLine } from "./log";
 import type { Manifest, Stack } from "./manifest";
-import { argPath } from "./paths";
+import { argPath, resolveOs } from "./paths";
 import { runBounded } from "./run";
 
 export type Checked =
@@ -79,10 +79,14 @@ export async function checkFile(
 	return parseRubocop(ran.output, rel);
 }
 
+/** The edited file relative to the repository, lexically or through symlinks. */
 export function repoRelative(m: Manifest, file: string): string | null {
-	const abs = normalize(isAbsolute(file) ? file : join(m.repo, file));
-	const rel = relative(m.repo, abs);
-	return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? null : rel;
+	const given = isAbsolute(file) ? file : `${m.repo}/${file}`;
+	for (const abs of [normalize(given), resolveOs(given)]) {
+		const rel = relative(m.repo, abs);
+		if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+	}
+	return null;
 }
 
 /** The health hook: returns the additionalContext to emit, or null. */

@@ -1,7 +1,7 @@
 // builder-hooks health (BH-8 to BH-10): one fake checker on the edited file,
 // silent when clean or unadopted, context when it finds or cannot run.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Fixture } from "./builder-hooks-fixture";
 
@@ -123,6 +123,22 @@ describe("BH-8: health findings and silence", () => {
 		prepare();
 		expect(edited("app/a.rb").stdout).toBe("");
 		expect(f.recorded()).toEqual([]);
+	});
+});
+
+describe("BH-8: a path through a symlink to the repository", () => {
+	test("an Edit through a repository alias checks the file it names", () => {
+		prepare();
+		symlinkSync(f.repo, join(f.root, "repo-alias"));
+		f.set("checker", "out", rubocop());
+		f.hook("health", {
+			session_id: "s1",
+			tool_name: "Edit",
+			tool_input: { file_path: join(f.root, "repo-alias/app/a.rb") },
+		});
+		expect(f.recorded()).toEqual([
+			`checker ${DASH}${DASH}format json app/a.rb`,
+		]);
 	});
 });
 
