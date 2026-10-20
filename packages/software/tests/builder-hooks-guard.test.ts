@@ -410,6 +410,8 @@ describe("BH-6: history classification", () => {
 		`find . ${DASH}okdir git push \\;`,
 		`echo \${x:${DASH}"'$(git commit)'"}`,
 		`echo \${x:${DASH}"it's $(git commit) now's"}`,
+		`echo \${x:${DASH}"\${y:${DASH}"'$(git commit)'"}"}`,
+		`echo \${x:${DASH}"\${y:${DASH}"it's $(git commit) now's"}"}`,
 	])("denies through wrappers, separators and substitutions: %s", (command) => {
 		expect(denial(bash(command))?.permissionDecision).toBe("deny");
 	});

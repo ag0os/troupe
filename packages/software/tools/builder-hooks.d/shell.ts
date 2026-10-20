@@ -151,9 +151,10 @@ class Lexer {
 	/**
 	 * Skip from an opening bracket to its partner; the content is dynamic.
 	 * A command substitution met inside is lifted out as commands of its own.
-	 * Quote state is tracked through the expansion: a double quote toggles
-	 * it, and inside double quotes, enclosing or opened here, a single quote
-	 * is a literal and brackets do not count, as Bash reads it.
+	 * Quote state is tracked per expansion level: a double quote toggles this
+	 * level's state, a nested `${` is read by its own call with its own
+	 * state, and inside double quotes, enclosing or opened here, a single
+	 * quote is a literal and brackets do not count, as Bash reads it.
 	 */
 	skipTo(open: string, closeCh: string, from: number, quoted = false): void {
 		const s = this.s;
@@ -180,6 +181,11 @@ class Lexer {
 			if (ch === "$" && s[j + 1] === "(" && s[j + 2] !== "(") {
 				this.i = j + 2;
 				this.list(")");
+				j = this.i;
+				continue;
+			}
+			if (ch === "$" && s[j + 1] === "{") {
+				this.skipTo("{", "}", j + 1, quoted || inner);
 				j = this.i;
 				continue;
 			}
