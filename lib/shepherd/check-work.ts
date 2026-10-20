@@ -46,7 +46,7 @@ export type ItemRecord = {
 };
 
 /** Where a landing was found, so a later source (gh) can stand in for the files. */
-export type Landed = { by: string; pr?: number; sha?: string; date?: string };
+export type Landed = { by: string; phrase: string; pr?: number; sha?: string };
 export type LandedSource = (record: ItemRecord) => Landed | undefined;
 
 const NOTE_NAME = /^(?:[tT]\d+-)?measurements\.md$/;
@@ -62,7 +62,6 @@ const LANDED = [
 	/\bfast-forwarded\s+to\s+main\b/i,
 	/\blive\s+at[\s:(`]+([0-9a-f]{7,40})\b/i,
 ];
-const DATE = /\b\d{4}-\d{2}-\d{2}\b/;
 const DASHES = String.fromCodePoint(0x2013, 0x2014);
 const STATUS_LABEL = new RegExp(`\\bstatus\\b[\\s*_]*[:${DASHES}](.*)`, "i");
 const NOT_LANDED_LABELLED =
@@ -71,17 +70,26 @@ const NOT_LANDED_HEAD =
 	/\b(?:not landed|not pushed|no merge commit or pr yet)\b/i;
 /** A landed signal in a status line outranks the stale phrases beside it. */
 const LANDED_LABELLED =
-	/\blanded\b|\bmerged\s+as\s+#\d+|\bmerged[\s:(`]+[0-9a-f]{7,40}\b/i;
+	/^[\s*_]*landed\b|\bmerged\s+as\s+#\d+|#\d+\s+merged\b|\bmerged[\s:(`]+[0-9a-f]{7,40}\b/i;
+const NO_RAW_LOGS =
+	/^[ \t]*(?:[-*+][ \t]+)?(?:\*\*Raw logs:\*\*|Raw logs:)[ \t]*none,[ \t]*\S/;
 
-/** A status line says not landed when it has a stale phrase and no landed signal. */
-function statusNotLanded(line: string): boolean {
+/** The stale phrase a status line says, unless a landed signal outranks it. */
+function statusNotLanded(line: string): string | undefined {
 	const status = line.match(STATUS_LABEL)?.[1] ?? "";
-	if (!NOT_LANDED_LABELLED.test(status)) return false;
-	const stripped = status.replace(
-		new RegExp(NOT_LANDED_LABELLED.source, "gi"),
-		"",
-	);
-	return !LANDED_LABELLED.test(stripped);
+	if (LANDED_LABELLED.test(status)) return undefined;
+	return status.match(NOT_LANDED_LABELLED)?.[0];
+}
+
+/** A match, closed by the backtick or parenthesis that follows it when it opened one. */
+function closedMatch(text: string, match: RegExpMatchArray): string {
+	const phrase = match[0];
+	const next = text[(match.index ?? 0) + phrase.length];
+	const open = (char: string) => phrase.split(char).length - 1;
+	return (next === "`" && open("`") % 2) ||
+		(next === ")" && open("(") > open(")"))
+		? phrase + next
+		: phrase;
 }
 
 function mergeShas(text: string): string[] {
@@ -157,22 +165,23 @@ export function landedInFiles(record: ItemRecord): Landed | undefined {
 				const negated =
 					/^merged/i.test(match[0]) &&
 					/\b(?:not|yet)\b/i.test(sentence.slice(0, match.index));
-				return negated ? [] : [match];
+				return negated ? [] : [{ match, phrase: closedMatch(sentence, match) }];
 			}),
 		);
-	if (!found.length) return undefined;
+	const first = found[0];
+	if (!first) return undefined;
 	const pr =
-		found.find((match) => match[0].includes("#"))?.[1] ?? record.prs[0];
+		found.find(({ match }) => match[0].includes("#"))?.match[1] ??
+		record.prs[0];
 	const sha =
 		found
-			.find((match) => match[1] && !match[0].includes("#"))?.[1]
-			?.toLowerCase() ?? mergeShas(outcome)[0];
-	const date = outcome.match(DATE)?.[0];
+			.find(({ match }) => match[1] && !match[0].includes("#"))
+			?.match[1]?.toLowerCase() ?? mergeShas(outcome)[0];
 	return {
 		by: "STATUS",
+		phrase: first.phrase,
 		...(pr === undefined ? {} : { pr: Number(pr) }),
 		...(sha ? { sha } : {}),
-		...(date ? { date } : {}),
 	};
 }
 
@@ -226,12 +235,12 @@ export function checkWork(
 			.map((entry) => entry.name)
 			.sort();
 		const texts = notes.map((name) => read(join(itemDir, name)));
-		const record = itemRecord(
-			existsSync(status) ? read(status) : undefined,
-			texts,
-		);
+		const statusText = existsSync(status) ? read(status) : undefined;
+		const record = itemRecord(statusText, texts);
 		if (!record.prs.length && !record.shas.length) return;
-		if (state === "done" && record.done) {
+		// `method: none` marks an item that was not a method task: no note or logs are owed.
+		const owed = frontmatter(statusText ?? "")?.method !== "none";
+		if (state === "done" && record.done && owed) {
 			if (!notes.length)
 				add(
 					"warn",
@@ -239,7 +248,12 @@ export function checkWork(
 					itemDir,
 					`done item ${slug} names ${record.prs.length ? `PR ${record.prs.map((n) => `#${n}`).join(", ")}` : `merge ${record.shas[0]}`} and has no measurements.md`,
 				);
-			else if (!hasRawLog(itemDir))
+			else if (
+				!hasRawLog(itemDir) &&
+				!texts.some((text) =>
+					proseLines(text).some(({ line }) => NO_RAW_LOGS.test(line)),
+				)
+			)
 				add(
 					"warn",
 					"record-logs-missing",
@@ -250,20 +264,25 @@ export function checkWork(
 		const landed = landedSource(record);
 		notes.forEach((name, index) => {
 			const { lines, head } = noteHead(texts[index] ?? "");
+			// Only the first Status line is judged, and the head rule leaves every Status line to it.
+			const statusLine = lines.find((line) => STATUS_LABEL.test(line));
 			const notLanded =
-				lines.some(statusNotLanded) ||
-				head.some((line) => NOT_LANDED_HEAD.test(line));
+				(statusLine && statusNotLanded(statusLine)) ??
+				head
+					.filter((line) => !STATUS_LABEL.test(line))
+					.map((line) => line.match(NOT_LANDED_HEAD)?.[0])
+					.find(Boolean);
 			if (!notLanded) return;
 			const headSha = mergeShas(head.join("\n"))[0];
 			const says = landed
-				? `${landed.by} says merged${landed.pr !== undefined ? ` as #${landed.pr}` : landed.sha ? ` at ${landed.sha}` : ""}${landed.date ? ` on ${landed.date}` : ""}`
+				? `${landed.by} says "${landed.phrase}"`
 				: headSha && `its head names merge ${headSha}`;
 			if (says)
 				add(
 					"warn",
 					"record-note-stale",
 					join(itemDir, name),
-					`${slug}/${name} says not landed; ${says}`,
+					`${slug}/${name} says "${notLanded}"; ${says}`,
 				);
 		});
 	};

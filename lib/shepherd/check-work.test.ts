@@ -667,7 +667,7 @@ describe("record rules", () => {
 				code: "record-note-stale",
 				file: "work/done/consulting/measurements.md",
 				message:
-					"consulting/measurements.md says not landed; STATUS says merged as #23 on 2026-10-14",
+					'consulting/measurements.md says "not landed"; STATUS says "Merged as #23"',
 			},
 		]);
 	});
@@ -735,21 +735,21 @@ describe("record rules", () => {
 
 	test("each landed form in STATUS's Outcome is recognized", () => {
 		for (const [outcome, says] of [
-			["Merged as #23 (2026-10-14).", "merged as #23 on 2026-10-14"],
-			["Landed as #23.", "merged as #23"],
-			["Merged 88a6e379.", "merged at 88a6e379"],
-			["Merge commit `88a6e379`.", "merged at 88a6e379"],
-			["Fast-forwarded to main at b300d88.", "merged at b300d88"],
-			["Fast-forwarded to main; PR #23.", "merged as #23"],
-			["Live at b300d88 since PR #23.", "merged as #23"],
-			["Review is not done yet. Merged as #23.", "merged as #23"],
-			["Review is not done\n\nMerged as #23.", "merged as #23"],
-			["- Review not done\n- Merged as #23", "merged as #23"],
+			["Merged as #23 (2026-10-14).", "Merged as #23"],
+			["Landed as #23.", "Landed as #23"],
+			["Merged 88a6e379.", "Merged 88a6e379"],
+			["Merge commit `88a6e379`.", "Merge commit `88a6e379`"],
+			["Fast-forwarded to main at b300d88.", "Fast-forwarded to main"],
+			["Fast-forwarded to main; PR #23.", "Fast-forwarded to main"],
+			["Live at b300d88 since PR #23.", "Live at b300d88"],
+			["Review is not done yet. Merged as #23.", "Merged as #23"],
+			["Review is not done\n\nMerged as #23.", "Merged as #23"],
+			["- Review not done\n- Merged as #23", "Merged as #23"],
 		])
 			expect(
 				stale("Status: parked", outcome).map(({ message }) => message),
 			).toEqual([
-				`consulting/measurements.md says not landed; STATUS says ${says}`,
+				`consulting/measurements.md says "parked"; STATUS says "${says}"`,
 			]);
 		for (const outcome of [
 			"Not merged; the PR #23 stays open.",
@@ -791,7 +791,7 @@ describe("record rules", () => {
 				code: "record-note-stale",
 				file: "work/in-progress/consulting/t2-measurements.md",
 				message:
-					"consulting/t2-measurements.md says not landed; its head names merge 88a6e379",
+					'consulting/t2-measurements.md says "parked"; its head names merge 88a6e379',
 			},
 		]);
 		expect(
@@ -822,14 +822,14 @@ describe("record rules", () => {
 					"# Note\nMerge commit abcdefa.\n\n## 1. Task\nStatus: parked\n",
 			}).map(({ message }) => message),
 		).toEqual([
-			"consulting/measurements.md says not landed; its head names merge abcdefa",
+			'consulting/measurements.md says "parked"; its head names merge abcdefa',
 		]);
 		expect(
 			stale("Status: parked", "Live at abcdefa; PR #23.").map(
 				({ message }) => message,
 			),
 		).toEqual([
-			"consulting/measurements.md says not landed; STATUS says merged as #23",
+			'consulting/measurements.md says "parked"; STATUS says "Live at abcdefa"',
 		]);
 	});
 
@@ -893,5 +893,139 @@ describe("record rules", () => {
 					"# Note\nMerged 88a6e379 into main.\n\n## 1. Task\nStatus: parked\n",
 			}),
 		).toEqual([]);
+	});
+
+	const methodDone = (method: string, outcome = "Merged as #23.") =>
+		`---\nstate: done\nmethod: ${method}\nclosed: 2026-10-14\n---\n# Item\n\n## Outcome\n${outcome}\n`;
+
+	test("method: none in STATUS's frontmatter skips the note and logs rules, not the stale rule", () => {
+		expect(codes({ [`${item}/STATUS.md`]: methodDone("none") })).toEqual([]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]: methodDone("none"),
+				[`${item}/measurements.md`]: "# Measurements",
+			}),
+		).toEqual([]);
+		expect(codes({ [`${item}/STATUS.md`]: done("Merged as #23.") })).toEqual([
+			"record-note-missing",
+		]);
+		for (const method of ["None", "pilot", "none, pre-pilot"])
+			expect(codes({ [`${item}/STATUS.md`]: methodDone(method) })).toEqual([
+				"record-note-missing",
+			]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]: methodDone("pilot"),
+				[`${item}/measurements.md`]: "# Measurements",
+			}),
+		).toEqual(["record-logs-missing"]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]:
+					"---\nstate: done\n---\n# Item\nmethod: none\n\n## Outcome\nMerged as #23.\n",
+			}),
+		).toEqual(["record-note-missing"]);
+		expect(
+			codes({
+				[`${item}/STATUS.md`]: methodDone(
+					"none",
+					"Merged as #23 (2026-10-14).",
+				),
+				[`${item}/measurements.md`]: "# Note\nStatus: parked\n",
+			}),
+		).toEqual(["record-note-stale"]);
+	});
+
+	test("a Raw logs: none line with a reason satisfies the logs rule", () => {
+		const logs = (note: string) =>
+			codes({
+				[`${item}/STATUS.md`]: done("Merged as #23."),
+				[`${item}/measurements.md`]: note,
+			});
+		for (const line of [
+			"Raw logs: none, the builder ran before the eval asked for them.",
+			"- Raw logs: none, kept only in /private/tmp",
+			"* Raw logs: none, see the report",
+			"- **Raw logs:** none, the gate output was not kept",
+			"**Raw logs:** none, lost",
+		])
+			expect(
+				logs(`# Note\nRepo: \`absync\`\nStatus: landed\n${line}\n`),
+			).toEqual([]);
+		expect(
+			logs(
+				`# Note\n\n## 1. Task\n${"Text.\n".repeat(50)}## 5. Evidence\nRaw logs: none, the run predates the eval.\n`,
+			),
+		).toEqual([]);
+		for (const line of [
+			"Raw logs: none",
+			"Raw logs: none.",
+			"Raw logs: none, ",
+			"Raw logs: kept in the report",
+			"The note says Raw logs: none, somewhere mid-line.",
+			"```\nRaw logs: none, inside a fence\n```",
+		])
+			expect(logs(`# Note\n${line}\n`)).toEqual(["record-logs-missing"]);
+	});
+
+	const verbatim =
+		"- **Status:** landed: #23 merged 2026-10-14, live 2026-10-16 (see the second Status line below). When first written: built and checked (415a87f on refine/consulting-page, not pushed; b668de3 amended by copy-refresh round 2 with his D3 intro order and D5 nav, see copy-refresh/measurements.md). Reason: waiting on his yes to push and open the PR, and hosting. The open choices were settled by his D answers via ag0osPro (15:0x).";
+
+	test("a status line has one judgment: landed first, merged as #n, #n merged or merged <sha>", () => {
+		expect(stale(verbatim)).toEqual([]);
+		for (const head of [
+			"Status: landed: was not pushed at first",
+			"Status: landed, after a week not pushed",
+			"Status: landed. Not pushed until review.",
+			"- **Status:** Landed; parked before that",
+			"Status: not pushed at first; #23 merged 2026-10-14",
+			"Status: not pushed at first; merged as #23",
+			"Status: not pushed at first; merged 88a6e379",
+		])
+			expect(stale(head)).toEqual([]);
+		for (const head of [
+			"Status: built, not pushed; landed later",
+			"Status: attempted, not landed",
+			"Status: not pushed; PR #23 not merged",
+		])
+			expect(stale(head).map(({ code }) => code)).toEqual([
+				"record-note-stale",
+			]);
+		expect(
+			stale("Status: landed.\nThe branch is not pushed.").map(
+				({ message }) => message,
+			),
+		).toEqual([
+			'consulting/measurements.md says "not pushed"; STATUS says "Merged as #23"',
+		]);
+	});
+
+	test("only the first Status line in the first 40 lines is judged", () => {
+		expect(stale("Status: landed (PR #23).\n\nStatus: parked")).toEqual([]);
+		expect(stale("Status: landed.\nStatus: not pushed")).toEqual([]);
+		expect(
+			stale("- **Status:** parked.\n- **Status:** landed as of review").map(
+				({ message }) => message,
+			),
+		).toEqual([
+			'consulting/measurements.md says "parked"; STATUS says "Merged as #23"',
+		]);
+	});
+
+	test("record-note-stale quotes both phrases as the files write them", () => {
+		expect(
+			stale("Status: Not Pushed yet", "MERGED AS #23 on 2026-10-14.").map(
+				({ message }) => message,
+			),
+		).toEqual([
+			'consulting/measurements.md says "Not Pushed"; STATUS says "MERGED AS #23"',
+		]);
+		expect(
+			stale("Status: parked", "Merged (88a6e379) on 2026-10-14.").map(
+				({ message }) => message,
+			),
+		).toEqual([
+			'consulting/measurements.md says "parked"; STATUS says "Merged (88a6e379)"',
+		]);
 	});
 });
