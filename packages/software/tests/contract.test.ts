@@ -2234,6 +2234,71 @@ describe("protocol edges and prefix scope (fix round 1, findings 7, 8 and 11)", 
 	});
 });
 
+describe("no lazy object retrieval (CT-10, fix round 1, finding 10)", () => {
+	test("a blob missing from a partial clone is an error, never fetched from its promisor remote", () => {
+		const at = (cwd: string, ...args: string[]) => {
+			const child = Bun.spawnSync(["git", ...args], {
+				cwd,
+				env: env(),
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			return {
+				ok: child.exitCode === 0,
+				out: child.stdout.toString().trim(),
+				err: child.stderr.toString(),
+			};
+		};
+		const server = join(root, "server");
+		mkdirSync(join(server, "docs/contracts"), { recursive: true });
+		at(server, "init", "-q", "-b", "main");
+		at(server, "config", "uploadpack.allowFilter", "true");
+		writeFileSync(
+			join(server, "docs/contracts/writing.md"),
+			`${frontMatter("writing")}${coverageLine(0, 0)}`,
+		);
+		at(server, "add", "-A");
+		at(server, "commit", "-q", "-m", "Base");
+		const oldBlob = at(
+			server,
+			"rev-parse",
+			"HEAD:docs/contracts/writing.md",
+		).out;
+		at(server, "checkout", "-q", "-b", "feature");
+		writeFileSync(
+			join(server, "docs/contracts/writing.md"),
+			`${frontMatter("writing")}${coverageLine(1, 0, 0, 0, 1)}`,
+		);
+		at(server, "commit", "-q", "-am", "Change");
+		at(server, "checkout", "-q", "main");
+		const clone = join(root, "clone");
+		const cloned = at(
+			root,
+			"clone",
+			"-q",
+			"--filter=blob:none",
+			"--no-local",
+			"-b",
+			"feature",
+			`file://${server}`,
+			clone,
+		);
+		expect(cloned.err).toBe("");
+		const present = () =>
+			Bun.spawnSync(["git", "cat-file", "-e", oldBlob], {
+				cwd: clone,
+				env: env({ GIT_NO_LAZY_FETCH: "1" }),
+			}).exitCode === 0;
+		expect(present()).toBe(false);
+		const { code, report } = json(["diff"], clone);
+		expect({ code, error: report.error?.code }).toEqual({
+			code: 2,
+			error: "object-missing",
+		});
+		expect(present()).toBe(false);
+	});
+});
+
 /** Every file under the repository, with its content, for a before/after check. */
 function snapshot(dir: string): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -2253,7 +2318,19 @@ function snapshot(dir: string): Record<string, string> {
 }
 
 /** The modes CT-11 runs; later slices add theirs. */
-const MODES: string[][] = [["--help"], ["lint"], ["lint", "--json"]];
+const MODES: string[][] = [
+	["--help"],
+	["lint"],
+	["lint", "--json"],
+	["coverage"],
+	["coverage", "--json"],
+	["coverage", "--line"],
+	["coverage", "--line", "--json"],
+	["map"],
+	["map", "--json"],
+	["diff"],
+	["diff", "--json"],
+];
 
 describe("isolated, read-only extraction (CT-11)", () => {
 	test("cwd bunfig preloads, .env files and git drivers stay inert, from root and nested cwd", () => {
@@ -2288,13 +2365,10 @@ describe("isolated, read-only extraction (CT-11)", () => {
 		const before = snapshot(repo);
 		for (const cwd of [repo, nested])
 			for (const args of MODES) {
-				// An environment error (2) is what a loaded .env would cause.
+				// The fixture is clean, so every mode exits 0; a loaded .env
+				// would make git fail and the mode exit 2.
 				const { code } = run(args, cwd);
-				expect({ args, cwd, ran: code === 0 || code === 1 }).toEqual({
-					args,
-					cwd,
-					ran: true,
-				});
+				expect({ args, cwd, code }).toEqual({ args, cwd, code: 0 });
 			}
 		expect(readdirSync(sentinel)).toEqual([]);
 		expect(snapshot(repo)).toEqual(before);
