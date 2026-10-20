@@ -9,7 +9,8 @@ import {
 	DEFAULT_START,
 	DEFAULT_WINDOWS,
 } from "./config";
-import { type MakeTreeOptions, makeTree } from "./test-support";
+import { moduleCatalog, resolveModules } from "./module-resolution";
+import { type MakeTreeOptions, makeTree, packageText } from "./test-support";
 import { discoverTree } from "./tree";
 
 const TODAY = new Date(2026, 9, 5);
@@ -809,5 +810,37 @@ describe("record rules", () => {
 		).toEqual([
 			"consulting/measurements.md says not landed; STATUS says merged as #23",
 		]);
+	});
+
+	test("the gate is the charter's Modules declaration, not module selection", () => {
+		expect(
+			codes(
+				{
+					[`${item}/STATUS.md`]: done("Merged as #23."),
+					"root/.shepherd/integrations/software.md":
+						"---\nname: software\ntype: domain\ndescription: rules\nbudget: 20\n---\nA namesake.\n",
+				},
+				{ "root/.shepherd/charter.md": "A charter\n" },
+			),
+		).toEqual([]);
+		const { workspace } = fixture({
+			...software,
+			[`${item}/STATUS.md`]: done("Merged as #23."),
+			"packages/software/MODULE.md": packageText(
+				"software",
+				"",
+				"# Software\n",
+				"contract: 999\n",
+			),
+		});
+		const catalog = moduleCatalog(workspace.dir, undefined, true, [
+			{ dir: join(workspace.dir, "..", "packages"), layer: "builtin" },
+		]);
+		expect(
+			resolveModules(catalog).selected.map((module) => module.name),
+		).not.toContain("software");
+		expect(
+			checkWork(workspace, config(), TODAY, catalog).map(({ code }) => code),
+		).toContain("record-note-missing");
 	});
 });

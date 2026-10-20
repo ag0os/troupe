@@ -4,11 +4,7 @@ import type { Finding, FindingLevel } from "./check";
 import { decodedLinkTarget } from "./check-links";
 import type { Config } from "./config";
 import { daysBetween, localDate, monthOf } from "./dates";
-import {
-	type ModuleCatalog,
-	moduleCatalog,
-	resolveModules,
-} from "./module-resolution";
+import { type ModuleCatalog, moduleCatalog } from "./module-resolution";
 import {
 	closedDate,
 	frontmatter,
@@ -22,6 +18,7 @@ import {
 	read,
 } from "./text";
 import type { Workspace } from "./tree";
+import { declaredModules } from "./workspace";
 
 const STATES = ["todo", "in-progress", "done"] as const;
 
@@ -162,19 +159,6 @@ function hasRawLog(dir: string, inLogDir = false): boolean {
 	);
 }
 
-/** The record rules belong to the software method: on when it loads. */
-function loadsSoftware(catalog: ModuleCatalog): boolean {
-	try {
-		return resolveModules(catalog).selected.some(
-			(module) =>
-				module.metadata?.provides === "software" ||
-				module.metadata?.name === "software",
-		);
-	} catch {
-		return false;
-	}
-}
-
 /** Check one workspace's work items, archive index, journal and outbox. */
 export function checkWork(
 	workspace: Workspace,
@@ -200,7 +184,8 @@ export function checkWork(
 		});
 	};
 
-	const records = loadsSoftware(catalog);
+	// The software method's records: on when the charter declares it, loaded or not.
+	const records = declaredModules(catalog.charter).has("software");
 	const checkRecord = (
 		state: (typeof STATES)[number],
 		slug: string,
