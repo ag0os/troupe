@@ -149,7 +149,7 @@ describe("tool check validates packages (O17)", () => {
 		});
 	});
 
-	test("the software package's contract tool warns when bun is missing and is never run (CT-1)", () => {
+	test("the software package's bun tools warn when bun is missing and are never run (CT-1, BH-1)", () => {
 		const { root, base } = setup();
 		cpSync(
 			resolve(import.meta.dir, "../../packages/software"),
@@ -194,6 +194,12 @@ describe("tool check validates packages (O17)", () => {
 				code: "package-requires-missing",
 				file: join(base, "software/MODULE.md"),
 				message: 'tool "contract" requires "bun", which is not on PATH',
+			},
+			{
+				level: "warn",
+				code: "package-requires-missing",
+				file: join(base, "software/MODULE.md"),
+				message: 'tool "builder-hooks" requires "bun", which is not on PATH',
 			},
 		]);
 		expect(existsSync(marker)).toBe(false);

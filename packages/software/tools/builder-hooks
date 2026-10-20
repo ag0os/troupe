@@ -1,0 +1,66 @@
+#!/bin/sh
+# builder-hooks: prepare a builder's hook settings, run as its guard, health
+# and Stop hooks, and re-check its work after the session. The work is in
+# builder-hooks.d/main.ts, run by bun from builder-hooks.d/, a directory this
+# package owns that holds no bunfig.toml or .env, so the caller's
+# configuration, preloads and environment files never load; the caller's
+# directory is recorded in BUILDER_HOOKS_TARGET_CWD. Contract: docs/PACKAGES.md
+# (contract 1) for prepare and recheck; Claude's hook protocol for the hooks.
+#
+# When bun cannot start, the hook modes fail as their protocol needs: the
+# guard refuses (exit 2), health says so as context (exit 0) and stop does
+# not block (exit 1).
+
+mode=$1
+
+fail() {
+	# The diagnostics need sed, head and date even when PATH lost them.
+	PATH=$PATH:/usr/bin:/bin
+	case $mode in
+	guard)
+		printf 'Role guard could not run: %s. The call is refused until the host repairs the hooks.\n' "$1" >&2
+		code=2
+		;;
+	health)
+		# Context, not an exit code: the model sees only context.
+		input=$(cat 2>/dev/null)
+		file=$(printf '%s' "$input" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
+		[ -n "$file" ] || file='the edited file'
+		text=$(printf 'health check could not run on %s: %s' "$file" "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+		printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$text"
+		code=0
+		;;
+	stop)
+		printf 'Stop gate could not run: %s. Not blocking; the host will re-check.\n' "$1" >&2
+		code=1
+		;;
+	*)
+		printf 'builder-hooks: %s\n' "$1" >&2
+		code=2
+		;;
+	esac
+	case $mode in
+	guard | health | stop)
+		log=$SHEPHERD_HOOK_LOG
+		case $log in
+		/*/hooks.log)
+			if [ -f "${log%/hooks.log}/builder-manifest.json" ]; then
+				printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$1" >>"$log" 2>/dev/null
+			fi
+			;;
+		esac
+		;;
+	esac
+	exit "$code"
+}
+
+case $0 in
+*/*) dir=${0%/*} ;;
+*) dir=. ;;
+esac
+dir=$(cd "$dir/builder-hooks.d" 2>/dev/null && pwd -P) || fail "cannot find builder-hooks.d beside $0"
+command -v bun >/dev/null 2>&1 || fail "bun is not on PATH; this tool requires bun and git"
+BUILDER_HOOKS_TARGET_CWD=$PWD
+export BUILDER_HOOKS_TARGET_CWD
+cd "$dir" || fail "cannot enter $dir"
+exec bun --no-install --env-file=/dev/null "$dir/main.ts" "$@"

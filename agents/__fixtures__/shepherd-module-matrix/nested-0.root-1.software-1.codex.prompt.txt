@@ -364,7 +364,7 @@ Coordinate this workspace.
 - Enclosing workspace: <workspace-fixture>/parent (inherited integrations: none)
 - Workspaces beneath: child
 - Gated modules loaded: root, software
-- Package tools: software publish-check (read), software contract (read); run as shepherd tool <package> <tool> [args], --help for usage; read tools need no permission prompt on Claude
+- Package tools: software publish-check (read), software contract (read), software builder-hooks (write); run as shepherd tool <package> <tool> [args], --help for usage; read tools need no permission prompt on Claude
 - Package guides: software build (the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder), software check (steps 6 and 7), software ship (step 8, the grants' journal and a parked task); read with shepherd tool guide <package> <guide>
 - Charter: loaded
 - Workspace-local integrations loaded: local.md
