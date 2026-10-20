@@ -87,9 +87,7 @@ export function contractFiles(top: string): string[] {
 }
 
 export function isDirectory(top: string, rel: string): boolean {
-	return lstatSync(join(top, rel), { throwIfNoEntry: false })?.isDirectory()
-		? true
-		: false;
+	return !!lstatSync(join(top, rel), { throwIfNoEntry: false })?.isDirectory();
 }
 
 export function readText(top: string, rel: string): string | undefined {

@@ -275,6 +275,920 @@ describe("reporting protocol (CT-2)", () => {
 	});
 });
 
+type Meta = { covers?: string[]; depends_on?: string[]; tests?: string[] };
+
+function list(items: string[]): string {
+	return items.length ? `\n${items.map((i) => `  - ${i}`).join("\n")}` : " []";
+}
+
+function frontMatter(component: string, meta: Meta = {}): string {
+	return `---\ncomponent: ${component}\ncovers:${list(meta.covers ?? [])}\ndepends_on:${list(meta.depends_on ?? [])}\ntests:${list(meta.tests ?? [])}\n---\n`;
+}
+
+function coverageLine(n: number, t: number, p = 0, m = 0, u = 0): string {
+	return `Coverage: ${n} obligations; ${t} proved by test, ${p} by PR evidence, ${m} mixed, ${u} unproved. Suite runs against this implementation.\n`;
+}
+
+const WRITING_TEST = "test/contract/writing_contract_test.rb";
+
+function obligation(
+	id: string,
+	parts: {
+		title?: string;
+		statement?: string;
+		reason?: string | null;
+		proof?: string | null;
+	} = {},
+): string {
+	const {
+		title = `the ${id} promise`,
+		statement = `${id} holds.`,
+		reason = "Readers rely on it.",
+		proof = `Kind: functional. Proof: test, ${id} in \`${WRITING_TEST}\`.`,
+	} = parts;
+	return [
+		`### ${id} ${title}`,
+		"",
+		statement,
+		"",
+		...(reason === null ? [] : [`**Reason.** ${reason}`, ""]),
+		...(proof === null ? [] : [proof, ""]),
+	].join("\n");
+}
+
+/** A canonical writing Contract with every file it names. */
+function writing(
+	body = `${obligation("WR-1")}\n${obligation("WR-2")}`,
+	meta: Meta = {},
+	count = (body.match(/^### [A-Z]+-\d+ /gm) ?? []).length,
+) {
+	write("app/writing/post.rb", "# post\n");
+	write(WRITING_TEST, "# test\n");
+	write(
+		"docs/contracts/writing.md",
+		`${frontMatter("writing", { covers: ["app/writing/"], tests: [WRITING_TEST], ...meta })}${coverageLine(count, count)}\n# Contract: writing\n\nHow posts are written.\n\n${body}`,
+	);
+}
+
+/** `file:line code` for the findings on one file. */
+function on(file: string, args: string[] = ["lint"]): string[] {
+	return found(args).filter(
+		(f) => f.startsWith(`${file}:`) || f.startsWith(`${file} `),
+	);
+}
+
+describe("lint reports and statuses (CT-2)", () => {
+	test("a clean canonical Contract is clean, exit 0", () => {
+		writing();
+		const text = run(["lint"]);
+		expect(text).toEqual({
+			code: 0,
+			stdout: "contract lint: clean\n",
+			stderr: "",
+		});
+		const { code, report } = json(["lint"]);
+		expect(code).toBe(0);
+		expect(report).toMatchObject({ status: "clean", findings: [], failing: 0 });
+		expect(report.result).toMatchObject({
+			files: [
+				{
+					file: "docs/contracts/writing.md",
+					format: "canonical",
+					component: "writing",
+					complete: true,
+				},
+			],
+		});
+	});
+
+	test("warnings alone exit 0 with status warnings; an error finding exits 1 with status findings", () => {
+		writing(undefined, { depends_on: ["markdown_renderer"] });
+		expect(json(["lint"])).toMatchObject({
+			code: 0,
+			report: { status: "warnings", failing: 0 },
+		});
+		expect(run(["lint"]).stdout).toBe(
+			"docs/contracts/writing.md:6: dependency-missing: depends on markdown_renderer, which has no Contract file\ncontract lint: 1 findings, 0 failing\n",
+		);
+		writing(`${obligation("WR-1", { reason: null })}\n${obligation("WR-2")}`);
+		const text = run(["lint"]);
+		expect(text.code).toBe(1);
+		expect(text.stderr).toBe("");
+		expect(text.stdout).toContain(
+			"docs/contracts/writing.md:15: reason-missing: WR-1 has no reason\n",
+		);
+		const { code, report } = json(["lint"]);
+		expect(code).toBe(1);
+		expect(report).toMatchObject({ status: "findings", failing: 1 });
+		expect(report.findings.find((f) => f.code === "reason-missing")).toEqual({
+			code: "reason-missing",
+			severity: "error",
+			file: "docs/contracts/writing.md",
+			line: 15,
+			obligationId: "WR-1",
+			message: "WR-1 has no reason",
+		});
+	});
+});
+
+const FIELDS = (rest: string) => `component: writing\n${rest}`;
+const ALL = "covers: []\ndepends_on: []\ntests: []\n";
+
+describe("restricted metadata (CT-3)", () => {
+	const cases: [string, string, string | null][] = [
+		["plain", FIELDS(ALL), null],
+		["double-quoted with escapes", `component: "wri\\u0074ing"\n${ALL}`, null],
+		[
+			"single-quoted with a doubled quote",
+			`component: 'writing'\ncovers: ['it''s/x.rb']\ndepends_on: []\ntests: []\n`,
+			null,
+		],
+		[
+			"comments and blank lines",
+			`# metadata\ncomponent: writing # the slug\n\ncovers: [] # none\ndepends_on: []\ntests: []\n`,
+			null,
+		],
+		[
+			"block and flow lists, quoting protecting delimiters",
+			FIELDS(
+				`covers:\n  - app/writing/\n  - "app/#x, y"\ndepends_on: [renderer_a, "renderer_b"]\ntests: []\n`,
+			),
+			null,
+		],
+		[
+			"a duplicate key",
+			FIELDS(`covers: []\ncovers: []\ndepends_on: []\ntests: []\n`),
+			"frontmatter-yaml",
+		],
+		["an unknown key", FIELDS(`${ALL}owner: me\n`), "frontmatter-fields"],
+		[
+			"a missing key",
+			FIELDS("covers: []\ndepends_on: []\n"),
+			"frontmatter-fields",
+		],
+		[
+			"a string where a list belongs",
+			FIELDS("covers: app/\ndepends_on: []\ntests: []\n"),
+			"frontmatter-fields",
+		],
+		[
+			"a list where the slug belongs",
+			`component: [writing]\n${ALL}`,
+			"frontmatter-fields",
+		],
+		[
+			"an empty value",
+			FIELDS("covers:\ndepends_on: []\ntests: []\n"),
+			"frontmatter-fields",
+		],
+		[
+			"a slug that is not the file name",
+			`component: reading\n${ALL}`,
+			"component-name",
+		],
+		[
+			"a slug outside the grammar",
+			`component: Writing\n${ALL}`,
+			"component-name",
+		],
+		[
+			"an anchor and alias",
+			FIELDS("covers: &a []\ndepends_on: *a\ntests: []\n"),
+			"frontmatter-yaml",
+		],
+		["a merge key", FIELDS(`${ALL}<<: {}\n`), "frontmatter-yaml"],
+		["a tag", `component: !!str writing\n${ALL}`, "frontmatter-yaml"],
+		["a directive", `%YAML 1.2\n${FIELDS(ALL)}`, "frontmatter-yaml"],
+		[
+			"a multiline scalar",
+			`component: >\n  writing\n${ALL}`,
+			"frontmatter-yaml",
+		],
+		[
+			"a nested mapping",
+			FIELDS("covers:\n  app: x\ndepends_on: []\ntests: []\n"),
+			"frontmatter-yaml",
+		],
+		[
+			"a nested list",
+			FIELDS("covers:\n  - - app/\ndepends_on: []\ntests: []\n"),
+			"frontmatter-yaml",
+		],
+		["an extra document", `${FIELDS(ALL)}...\n`, "frontmatter-yaml"],
+	];
+	test.each(cases)("%s", (_name, yaml, code) => {
+		write(WRITING_TEST, "# test\n");
+		write("it's/x.rb", "# x\n");
+		write("app/#x, y", "# x\n");
+		write("app/writing/post.rb", "# post\n");
+		write(
+			"docs/contracts/writing.md",
+			`---\n${yaml}---\n${coverageLine(0, 0)}\n# Contract: writing\n`,
+		);
+		const { report } = json(["lint"]);
+		const codes = report.findings
+			.filter((f) => f.severity === "error")
+			.map((f) => f.code);
+		expect(codes).toEqual(code === null ? [] : [code]);
+		if (code === null)
+			expect(report.result.files).toMatchObject([
+				{ format: "canonical", component: "writing", complete: true },
+			]);
+	});
+
+	test("quoted values and flow lists keep their text", () => {
+		write("app/#x, y", "# x\n");
+		write("it's/x.rb", "# x\n");
+		write(
+			"docs/contracts/writing.md",
+			`---\ncomponent: "wri\\u0074ing"\ncovers: ['it''s/x.rb', "app/#x, y"] # two\ndepends_on: [renderer_a, "renderer_b"]\ntests: []\n---\n${coverageLine(0, 0)}`,
+		);
+		expect(json(["lint"]).report.result.files).toMatchObject([
+			{
+				component: "writing",
+				metadata: {
+					covers: ["it's/x.rb", "app/#x, y"],
+					depends_on: ["renderer_a", "renderer_b"],
+					tests: [],
+				},
+			},
+		]);
+	});
+
+	test("an unterminated front matter block is frontmatter-yaml", () => {
+		write(
+			"docs/contracts/writing.md",
+			`---\n${FIELDS(ALL)}\n# Contract: writing\n`,
+		);
+		expect(on("docs/contracts/writing.md")).toEqual([
+			"docs/contracts/writing.md:1 frontmatter-yaml",
+		]);
+	});
+});
+
+describe("obligation parsing (CT-4)", () => {
+	test("long statements, grouping headings and shuffled IDs parse; examples in code and comments are not obligations", () => {
+		const fence = "```";
+		writing(
+			[
+				"## Safety",
+				"",
+				"### Notes on the examples",
+				"",
+				"Grouping prose.",
+				"",
+				obligation("WR-5", {
+					statement:
+						"The first sentence.\nIt keeps going.\n\nA second paragraph of the same statement.",
+				}),
+				fence,
+				"### WR-9 an example inside a fence",
+				fence,
+				"",
+				"    ### WR-8 an indented example",
+				"",
+				"<!--",
+				"### WR-7 a commented example",
+				"-->",
+				"",
+				obligation("WR-4"),
+			].join("\n"),
+			{},
+			2,
+		);
+		const { code, report } = json(["lint"]);
+		expect(report.findings).toEqual([]);
+		expect(code).toBe(0);
+		const [file] = report.result.files as {
+			obligations: { id: string; statement: string }[];
+		}[];
+		expect(file?.obligations.map((o) => o.id)).toEqual(["WR-5", "WR-4"]);
+		expect(file?.obligations[0]?.statement).toBe(
+			"The first sentence.\nIt keeps going.\n\nA second paragraph of the same statement.",
+		);
+	});
+
+	test("AC-010 and AC-10 collide; a second prefix and a missing reason are findings", () => {
+		writing(
+			[
+				obligation("WR-010"),
+				obligation("WR-10"),
+				obligation("XY-1"),
+				obligation("WR-2", { reason: null }),
+			].join("\n"),
+		);
+		expect(found(["lint"]).filter((f) => !f.includes("coverage-"))).toEqual([
+			"docs/contracts/writing.md:23 obligation-id-duplicate",
+			"docs/contracts/writing.md:31 obligation-prefix",
+			"docs/contracts/writing.md:39 reason-missing",
+		]);
+	});
+
+	test("malformed obligation headings are findings, not grouping headings", () => {
+		writing(
+			[
+				obligation("WR-1"),
+				"### wr-2 lowercase prefix\n\nX.\n",
+				"### WR-0 number zero\n\nX.\n",
+				"### WR-3\n\nNo title.\n",
+				`### WR-4 ${EM} the old separator\n\nX.\n`,
+			].join("\n"),
+		);
+		expect(
+			found(["lint"]).filter((f) => f.endsWith("obligation-heading")),
+		).toHaveLength(4);
+	});
+
+	test("two components sharing a prefix are prefix-shared on both files, an error while both are canonical (ruling 1)", () => {
+		writing();
+		write(
+			"docs/contracts/reading.md",
+			`${frontMatter("reading", { tests: [WRITING_TEST] })}${coverageLine(1, 1)}\n# Contract: reading\n\n${obligation("WR-9")}`,
+		);
+		const { report } = json(["lint"]);
+		expect(
+			report.findings
+				.filter((f) => f.code === "prefix-shared")
+				.map((f) => [f.file, f.severity, f.message]),
+		).toEqual([
+			[
+				"docs/contracts/reading.md",
+				"error",
+				"prefix WR is also used by docs/contracts/writing.md",
+			],
+			[
+				"docs/contracts/writing.md",
+				"error",
+				"prefix WR is also used by docs/contracts/reading.md",
+			],
+		]);
+		write(
+			"docs/contracts/reading.md",
+			`# Contract: reading\n\n**Code it covers.** app/reading/.\n\n### WR-9 ${EM} legacy\n\nX.\n`,
+		);
+		expect(
+			json(["lint"])
+				.report.findings.filter((f) => f.code === "prefix-shared")
+				.map((f) => f.severity),
+		).toEqual(["warning", "warning"]);
+	});
+});
+
+describe("convention examples (CT-5)", () => {
+	const MR_TEST = "test/contract/markdown_renderer_contract_test.rb";
+	const LEDGER = "test/contracts/agency_client_port/ledger.yml";
+
+	function mr5(coverage: string) {
+		write("app/services/markdown_renderer.rb", "#\n");
+		write("app/helpers/markdown_helper.rb", "#\n");
+		write(MR_TEST, "#\n");
+		write("docs/decisions/markdown_renderer.md", "# D-6\n");
+		write(
+			"docs/contracts/markdown_renderer.md",
+			`${frontMatter("markdown_renderer", { covers: ["app/services/markdown_renderer.rb", "app/helpers/markdown_helper.rb"], tests: [MR_TEST] })}${coverage}\n# Contract: the Markdown renderer\n\n## Safety\n\n### MR-5 a link or image with an unsafe URL loses its URL and keeps its text\n\nA link whose URL uses \`javascript:\` loses its URL and keeps its text.\n\n**Reason.** Those schemes can run script. (D-6)\n\nKind: functional. Proof: test, the five tests named MR-5 in \`${MR_TEST}\`.\n\n## Decisions\n\n- D-6, \`docs/decisions/markdown_renderer.md\` (today \`DECISIONS.md\`): raw HTML is omitted, and unsafe URLs are emptied (MR-4, MR-5).\n`,
+		);
+	}
+
+	function ac010(decisions: string) {
+		write(LEDGER, "cases: []\n");
+		write("app/models/agency/client.rb", "#\n");
+		write(
+			"docs/contracts/agency_client_port.md",
+			`${frontMatter("agency_client_port", { covers: ["app/models/agency/"], tests: ["test/contracts/agency_client_port/"] })}Coverage: 1 obligations; 1 proved by test, 0 by PR evidence, 0 unproved. Suite runs against this implementation.\n\n# Contract: agency client port\n\n### AC-010 Vitor safety\n\nRegistered identities make all D11 document fields immutable.\n\n**Reason.** The Vitor push is held. (D11, Proposal 9; INV-009)\n\nKind: functional. Proof: test, the cases whose \`intent\` names AC-010 in \`${LEDGER}\`.\n${decisions}`,
+		);
+	}
+
+	test("the MR-5 example, completed with its files, is clean", () => {
+		mr5(coverageLine(1, 1).replace(" 0 mixed,", ""));
+		const { code, report } = json(["lint"]);
+		expect({ code, findings: report.findings }).toEqual({
+			code: 0,
+			findings: [],
+		});
+		expect(report.result.files).toMatchObject([
+			{
+				component: "markdown_renderer",
+				obligations: [{ id: "MR-5" }],
+				complete: true,
+			},
+		]);
+	});
+
+	test("the AC-010 example needs D11 and INV-009 in its index, never Proposal 9; ledger proof is a path", () => {
+		write("docs/decisions/d11.md", "#\n");
+		write("docs/decisions/inv-009.md", "#\n");
+		ac010("");
+		expect(found(["lint"])).toEqual([
+			"docs/contracts/agency_client_port.md:17 decisions-missing",
+		]);
+		ac010(
+			"\n## Decisions\n\n- D11, `docs/decisions/d11.md`: document fields.\n- INV-009, `docs/decisions/inv-009.md`: the held push.\n",
+		);
+		expect(found(["lint"])).toEqual([]);
+		rmSync(join(repo, LEDGER));
+		expect(found(["lint"])).toContain(
+			"docs/contracts/agency_client_port.md:19 proof-file-missing",
+		);
+	});
+});
+
+function legacy(file: string, text: string) {
+	write(`docs/contracts/${file}.md`, text);
+}
+
+describe("migration recognition (CT-6)", () => {
+	test("a Code it covers paragraph marks a legacy file: its gaps are warnings", () => {
+		legacy(
+			"agency_client_port",
+			"# Contract: agency client port\n\n**Code it covers.** `app/models/agency/` and `config/routes.rb`.\n\n### AC-001 Vitor link\n\nThe link is kept.\n\n*Because* the push is held.\n\nCovered by the contract suite.\n",
+		);
+		const { code, report } = json(["lint"]);
+		expect(code).toBe(0);
+		expect(
+			report.findings.map((f) => `${f.line ?? ""} ${f.code} ${f.severity}`),
+		).toEqual([
+			" coverage-missing warning",
+			"1 legacy-format warning",
+			"5 legacy-proof-unclassified warning",
+		]);
+		expect(report.result.files).toMatchObject([
+			{ format: "legacy-file", complete: false },
+		]);
+	});
+
+	test("the old heading separator alone marks a legacy file", () => {
+		legacy(
+			"admin_vitor",
+			`# Contract: admin Vitor\n\n### AV-1 ${EM} the workspace\n\nIt opens.\n\n**Reason:** admins need it.\n`,
+		);
+		expect(found(["lint"])).toEqual([
+			"docs/contracts/admin_vitor.md coverage-missing",
+			"docs/contracts/admin_vitor.md:1 legacy-format",
+			"docs/contracts/admin_vitor.md:3 legacy-proof-unclassified",
+		]);
+	});
+
+	test("a bold Proof naming a file is unclassified; a named missing file is still an error", () => {
+		write("lib/tasks/rt.rake", "#\n");
+		const text = `# Contract: rake tasks\n\n### RT-001 ${EM} tasks run\n\nThey run.\n\n**Reason.** Ops use them.\n\n**Proof:** \`lib/tasks/rt.rake\` is exercised by hand.\n`;
+		legacy("rake_tasks", text);
+		expect(found(["lint"])).toContain(
+			"docs/contracts/rake_tasks.md:3 legacy-proof-unclassified",
+		);
+		expect(json(["lint"]).code).toBe(0);
+		rmSync(join(repo, "lib/tasks/rt.rake"));
+		expect(found(["lint"])).toContain(
+			"docs/contracts/rake_tasks.md:9 proof-file-missing",
+		);
+		expect(json(["lint"]).code).toBe(1);
+	});
+
+	test("no front matter and no marker is frontmatter-missing, an error", () => {
+		legacy("plain", "# Contract: plain\n\n### PL-1 a promise\n\nIt holds.\n");
+		expect(found(["lint"])).toContain(
+			"docs/contracts/plain.md:1 frontmatter-missing",
+		);
+		expect(found(["lint"]).some((f) => f.endsWith("legacy-format"))).toBe(
+			false,
+		);
+		expect(json(["lint"]).code).toBe(1);
+	});
+
+	test("attempted front matter that is malformed never falls back to legacy", () => {
+		legacy(
+			"broken",
+			"---\ncomponent: [broken\n---\n# Contract: broken\n\n**Code it covers.** `app/`.\n",
+		);
+		const codes = found(["lint"]);
+		expect(codes).toContain("docs/contracts/broken.md:2 frontmatter-yaml");
+		expect(codes.some((f) => f.endsWith("legacy-format"))).toBe(false);
+	});
+});
+
+describe("retirement, static (CT-9)", () => {
+	test("valid tombstones with and without a final period; gaps are fine", () => {
+		writing(
+			[
+				obligation("WR-1"),
+				"### WR-3 an old promise\n\nRetired 2026-10-01, replaced by WR-7.\n",
+				"### WR-4 another\n\nRetired 2026-10-02, no longer wanted\n",
+				obligation("WR-7"),
+			].join("\n"),
+			{},
+			2,
+		);
+		expect(found(["lint"])).toEqual([]);
+		const [file] = json(["lint"]).report.result.files as {
+			obligations: { id: string; retired?: { date: string; reason: string } }[];
+		}[];
+		expect(file?.obligations[1]?.retired).toEqual({
+			date: "2026-10-01",
+			reason: "replaced by WR-7",
+		});
+	});
+
+	test("bad dates, missing reasons, proof on a tombstone and a reused ID are findings", () => {
+		writing(
+			[
+				obligation("WR-1"),
+				"### WR-2 a\n\nRetired 2026-02-30, no such day.\n",
+				"### WR-3 b\n\nRetired 2026-10-01\n",
+				`### WR-4 c\n\nRetired 2026-10-01, gone.\n\nKind: functional. Proof: test, WR-4 in \`${WRITING_TEST}\`.\n`,
+				"### WR-01 d\n\nRetired 2026-10-01, a reused number.\n",
+			].join("\n"),
+			{},
+			1,
+		);
+		expect(found(["lint"])).toEqual([
+			"docs/contracts/writing.md:23 retired-invalid",
+			"docs/contracts/writing.md:27 retired-invalid",
+			"docs/contracts/writing.md:31 retired-invalid",
+			"docs/contracts/writing.md:37 obligation-id-duplicate",
+		]);
+	});
+});
+
+describe("dash handling (CT-12)", () => {
+	test("legacy dash headings and dashes in prose get only their structural findings", () => {
+		legacy(
+			"admin_vitor",
+			`# Contract: admin Vitor${EN}workspace\n\n### AV-1 ${EM} the workspace opens\n\nIt opens ${EM} always ${EN} fast.\n\n**Reason.** Admins${EM}need it.\n`,
+		);
+		writing(
+			`${obligation("WR-1", { statement: `Posts render ${EM} all of them ${EN} quickly.`, reason: `Readers${EN}first.` })}`,
+		);
+		expect(found(["lint"])).toEqual([
+			"docs/contracts/admin_vitor.md coverage-missing",
+			"docs/contracts/admin_vitor.md:1 legacy-format",
+			"docs/contracts/admin_vitor.md:3 legacy-proof-unclassified",
+		]);
+		const [, writingFile] = json(["lint"]).report.result.files as {
+			obligations: { title: string }[];
+		}[];
+		expect(writingFile?.obligations[0]?.title).toBe("the WR-1 promise");
+		const [admin] = json(["lint"]).report.result.files as {
+			obligations: { title: string }[];
+		}[];
+		expect(admin?.obligations[0]?.title).toBe("the workspace opens");
+	});
+});
+
+describe("decisions index and cross-references (CT-13)", () => {
+	const index = (...entries: string[]) =>
+		`\n## Decisions\n\n${entries.join("\n")}\n`;
+	const pointed = (reason: string, decisions = "") =>
+		writing(
+			`${obligation("WR-1", { reason })}\n${obligation("WR-2")}${decisions}`,
+		);
+
+	beforeEach(() => {
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\n- **HP-3** the home page lists posts *Because* readers start there.\n",
+		);
+		write("docs/decisions/writing.md", "# D-6\n");
+		write("DECISIONS.md", "# Decisions\n");
+	});
+
+	/** The writing file's findings, after checking it parsed with its obligations. */
+	const mine = () => {
+		const files = json(["lint"]).report.result.files as {
+			file: string;
+			obligations: unknown[];
+		}[];
+		expect(
+			files.find((f) => f.file === "docs/contracts/writing.md")?.obligations
+				.length,
+		).toBeGreaterThan(0);
+		return on("docs/contracts/writing.md");
+	};
+
+	test("own-prefix and discovered-prefix references are not pointers; statements are not scanned", () => {
+		writing(
+			`${obligation("WR-1", { statement: "It holds (D-9).", reason: "See (WR-3) and (HP-3)." })}\n${obligation("WR-3")}`,
+		);
+		expect(mine()).toEqual([]);
+	});
+
+	test("an empty Decisions section with no pointers is clean (R3)", () => {
+		writing(`${obligation("WR-1")}\n## Decisions\n`);
+		expect(mine()).toEqual([]);
+	});
+
+	test("missing index, malformed entry, unlisted pointer and missing target are separate findings", () => {
+		pointed("Held (D-6).");
+		expect(mine()).toEqual(["docs/contracts/writing.md:19 decisions-missing"]);
+		pointed(
+			"Held (D-6).",
+			index(
+				"- D-6, `docs/decisions/writing.md`: drafts stay hidden.",
+				"- D-7 has no path",
+			),
+		);
+		expect(mine()).toEqual([
+			"docs/contracts/writing.md:34 decision-entry-invalid",
+		]);
+		pointed(
+			"Held (D-6, D-8; ADR-002).",
+			index(
+				"- D-6, `docs/decisions/writing.md`: drafts stay hidden.",
+				"- ADR-002, `DECISIONS.md`: the root record.",
+			),
+		);
+		expect(mine()).toEqual(["docs/contracts/writing.md:19 decision-unlisted"]);
+		pointed("Held (D-6).", index("- D-6, `docs/decisions/missing.md`: gone."));
+		expect(mine()).toEqual([
+			"docs/contracts/writing.md:33 decision-target-missing",
+		]);
+	});
+
+	test("an existing root DECISIONS.md target is clean, with no location warning", () => {
+		pointed(
+			"Held (D6).",
+			index("- D6, `DECISIONS.md` (to move): drafts stay hidden."),
+		);
+		expect(mine()).toEqual([]);
+	});
+
+	test("a lowercase token is prose, not a pointer (ruling 2)", () => {
+		pointed("Held since (v2).");
+		expect(mine()).toEqual([]);
+	});
+});
+
+describe("path validation in lint (CT-15)", () => {
+	const codes = () =>
+		on("docs/contracts/writing.md").map((f) => f.split(" ")[1]);
+
+	test("missing tests, absolute and escaping paths", () => {
+		writing(undefined, {
+			tests: [
+				WRITING_TEST,
+				"test/missing_test.rb",
+				"test/missing_dir/",
+				"/etc/hosts",
+				"../outside/",
+			],
+		});
+		expect(codes()).toEqual([
+			"tests-missing",
+			"tests-missing",
+			"path-invalid",
+			"path-invalid",
+		]);
+		writing(undefined, {
+			covers: ["app/writing/", "/etc/", "app/../../x", "app/nothing/"],
+		});
+		expect(codes()).toEqual([
+			"path-invalid",
+			"path-invalid",
+			"covers-unmatched",
+		]);
+	});
+
+	test("symlinks in tests, literal covers, globbed covers and proofs", () => {
+		write("real/x_test.rb", "#\n");
+		write("app/real.rb", "#\n");
+		mkdirSync(join(repo, "test/linked"), { recursive: true });
+		symlinkSync(
+			join(repo, "real/x_test.rb"),
+			join(repo, "test/linked/x_test.rb"),
+		);
+		symlinkSync(join(repo, "real"), join(repo, "linkdir"));
+		symlinkSync(join(repo, "app/real.rb"), join(repo, "app/link.rb"));
+		writing(
+			`${obligation("WR-1", { proof: "Kind: functional. Proof: test, WR-1 in `test/linked/x_test.rb`." })}`,
+			{
+				tests: [WRITING_TEST, "test/linked/x_test.rb", "linkdir/x_test.rb"],
+				covers: ["app/writing/", "linkdir/", "app/*.rb"],
+			},
+		);
+		expect(codes()).toEqual([
+			"path-symlink",
+			"path-symlink",
+			"path-symlink",
+			"path-symlink",
+			"path-symlink",
+		]);
+	});
+
+	test("a submodule or nested repository is a boundary", () => {
+		write("vendor/lib/x.rb", "#\n");
+		git("init", "-q", "vendor/lib");
+		writing(undefined, {
+			tests: [WRITING_TEST, "vendor/lib/x.rb"],
+			covers: ["app/writing/", "vendor/lib/"],
+		});
+		expect(codes()).toEqual(["path-invalid", "path-invalid"]);
+	});
+
+	test("negation, brace expansion and extglobs are refused; positive globs are allowed", () => {
+		write("app/a.rb", "#\n");
+		write("app/deep/b.rb", "#\n");
+		writing(undefined, {
+			covers: [
+				"app/writing/",
+				'"!app/a.rb"',
+				"app/{a,b}.rb",
+				"app/@(a).rb",
+				"app/**/b.rb",
+				"app/?.rb",
+				"app/[ab].rb",
+			],
+		});
+		expect(codes()).toEqual(["path-invalid", "path-invalid", "path-invalid"]);
+	});
+});
+
+describe("proof syntax (CT-20, lint)", () => {
+	const proofs = (proof: string) => {
+		writing(obligation("WR-1", { proof }), {}, 1);
+		return on("docs/contracts/writing.md").map((f) => f.split(" ")[1]);
+	};
+
+	test("every backtick path is checked; a span without a slash is a name", () => {
+		write("test/a/ledger.yml", "#\n");
+		write("test/b_test.rb", "#\n");
+		const proof =
+			"Kind: functional. Proof: test, the `intent` cases in `test/a/ledger.yml` and `test/b_test.rb`.";
+		expect(proofs(proof)).toEqual([]);
+		rmSync(join(repo, "test/b_test.rb"));
+		expect(proofs(proof)).toEqual(["proof-file-missing"]);
+	});
+
+	test("a separate Test line supplies the reference; Kind and Proof may share or split lines", () => {
+		expect(
+			proofs(
+				`Test: \`${WRITING_TEST}\` ("WR-1 renders").\nKind: functional.\nProof: test.`,
+			),
+		).toEqual([]);
+		expect(
+			proofs(
+				`Kind: functional. Proof: test, \`${WRITING_TEST}\` ("posts render").`,
+			),
+		).toEqual([]);
+		expect(
+			proofs(`Kind: functional. Proof: test, \`${WRITING_TEST}\`.`),
+		).toEqual(["proof-invalid"]);
+	});
+
+	test("both PR evidence forms, none, and the invalid ones", () => {
+		write("docs/records/run.md", "#\n");
+		write("record.md", "#\n");
+		expect(proofs("Kind: functional. Proof: pr-evidence, #57.")).toEqual([]);
+		expect(
+			proofs("Kind: functional. Proof: pr-evidence, `docs/records/run.md`."),
+		).toEqual([]);
+		expect(
+			proofs("Kind: non-functional. Proof: pr-evidence, `./record.md`."),
+		).toEqual([]);
+		expect(proofs("Kind: functional. Proof: none.")).toEqual([]);
+		expect(proofs("Kind: functional. Proof: pr-evidence, the PR.")).toEqual([
+			"proof-invalid",
+		]);
+		expect(proofs("Kind: functional. Proof: pr-evidence, #0.")).toEqual([
+			"proof-invalid",
+		]);
+		expect(proofs("Kind: functional. Proof: tested.")).toEqual([
+			"proof-invalid",
+		]);
+		expect(proofs("Kind: fast. Proof: none.")).toEqual(["kind-invalid"]);
+		expect(proofs("Proof: none.")).toEqual(["kind-invalid"]);
+		expect(proofs("Kind: functional.")).toEqual(["proof-invalid"]);
+	});
+
+	test("mixed proof is two clauses and a warning to split", () => {
+		expect(
+			proofs(
+				`Kind: functional. Proof: test, WR-1 in \`${WRITING_TEST}\`; pr-evidence, #57.`,
+			),
+		).toEqual(["mixed-proof"]);
+	});
+});
+
+describe("explicit selections (CT-16)", () => {
+	beforeEach(() => {
+		write(
+			"docs/contracts/markdown_renderer.md",
+			`${frontMatter("markdown_renderer")}${coverageLine(0, 0)}\n# Contract: renderer\n`,
+		);
+		writing(undefined, { depends_on: ["markdown_renderer"] });
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\n- **HP-1** lists posts.\n",
+		);
+		write("outside-not-really.md", "x\n");
+		writeFileSync(join(root, "outside.md"), "x\n");
+	});
+
+	const files = (args: string[], cwd = repo) =>
+		(json(args, cwd).report.result.files as { file: string }[]).map(
+			(f) => f.file,
+		);
+
+	test("caller-relative selection from a nested directory, deduplicated, with whole-index dependencies", () => {
+		const nested = join(repo, "docs/contracts");
+		expect(
+			files(
+				["lint", "writing.md", "./writing.md", "../contracts/writing.md"],
+				nested,
+			),
+		).toEqual(["docs/contracts/writing.md"]);
+		expect(found(["lint", "writing.md"], nested)).toEqual([]);
+		expect(files(["lint", "PRODUCT.md"])).toEqual(["PRODUCT.md"]);
+		expect(files(["lint"])).toEqual([
+			"PRODUCT.md",
+			"docs/contracts/markdown_renderer.md",
+			"docs/contracts/writing.md",
+		]);
+	});
+
+	test("outside, unrelated, missing and README selections are usage errors", () => {
+		for (const arg of [
+			"../outside.md",
+			"outside-not-really.md",
+			"README.md",
+			"docs/contracts/none.md",
+		]) {
+			const { code, report } = json(["lint", arg]);
+			expect({ arg, code, error: report.error?.code }).toEqual({
+				arg,
+				code: 2,
+				error: "usage",
+			});
+		}
+		write("docs/contracts/README.md", "# How\n");
+		expect(json(["lint", "docs/contracts/README.md"]).code).toBe(2);
+	});
+});
+
+describe("deterministic output (CT-17)", () => {
+	function build(order: "forward" | "reverse") {
+		const steps = [
+			() =>
+				legacy(
+					"admin_vitor",
+					`# Contract: admin\n\n### AV-1 ${EM} opens\n\nIt opens.\n`,
+				),
+			() =>
+				writing(obligation("WR-1", { reason: null }), {
+					depends_on: ["zeta", "alpha"],
+				}),
+			() =>
+				write(
+					"docs/contracts/zed.md",
+					`${frontMatter("zed")}${coverageLine(1, 0, 0, 0, 1)}\n### ZD-1 z\n\nZ.\n\n**Reason.** Z.\n\nKind: functional. Proof: none.\n`,
+				),
+		];
+		for (const step of order === "forward" ? steps : steps.reverse()) step();
+	}
+
+	test("creation order and argument order do not change text or JSON", () => {
+		build("forward");
+		const args = [
+			"docs/contracts/zed.md",
+			"docs/contracts/admin_vitor.md",
+			"docs/contracts/writing.md",
+		];
+		const first = run(["lint", ...args]);
+		const firstJson = run(["lint", "--json", ...args]);
+		const reversed = run(["lint", ...args.reverse()]);
+		expect(reversed.stdout).toBe(first.stdout);
+		const saved = repo;
+		repo = join(root, "repo2");
+		mkdirSync(repo);
+		git("init", "-q", "-b", "main");
+		build("reverse");
+		const second = run(["lint", ...args]);
+		const secondJson = run(["lint", "--json", ...args]);
+		repo = saved;
+		expect(second.stdout).toBe(first.stdout);
+		expect(JSON.parse(secondJson.stdout)).toEqual(JSON.parse(firstJson.stdout));
+		expect(first.stdout.split("\n").length).toBeGreaterThan(4);
+	});
+});
+
+describe("PRODUCT limits and pointers (CT-18)", () => {
+	test("bullet sections give IDs only; a pointer section gives nothing; no per-bullet reason findings", () => {
+		writing();
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\nEvery obligation below has a test of the same number.\n\n- **HP-1** the home page lists posts *Because* readers start there.\n- **HP-2** it has a title.\n\n## Contract: writing\n\nMoved to `docs/contracts/writing.md` (WR-1 to WR-2).\n\n## Not a contract\n\n- **NC-1** ignored.\n",
+		);
+		expect(found(["lint"])).toEqual(["PRODUCT.md:3 legacy-format"]);
+		const files = json(["lint"]).report.result.files as Record<
+			string,
+			unknown
+		>[];
+		expect(files.find((f) => f.file === "PRODUCT.md")).toEqual({
+			file: "PRODUCT.md",
+			format: "product",
+			sections: [{ name: "home page", line: 3, ids: ["HP-1", "HP-2"] }],
+			complete: false,
+		});
+	});
+});
+
 /** Every file under the repository, with its content, for a before/after check. */
 function snapshot(dir: string): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -316,6 +1230,7 @@ describe("isolated, read-only extraction (CT-11)", () => {
 		writeFileSync(driver, `#!/bin/sh\ntouch "${sentinel}/driver"\n`, {
 			mode: 0o755,
 		});
+		writing();
 		commit("Sentinels");
 		// Set after the fixture's own commits, which would run them.
 		for (const [key, value] of [
