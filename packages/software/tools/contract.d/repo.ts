@@ -2,7 +2,7 @@
 // argument array run in the repository with drivers, pagers, optional locks
 // and lazy fetches off, so neither the caller's configuration nor the target's
 // can run anything or write anything.
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export class ToolError extends Error {
@@ -62,20 +62,62 @@ export const CONTRACTS_DIR = "docs/contracts";
 export const PRODUCT = "PRODUCT.md";
 export const README = "docs/contracts/README.md";
 
-/** Every Markdown file beneath docs/contracts/, README excluded, sorted. */
-export function contractFiles(top: string): string[] {
+function unreadable(rel: string, error: unknown): ToolError {
+	const code = (error as { code?: string }).code ?? String(error);
+	return new ToolError("unreadable", `cannot read ${rel}: ${code}`);
+}
+
+/**
+ * Why `rel` may not be read: a symlink or a nested repository on the way
+ * from the repository root, or null when every component is safe.
+ */
+export function boundary(
+	top: string,
+	rel: string,
+): { code: "path-symlink" | "path-invalid"; message: string } | null {
+	let current = top;
+	let walked = "";
+	for (const segment of rel.split("/")) {
+		current = join(current, segment);
+		walked = walked ? `${walked}/${segment}` : segment;
+		const stat = lstatSync(current, { throwIfNoEntry: false });
+		if (!stat) return null;
+		if (stat.isSymbolicLink())
+			return {
+				code: "path-symlink",
+				message: `${walked} is a symlink; ${rel} is not read through it`,
+			};
+		if (stat.isDirectory() && existsSync(join(current, ".git")))
+			return {
+				code: "path-invalid",
+				message: `${walked} is a nested repository; ${rel} is not read inside it`,
+			};
+	}
+	return null;
+}
+
+/**
+ * Every Markdown file beneath docs/contracts/, README excluded, sorted. A
+ * nested repository inside is reported through `refuse` and not entered.
+ */
+export function contractFiles(
+	top: string,
+	refuse: (path: string, message: string) => void,
+): string[] {
 	const out: string[] = [];
 	const walk = (rel: string) => {
 		let names: string[];
 		try {
 			names = readdirSync(join(top, rel));
-		} catch {
-			return;
+		} catch (error) {
+			throw unreadable(rel, error);
 		}
 		for (const name of names) {
 			const path = `${rel}/${name}`;
 			const stat = lstatSync(join(top, path));
-			if (stat.isDirectory()) walk(path);
+			if (stat.isDirectory() && existsSync(join(top, path, ".git")))
+				refuse(path, `${path} is a nested repository and is not read`);
+			else if (stat.isDirectory()) walk(path);
 			else if (name.endsWith(".md") && path !== README) out.push(path);
 		}
 	};
@@ -90,5 +132,9 @@ export function isDirectory(top: string, rel: string): boolean {
 export function readText(top: string, rel: string): string | undefined {
 	const stat = lstatSync(join(top, rel), { throwIfNoEntry: false });
 	if (!stat?.isFile()) return undefined;
-	return readFileSync(join(top, rel), "utf8");
+	try {
+		return readFileSync(join(top, rel), "utf8");
+	} catch (error) {
+		throw unreadable(rel, error);
+	}
 }

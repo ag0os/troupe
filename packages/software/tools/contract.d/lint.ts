@@ -12,6 +12,7 @@ import {
 	pointers,
 } from "./parse";
 import {
+	boundary,
 	CONTRACTS_DIR,
 	contractFiles,
 	git,
@@ -767,14 +768,31 @@ function select(
 }
 
 export function analyze(top: string, cwd: string, args: string[]): Analysis {
-	const files = contractFiles(top);
-	const productText = readText(top, PRODUCT);
+	const all: Finding[] = [];
+	const contractsBoundary = boundary(top, CONTRACTS_DIR);
+	const productBoundary = boundary(top, PRODUCT);
+	if (contractsBoundary)
+		all.push(
+			finding(CONTRACTS_DIR, contractsBoundary.code, contractsBoundary.message),
+		);
+	if (productBoundary)
+		all.push(finding(PRODUCT, productBoundary.code, productBoundary.message));
+	const files = contractsBoundary
+		? []
+		: contractFiles(top, (path, message) =>
+				all.push(finding(path, "path-invalid", message)),
+			);
+	const productText = productBoundary ? undefined : readText(top, PRODUCT);
 	const sections = productText === undefined ? [] : parseProduct(productText);
 	const index = new Set(files);
 	if (productText !== undefined) index.add(PRODUCT);
 	const selected = args.length ? select(top, cwd, args, index) : new Set(index);
-	const all: Finding[] = [];
-	if (!isDirectory(top, CONTRACTS_DIR) && sections.length === 0)
+	if (
+		!contractsBoundary &&
+		!productBoundary &&
+		!isDirectory(top, CONTRACTS_DIR) &&
+		sections.length === 0
+	)
 		all.push(
 			finding(
 				CONTRACTS_DIR,
@@ -839,9 +857,8 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 	const conflicts = directoryConflicts(reports);
 	for (const c of conflicts) all.push(...c.findings);
 
-	const findings = all.filter(
-		(f) => selected.has(f.file) || (f.file === CONTRACTS_DIR && !args.length),
-	);
+	// With no selection every finding is in scope, the boundary ones included.
+	const findings = args.length ? all.filter((f) => selected.has(f.file)) : all;
 	const resultFiles = [
 		...(productText !== undefined && selected.has(PRODUCT)
 			? [

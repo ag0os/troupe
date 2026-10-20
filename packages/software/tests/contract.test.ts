@@ -10,6 +10,7 @@ import {
 	test,
 } from "bun:test";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	lstatSync,
@@ -18,6 +19,7 @@ import {
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -1997,6 +1999,88 @@ describe("amendment boundaries in diff (CT-20)", () => {
 			before: { file: "docs/contracts/writing.md", line: 15 },
 			after: { file: "docs/contracts/writing.md", line: 15 },
 		});
+	});
+});
+
+describe("discovery boundary and unreadable inputs (fix round 1, findings 1 and 2)", () => {
+	const codes = () => {
+		const { code, report } = json(["lint"]);
+		return {
+			code,
+			findings: report.findings.map((f) => `${f.file} ${f.code}`),
+			files: report.result.files,
+		};
+	};
+
+	test("a symlinked docs directory is path-symlink, exit 1, and nothing behind it is read", () => {
+		writing();
+		renameSync(join(repo, "docs"), join(root, "outside-docs"));
+		symlinkSync(join(root, "outside-docs"), join(repo, "docs"));
+		expect(codes()).toEqual({
+			code: 1,
+			findings: ["docs/contracts path-symlink"],
+			files: [],
+		});
+		expect(json(["lint", "docs/contracts/writing.md"]).code).toBe(2);
+	});
+
+	test("a nested repository at docs is path-invalid, exit 1", () => {
+		writing();
+		git("init", "-q", "docs");
+		expect(codes()).toEqual({
+			code: 1,
+			findings: ["docs/contracts path-invalid"],
+			files: [],
+		});
+	});
+
+	test("a nested repository inside docs/contracts is path-invalid and not entered", () => {
+		writing();
+		write("docs/contracts/vendor/inner.md", "# Inner\n");
+		git("init", "-q", "docs/contracts/vendor");
+		expect(codes().findings).toEqual(["docs/contracts/vendor path-invalid"]);
+	});
+
+	test("a symlinked PRODUCT.md is path-symlink and is not read", () => {
+		writeFileSync(
+			join(root, "PRODUCT.md"),
+			"# Product\n\n## Contract: home page\n\n- **HP-1** lists posts.\n",
+		);
+		symlinkSync(join(root, "PRODUCT.md"), join(repo, "PRODUCT.md"));
+		expect(codes()).toEqual({
+			code: 1,
+			findings: ["PRODUCT.md path-symlink"],
+			files: [],
+		});
+	});
+
+	test("an unreadable docs/contracts or Contract file is an environment error, exit 2, in text and JSON", () => {
+		writing();
+		const dir = join(repo, "docs/contracts");
+		const file = join(dir, "writing.md");
+		try {
+			for (const target of [dir, file]) {
+				chmodSync(target, 0o000);
+				const text = run(["lint"]);
+				expect({ code: text.code, stdout: text.stdout }).toEqual({
+					code: 2,
+					stdout: "",
+				});
+				expect(text.stderr).toMatch(
+					/^contract: cannot read docs\/contracts[^\n]*\n$/,
+				);
+				const { code, report } = json(["coverage"]);
+				expect(code).toBe(2);
+				expect(report).toMatchObject({
+					status: "error",
+					error: { code: "unreadable" },
+				});
+				chmodSync(target, target === dir ? 0o755 : 0o644);
+			}
+		} finally {
+			chmodSync(dir, 0o755);
+			chmodSync(file, 0o644);
+		}
 	});
 });
 
