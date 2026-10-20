@@ -120,28 +120,21 @@ export async function stop(
 	};
 
 	let e: Evaluation;
-	let scopeEmpty: boolean;
+	let caught = false;
+	const reserved = reservedStop(event.message);
 	const deadline = Date.now() + budgetMs;
 	try {
-		if (reservedStop(event.message)) {
-			// The scope still decides: an empty scope needs no exemption.
-			e = await evaluate(m, {
-				deadline,
-				budget: "120 s",
-				all: false,
-				exhale: false,
-				scopeOnly: true,
-			});
-			return pass(e.scope.length ? "reserved-stop" : "empty-scope", e);
-		}
+		// A reserved stop still needs the scope: an empty one needs no
+		// exemption.
 		e = await evaluate(m, {
 			deadline,
 			budget: "120 s",
 			all: false,
 			exhale: false,
+			scopeOnly: reserved,
 		});
-		scopeEmpty = e.scope.length === 0;
 	} catch (error) {
+		caught = true;
 		e = {
 			scope: [],
 			excluded: [],
@@ -155,9 +148,19 @@ export async function stop(
 				why: (error as Error).message,
 			},
 		};
-		scopeEmpty = false;
 	}
-	if (scopeEmpty) return pass("empty-scope", e);
+	// No PASS after the budget, whatever the scope.
+	const late = Date.now() >= deadline;
+	if (late && !e.failure)
+		e.failure = {
+			check: "scope",
+			status: "could-not-run",
+			files: [],
+			lines: [],
+			why: "the evaluation budget was spent before the gate could pass",
+		};
+	if (!caught && !late && !e.scope.length) return pass("empty-scope", e);
+	if (!caught && !late && reserved) return pass("reserved-stop", e);
 	try {
 		for (const c of e.checks.filter((c) => c.status === "skipped"))
 			logLine(

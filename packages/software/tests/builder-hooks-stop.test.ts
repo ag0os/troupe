@@ -333,7 +333,6 @@ describe("BH-14: bounded state", () => {
 	test("a malformed counter reads as zero and is overwritten", () => {
 		writeFileSync(counter(), "garbage");
 		expect(stopHook().stderr).toContain("(attempt 1 of 3)");
-		expect(readFileSync(counter(), "utf8")).toBe("1\n");
 	});
 
 	test("a counter that cannot be written does not block and never logs PASS", () => {
@@ -358,6 +357,7 @@ describe("BH-14: bounded state", () => {
 		expect(r.stderr).toStartWith(
 			"Stop gate could not keep its bound: the log cannot be written",
 		);
+		expect(readFileSync(counter(), "utf8")).toBe("1\n");
 	});
 
 	test("an unsafe session id is refused before any path is made", () => {
@@ -515,6 +515,36 @@ describe("BH-15: Stop messages and deadline", () => {
 			" stop launcher - 0 COULD-NOT-RUN bun is not on PATH",
 		);
 		expect(existsSync(counter())).toBe(false);
+	});
+
+	test("no PASS is written after the budget, whatever the scope", () => {
+		prepare();
+		const real = Bun.which("git") as string;
+		writeFileSync(
+			join(f.bin, "git"),
+			`#!/bin/sh\nsleep 0.15\nexec '${real}' "$@"\n`,
+			{ mode: 0o755 },
+		);
+		const slow = { BUILDER_HOOKS_TEST_BUDGET_MS: "50" };
+		const empty = stopHook({}, slow);
+		expect(empty.code).toBe(2);
+		expect(empty.stderr).toContain(
+			"could not run on the changed scope (attempt 1 of 3)",
+		);
+		f.write("app/other.rb", "changed\n");
+		const reserved = stopHook(
+			{
+				session_id: "s2",
+				last_assistant_message: "Reserved decision stop: D1. Needs a ruling.",
+			},
+			slow,
+		);
+		expect(reserved.code).toBe(2);
+		expect(reserved.stderr).toContain(
+			"could not run on the changed scope (attempt 1 of 3)",
+		);
+		rmSync(join(f.bin, "git"));
+		expect(f.logLines().filter((l) => l.includes(" PASS "))).toEqual([]);
 	});
 
 	test("production budgets are fixed in the tool, not the manifest or settings", () => {
