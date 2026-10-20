@@ -293,3 +293,70 @@ base with `--base` (default `origin/HEAD`, then `main`), read from committed tre
 PRODUCT sections are read by name and obligation ID only. It needs `bun` and `git`: a launcher runs its TypeScript from
 `tools/contract.d/` with `--no-install --env-file=/dev/null`, so the target's `bunfig.toml`, preloads and `.env` never
 load. Exit 0 clean or warnings only, 1 error findings (`diff` never), 2 usage or environment error.
+
+The third, `builder-hooks`, is a write tool: it prepares a Claude Code builder's hook settings, runs as the three
+hooks those settings call, and re-checks the builder's work after the session.
+
+```
+shepherd tool software builder-hooks prepare --input <file> --run-dir <directory> [--json]
+shepherd tool software builder-hooks recheck --manifest <file> [--json]
+shepherd tool software builder-hooks guard | health | stop
+```
+
+`prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `excluded`,
+`gates`, `contract_tests`, `health`; any other field is refused, budgets included), resolves the repository through
+its real path and the base to a commit once, and writes `builder-manifest.json`, then `builder-hooks.settings.json`,
+private, into a new or empty run directory that is outside the repository, its git directory and any harness
+configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, commands and
+warnings, for the brief to copy rather than restate. `gates.test` and `gates.lint` are argv templates with one
+`{files}` element and the globs they select (`gates.test.system` names system tests, which the hooks never run);
+`health.stacks` maps file extensions to a rubocop-JSON checker with one `{file}` element and the committed todo
+`floor` that adopts it (null: not adopted); `health.recheck` holds exhale's argv templates, with `{base}` and
+`{cache}`. Templates take no shell, no wrapper, no shell syntax and nothing that repairs, formats or installs; a path
+starting with a dash is passed as `./<path>`. `contract_tests` is the discovery sentinel or a list of fallback test
+paths, each present at the base.
+
+The settings add a PreToolUse `guard` (`Edit|Write|MultiEdit|NotebookEdit|Bash`, 2 s, `onFailure: block`), a
+PostToolUse `health` (`Edit|Write|MultiEdit`, 3 s) and a `stop` (125 s) to the session's own hooks, and set
+`disableAllHooks: false`; each command names the manifest, the log and the launcher by absolute path, so no
+`shepherd` is needed on PATH. They fire for subagent tool calls too. The hooks speak Claude's hook protocol:
+
+- `guard` denies a git history write in a Bash command (commit, push, merge, rebase, tag, reset, cherry-pick, stash
+  drop, branch `-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, am, clean) unless `history_writes` is true,
+  and an edit under an `excluded` path or under the run directory itself, which is a fixed rule. It reads the command
+  lexically: separators, quotes, assignments, the wrappers `env`, `command`, `exec`, `builtin`, `time`, `nohup`,
+  `nice`, `sudo` and `xargs`, substitutions, git's global options; heredoc bodies, aliases, scripts and `sh -c`
+  strings are not read. Paths compare lexically and through symlinks, case folded. Whatever it cannot check or read
+  (manifest, event, syntax, its 200 ms deadline, its log) refuses the call with exit 2.
+- `health` runs the stack's checker on the edited file within 2 s: silent when clean, unadopted or without a stack,
+  `additionalContext` for a finding or for any reason it could not run, always exit 0.
+- `stop` runs, against the base and including untracked files: changed ordinary tests, lint, the Contract tests the
+  scope selects (base and worktree `covers`, plus fallbacks), adopted floors, under one 120 s budget, stopping at the
+  first failure. A failure or a check that could not run blocks (exit 2) at most three times between passes,
+  counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
+  the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
+  `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
+  A counter or log it cannot write ends the gate without blocking.
+
+`recheck` runs the same evaluator with no counter and no exemption, every phase, plus exhale, and fails when a checker
+changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed).
+Every hook appends one line per outcome to the run's `hooks.log`:
+`HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
+Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run or a changed system
+test.
+
+The builder runbook, for a Shepherd starting a Claude Code builder with these hooks:
+
+1. Prepare through the installed binary, into the item's `runs/<run>/` directory; do not reinstall Troupe while the
+   builder runs, since the settings name the installed package by path.
+2. Copy the resolved base and exclusions from `prepare --json` into the brief; the brief also states whether history
+   writes are authorized, the attribution lines, that a reserved stop opens the final message's first line with
+   `Reserved decision stop: <decision>. <why the ruling is needed>`, and that a third Stop block means ending with a
+   report that says "still failing after 3 attempts" and what remains.
+3. Launch with `--settings <path>`; a one-shot builder runs `claude -p` with a finite `--max-turns`. An interactive
+   builder has the counter and Claude's own cap of consecutive blocks, which this tool does not rely on.
+4. After the first guarded tool call, confirm an `ALLOW` or `DENY` line in `hooks.log`. None means the run is
+   unguarded: stop it and repair the launch.
+5. Always run `recheck` when the session ends, however it ended: a run cut by `--max-turns` ends with no Stop event.
+   Record its findings as "post-run re-check" and the gate's as "stop gate", then run step 6's full gates; a
+   successful Claude result is not acceptance, and changed system tests run there.
