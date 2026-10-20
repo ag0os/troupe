@@ -19,6 +19,10 @@ tools:
     description: Scan a branch's file names, added lines, commit messages and PR body for personal values, dashes and attribution lines
     access: read
     requires: [git]
+  contract:
+    description: Lint Contracts, count proof coverage, map components and report PR changes
+    access: read
+    requires: [bun, git]
 guides:
   build:
     description: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder

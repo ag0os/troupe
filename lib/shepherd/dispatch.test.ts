@@ -393,6 +393,56 @@ describe("extractable (O1, acceptance 6)", () => {
 		expect(child.stdout.toString()).toContain("usage: publish-check");
 	});
 
+	test("the contract tool gets its arguments unchanged and inspects the caller's directory (CT-1)", () => {
+		const outside = scratch();
+		const location = join(outside, "location");
+		cpSync(join(repo, "packages/software"), join(location, "software"), {
+			recursive: true,
+		});
+		write(join(outside, "ws/.shepherd/charter.md"), "Modules: software\n");
+		const target = join(outside, "ws/target");
+		mkdirSync(join(target, "nested"), { recursive: true });
+		const init = Bun.spawnSync(["git", "init", "-q", target]);
+		expect(init.exitCode).toBe(0);
+		const locations = (): PackageLocation[] => [
+			{ dir: location, layer: "builtin" },
+		];
+		const args = ["lint", "--json", "a file.md", "-h", "--base"];
+		const described = dispatch(
+			["tool", "software", "contract", ...args],
+			join(target, "nested"),
+			locations,
+		);
+		expect(described).toMatchObject({
+			exec: {
+				file: join(location, "software/tools/contract"),
+				args,
+				cwd: join(target, "nested"),
+			},
+		});
+		const result = dispatch(
+			["tool", "software", "contract", "lint", "--json"],
+			join(target, "nested"),
+			locations,
+		);
+		if (!result || !("exec" in result))
+			throw new Error("expected an exec description");
+		const child = Bun.spawnSync([result.exec.file, ...result.exec.args], {
+			cwd: result.exec.cwd,
+			env: { ...process.env, ...result.exec.env },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(child.stderr.toString()).toBe("");
+		expect(child.exitCode).toBe(0);
+		expect(JSON.parse(child.stdout.toString())).toMatchObject({
+			contract: 1,
+			tool: "contract",
+			command: "lint",
+			findings: [{ code: "contracts-absent", file: "docs/contracts" }],
+		});
+	});
+
 	test("no file under packages/ imports from Troupe's lib/", () => {
 		const files = (dir: string): string[] =>
 			readdirSync(dir).flatMap((name) => {
