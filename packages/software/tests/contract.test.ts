@@ -918,7 +918,10 @@ describe("decisions index and cross-references (CT-13)", () => {
 
 describe("path validation in lint (CT-15)", () => {
 	const codes = () =>
-		on("docs/contracts/writing.md").map((f) => f.split(" ")[1]);
+		on("docs/contracts/writing.md")
+			.map((f) => f.split(" ")[1])
+			// The counts move with the proofs; drift is CT-14's.
+			.filter((c) => c !== "coverage-drift");
 
 	test("missing tests, absolute and escaping paths", () => {
 		writing(undefined, {
@@ -1003,7 +1006,12 @@ describe("path validation in lint (CT-15)", () => {
 describe("proof syntax (CT-20, lint)", () => {
 	const proofs = (proof: string) => {
 		writing(obligation("WR-1", { proof }), {}, 1);
-		return on("docs/contracts/writing.md").map((f) => f.split(" ")[1]);
+		return (
+			on("docs/contracts/writing.md")
+				.map((f) => f.split(" ")[1])
+				// The counts move with the proofs; drift is CT-14's.
+				.filter((c) => c !== "coverage-drift")
+		);
 	};
 
 	test("every backtick path is checked; a span without a slash is a name", () => {
@@ -1186,6 +1194,288 @@ describe("PRODUCT limits and pointers (CT-18)", () => {
 			sections: [{ name: "home page", line: 3, ids: ["HP-1", "HP-2"] }],
 			complete: false,
 		});
+	});
+});
+
+type Component = {
+	file: string;
+	component: string;
+	format: string;
+	claimed: Record<string, unknown> | null;
+	computed: Record<string, number>;
+	complete: boolean;
+	computedLine: string | null;
+};
+
+const components = (args: string[] = ["coverage"]) =>
+	json(args).report.result.components as Component[];
+
+describe("coverage arithmetic (CT-7)", () => {
+	const EVIDENCE = "test/contract/evidence_test.rb";
+	function mixedFixture(line: string) {
+		write(EVIDENCE, "#\n");
+		writing(
+			[
+				obligation("WR-1"),
+				obligation("WR-2", {
+					proof: "Kind: functional. Proof: pr-evidence, #57.",
+				}),
+				obligation("WR-3", {
+					proof: `Kind: functional. Proof: test, WR-3 in \`${EVIDENCE}\`; pr-evidence, #58.`,
+				}),
+				obligation("WR-4", { proof: "Kind: non-functional. Proof: none." }),
+				"### WR-5 gone\n\nRetired 2026-10-01, folded into WR-1.\n",
+			].join("\n"),
+		);
+		const file = join(repo, "docs/contracts/writing.md");
+		write(
+			"docs/contracts/writing.md",
+			readFileSync(file, "utf8").replace(/^Coverage: .*\n/m, line),
+		);
+	}
+
+	test("test, evidence, mixed and none are disjoint; retired is apart; mixed counts once", () => {
+		mixedFixture(coverageLine(4, 1, 1, 1, 1));
+		const { code, report } = json(["coverage"]);
+		expect(code).toBe(0);
+		expect(report.findings.map((f) => f.code)).toEqual(["mixed-proof"]);
+		expect(report.result.components).toEqual([
+			{
+				file: "docs/contracts/writing.md",
+				component: "writing",
+				format: "canonical",
+				claimed: {
+					obligations: 4,
+					test: 1,
+					prEvidence: 1,
+					mixed: 1,
+					unproved: 1,
+					target: "this implementation",
+				},
+				computed: {
+					obligations: 4,
+					test: 1,
+					prEvidence: 1,
+					mixed: 1,
+					unproved: 1,
+					retired: 1,
+					unclassified: 0,
+				},
+				complete: true,
+				computedLine: coverageLine(4, 1, 1, 1, 1).trim(),
+			},
+		]);
+		expect(report.result.complete).toBe(true);
+	});
+
+	test("a mixed proof missing its test file counts unproved and keeps both clauses", () => {
+		mixedFixture(coverageLine(4, 1, 1, 1, 1));
+		rmSync(join(repo, EVIDENCE));
+		const { code, report } = json(["coverage"]);
+		expect(code).toBe(1);
+		expect(report.findings.map((f) => f.code)).toEqual([
+			"coverage-drift",
+			"mixed-proof",
+			"proof-file-missing",
+		]);
+		expect(components()[0]?.computed).toMatchObject({ mixed: 0, unproved: 2 });
+		const [file] = json(["lint"]).report.result.files as {
+			obligations: {
+				id: string;
+				category: string;
+				proof: { clauses: { type: string }[] };
+			}[];
+		}[];
+		const wr3 = file?.obligations.find((o) => o.id === "WR-3");
+		expect(wr3?.category).toBe("unproved");
+		expect(wr3?.proof.clauses.map((c) => c.type)).toEqual([
+			"test",
+			"pr-evidence",
+		]);
+	});
+
+	test("legacy proof is unclassified and PRODUCT proof is unknown, never complete", () => {
+		legacy(
+			"admin_vitor",
+			`# Contract: admin\n\nCoverage: 1 obligations; 1 proved by test, 0 by PR evidence, 0 unproved. Suite runs against this implementation.\n\n### AV-1 ${EM} opens\n\nIt opens.\n\n**Reason.** Admins.\n`,
+		);
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\nEvery obligation below has a test of the same number.\n\n- **HP-1** lists posts.\n- **HP-2** has a title.\n",
+		);
+		const { code, report } = json(["coverage"]);
+		expect(code).toBe(0);
+		expect(report.findings.map((f) => `${f.file} ${f.code}`)).toContain(
+			"docs/contracts/admin_vitor.md coverage-incomplete",
+		);
+		expect(report.result.components).toMatchObject([
+			{
+				file: "PRODUCT.md",
+				component: "home page",
+				format: "product",
+				computed: { obligations: 2, unclassified: 2 },
+				complete: false,
+				computedLine: null,
+			},
+			{
+				file: "docs/contracts/admin_vitor.md",
+				format: "legacy-file",
+				computed: { obligations: 1, unclassified: 1 },
+				complete: false,
+				computedLine: null,
+			},
+		]);
+		expect(report.result.complete).toBe(false);
+	});
+});
+
+describe("coverage syntax and placement (CT-14)", () => {
+	const codes = () =>
+		on("docs/contracts/writing.md", ["coverage"]).map((f) => f.split(" ")[1]);
+	const setLine = (line: string) => {
+		writing();
+		const file = join(repo, "docs/contracts/writing.md");
+		write(
+			"docs/contracts/writing.md",
+			readFileSync(file, "utf8").replace(/^Coverage: .*\n/m, line),
+		);
+	};
+
+	test("missing, malformed, misplaced and drifting lines", () => {
+		setLine("");
+		expect(codes()).toEqual(["coverage-missing"]);
+		setLine("Coverage: two obligations, all proved.\n");
+		expect(codes()).toEqual(["coverage-format"]);
+		writing();
+		const file = join(repo, "docs/contracts/writing.md");
+		const text = readFileSync(file, "utf8");
+		const line = coverageLine(2, 2);
+		write(
+			"docs/contracts/writing.md",
+			text
+				.replace(line, "")
+				.replace(
+					"How posts are written.\n",
+					`How posts are written.\n\n${line}`,
+				),
+		);
+		expect(codes()).toEqual(["coverage-position"]);
+		setLine(coverageLine(3, 2));
+		expect(codes()).toEqual(["coverage-drift"]);
+		expect(json(["coverage"]).report.findings[0]?.message).toBe(
+			"the coverage line claims 3 obligations, 2 by test, 0 by PR evidence, 0 mixed, 0 unproved; computed 2, 2, 0, 0, 0",
+		);
+	});
+
+	test("both suite targets and an omitted zero mixed are accepted; the computed line always prints mixed", () => {
+		setLine(
+			coverageLine(2, 2)
+				.replace(" 0 mixed,", "")
+				.replace(
+					"this implementation",
+					"any implementation behind `HTTP on CONTRACT_SERVER_CMD`",
+				),
+		);
+		expect(codes()).toEqual([]);
+		expect(components()[0]?.computedLine).toBe(
+			"Coverage: 2 obligations; 2 proved by test, 0 by PR evidence, 0 mixed, 0 unproved. Suite runs against any implementation behind `HTTP on CONTRACT_SERVER_CMD`.",
+		);
+		setLine(
+			coverageLine(2, 2).replace(
+				"this implementation",
+				"any implementation behind ",
+			),
+		);
+		expect(codes()).toEqual(["coverage-format"]);
+	});
+
+	test("text output lists each component before the summary", () => {
+		writing();
+		expect(run(["coverage"]).stdout).toBe(
+			"writing (docs/contracts/writing.md): 2 obligations; 2 test, 0 PR evidence, 0 mixed, 0 unproved, 0 retired, 0 unclassified; complete\ncontract coverage: clean\n",
+		);
+	});
+});
+
+describe("pasteable coverage line (CT-19)", () => {
+	test("a complete drifting component prints the line and exits 0, in text and JSON, and writes nothing", () => {
+		writing(undefined, {}, 5);
+		const before = readFileSync(
+			join(repo, "docs/contracts/writing.md"),
+			"utf8",
+		);
+		const text = run(["coverage", "docs/contracts/writing.md", "--line"]);
+		expect(text.code).toBe(0);
+		expect(text.stdout).toBe(coverageLine(2, 2));
+		expect(text.stderr).toContain("coverage-drift");
+		const { code, report } = json([
+			"coverage",
+			"--line",
+			"docs/contracts/writing.md",
+		]);
+		expect(code).toBe(0);
+		expect(report.failing).toBe(1);
+		expect(report.findings.map((f) => f.code)).toEqual(["coverage-drift"]);
+		expect(report.result.computedLine).toBe(coverageLine(2, 2).trim());
+		expect(readFileSync(join(repo, "docs/contracts/writing.md"), "utf8")).toBe(
+			before,
+		);
+		expect(run(["coverage", "--line"]).code).toBe(0);
+	});
+
+	test("an incomplete component prints no line and exits 1; zero or several components exit 2", () => {
+		legacy(
+			"admin_vitor",
+			`# Contract: admin\n\n### AV-1 ${EM} opens\n\nIt opens.\n`,
+		);
+		const text = run(["coverage", "--line", "docs/contracts/admin_vitor.md"]);
+		expect({ code: text.code, stdout: text.stdout }).toEqual({
+			code: 1,
+			stdout: "",
+		});
+		expect(
+			json(["coverage", "--line", "docs/contracts/admin_vitor.md"]),
+		).toMatchObject({
+			code: 1,
+			report: { result: { computedLine: null } },
+		});
+		writing();
+		expect(run(["coverage", "--line"]).code).toBe(2);
+		expect(
+			run([
+				"coverage",
+				"--line",
+				"docs/contracts/writing.md",
+				"docs/contracts/admin_vitor.md",
+			]).code,
+		).toBe(2);
+		rmSync(join(repo, "docs/contracts"), { recursive: true });
+		expect(run(["coverage", "--line"]).code).toBe(2);
+	});
+});
+
+describe("convention examples keep their excerpt totals (CT-5)", () => {
+	test("MR-5 and AC-010 excerpts report drift; completed single-obligation lines pass", () => {
+		write("test/contract/markdown_renderer_contract_test.rb", "#\n");
+		write("docs/decisions/markdown_renderer.md", "#\n");
+		write(
+			"docs/contracts/markdown_renderer.md",
+			`${frontMatter("markdown_renderer", { tests: ["test/contract/markdown_renderer_contract_test.rb"] })}Coverage: 21 obligations; 21 proved by test, 0 by PR evidence, 0 unproved. Suite runs against this implementation.\n\n### MR-5 unsafe URLs lose their URL\n\nThey do.\n\n**Reason.** Script. (D-6)\n\nKind: functional. Proof: test, the five tests named MR-5 in \`test/contract/markdown_renderer_contract_test.rb\`.\n\n## Decisions\n\n- D-6, \`docs/decisions/markdown_renderer.md\`: unsafe URLs are emptied (MR-5).\n`,
+		);
+		write("test/contracts/agency_client_port/ledger.yml", "#\n");
+		write("docs/decisions/d11.md", "#\n");
+		write(
+			"docs/contracts/agency_client_port.md",
+			`${frontMatter("agency_client_port", { tests: ["test/contracts/agency_client_port/"] })}Coverage: 19 obligations; 14 proved by test, 2 by PR evidence, 3 mixed, 0 unproved. Suite runs against this implementation.\n\n### AC-010 Vitor safety\n\nFields are immutable.\n\n**Reason.** Held. (D11, Proposal 9; INV-009)\n\nKind: functional. Proof: test, the cases whose \`intent\` names AC-010 in \`test/contracts/agency_client_port/ledger.yml\`.\n\n## Decisions\n\n- D11, \`docs/decisions/d11.md\`: fields.\n- INV-009, \`docs/decisions/d11.md\`: the push.\n`,
+		);
+		expect(found(["coverage"])).toEqual([
+			"docs/contracts/agency_client_port.md:8 coverage-drift",
+			"docs/contracts/markdown_renderer.md:8 coverage-drift",
+		]);
+		expect(components().map((c) => c.computedLine)).toEqual([
+			coverageLine(1, 1).trim(),
+			coverageLine(1, 1).trim(),
+		]);
 	});
 });
 

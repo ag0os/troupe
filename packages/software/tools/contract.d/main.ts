@@ -1,8 +1,8 @@
 // contract: the software package's Contract tool. Run by ../contract, which
 // records the caller's directory in CONTRACT_TARGET_CWD. Read only: it reads
 // the worktree and git objects and writes nothing but its report.
-import { analyze, type Finding } from "./lint";
-import { repositoryRoot, ToolError } from "./repo";
+import { type Analysis, analyze, type Finding } from "./lint";
+import { PRODUCT, repositoryRoot, ToolError } from "./repo";
 
 const COMMANDS = ["lint", "coverage", "map", "diff"] as const;
 type Command = (typeof COMMANDS)[number];
@@ -100,6 +100,79 @@ export type Outcome = {
 	stdout?: string;
 };
 
+function coverage(analysis: Analysis, line: boolean): Outcome {
+	const components = [
+		...(analysis.selected.has(PRODUCT) ? analysis.sections : []).map((s) => ({
+			file: PRODUCT,
+			component: s.name,
+			format: "product",
+			claimed: null,
+			computed: {
+				obligations: s.ids.length,
+				test: 0,
+				prEvidence: 0,
+				mixed: 0,
+				unproved: 0,
+				retired: 0,
+				unclassified: s.ids.length,
+			},
+			complete: false,
+			computedLine: null as string | null,
+		})),
+		...analysis.files
+			.filter((f) => analysis.selected.has(f.file))
+			.map((f) => {
+				const c = f.doc.coverage;
+				const claimed = c.problem === "missing" ? null : c.claimed;
+				return {
+					file: f.file,
+					component: f.component,
+					format: f.format as string,
+					claimed: claimed && {
+						obligations: claimed.obligations,
+						test: claimed.test,
+						prEvidence: claimed.prEvidence,
+						mixed: claimed.mixed,
+						unproved: claimed.unproved,
+						target: claimed.target,
+					},
+					computed: f.computed,
+					complete: f.complete && f.computed.unclassified === 0,
+					computedLine: f.computedLine,
+				};
+			}),
+	].sort((a, b) =>
+		a.file === b.file
+			? a.component.localeCompare(b.component)
+			: a.file < b.file
+				? -1
+				: 1,
+	);
+	const result = { components, complete: analysis.result.complete };
+	if (line) {
+		if (components.length !== 1)
+			throw new ToolError(
+				"usage",
+				`coverage --line needs exactly one component; ${components.length} selected`,
+			);
+		const computedLine = components[0]?.computedLine ?? null;
+		return {
+			findings: analysis.findings,
+			result: { ...result, computedLine },
+			text: "",
+			stdout: computedLine ? `${computedLine}\n` : "",
+			exit: computedLine ? 0 : 1,
+		};
+	}
+	const text = components
+		.map((c) => {
+			const n = c.computed;
+			return `${c.component} (${c.file}): ${n.obligations} obligations; ${n.test} test, ${n.prEvidence} PR evidence, ${n.mixed} mixed, ${n.unproved} unproved, ${n.retired} retired, ${n.unclassified} unclassified; ${c.complete ? "complete" : "incomplete"}\n`;
+		})
+		.join("");
+	return { findings: analysis.findings, result, text };
+}
+
 function compareFindings(a: Finding, b: Finding): number {
 	return (
 		(a.file < b.file ? -1 : a.file > b.file ? 1 : 0) ||
@@ -178,6 +251,8 @@ function main(argv: string[]): number {
 		const cwd = process.env.CONTRACT_TARGET_CWD || process.cwd();
 		const top = repositoryRoot(cwd);
 		const analysis = analyze(top, cwd, options.files);
+		if (options.command === "coverage")
+			return report(options, coverage(analysis, options.line));
 		return report(options, {
 			findings: analysis.findings,
 			result: analysis.result,

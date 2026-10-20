@@ -77,6 +77,16 @@ export type Metadata = {
 /** A path a component's covers name or match, and whether it is a directory. */
 export type Claim = { path: string; directory: boolean; pattern: string };
 
+export type Counts = {
+	obligations: number;
+	test: number;
+	prEvidence: number;
+	mixed: number;
+	unproved: number;
+	retired: number;
+	unclassified: number;
+};
+
 export type FileReport = {
 	file: string;
 	format: "canonical" | "legacy-file";
@@ -85,8 +95,68 @@ export type FileReport = {
 	metadata: Metadata | null;
 	claims: Claim[];
 	obligations: CheckedObligation[];
+	computed: Counts;
+	/** The coverage sentence the counts give, when they and the suite target are known. */
+	computedLine: string | null;
 	complete: boolean;
 };
+
+function count(obligations: CheckedObligation[]): Counts {
+	const c: Counts = {
+		obligations: 0,
+		test: 0,
+		prEvidence: 0,
+		mixed: 0,
+		unproved: 0,
+		retired: 0,
+		unclassified: 0,
+	};
+	for (const o of obligations) {
+		if (o.retired || o.retiredProblem) c.retired++;
+		else {
+			c.obligations++;
+			c[o.category ?? "unproved"]++;
+		}
+	}
+	return c;
+}
+
+const TARGET =
+	/Suite runs against (this implementation|any implementation behind \S.*?)\.\s*$/;
+
+export function sentence(c: Counts, target: string): string {
+	return `Coverage: ${c.obligations} obligations; ${c.test} proved by test, ${c.prEvidence} by PR evidence, ${c.mixed} mixed, ${c.unproved} unproved. Suite runs against ${target}.`;
+}
+
+/** Compare the claimed coverage line with the computed counts. */
+function checkCoverage(report: FileReport, add: Add) {
+	const coverage = report.doc.coverage;
+	const c = report.computed;
+	if (coverage.problem === "missing") return;
+	const claimed = coverage.claimed;
+	const target = TARGET.exec(coverage.text)?.[1];
+	if (report.complete && c.unclassified === 0 && target)
+		report.computedLine = sentence(c, target);
+	if (!claimed) return;
+	const numbers = (x: Omit<Counts, "retired" | "unclassified">) =>
+		[x.obligations, x.test, x.prEvidence, x.mixed, x.unproved] as const;
+	const drift =
+		c.unclassified === 0
+			? numbers(claimed).some((n, i) => n !== numbers(c)[i])
+			: claimed.obligations !== c.obligations;
+	if (drift)
+		add(
+			"coverage-drift",
+			`the coverage line claims ${claimed.obligations} obligations, ${claimed.test} by test, ${claimed.prEvidence} by PR evidence, ${claimed.mixed} mixed, ${claimed.unproved} unproved; computed ${numbers(c).join(", ")}`,
+			coverage.line,
+		);
+	if (c.unclassified > 0)
+		add(
+			"coverage-incomplete",
+			`${c.unclassified} obligations have unclassified proof, so only the obligation count is compared`,
+			coverage.line,
+		);
+}
 
 export type Analysis = {
 	files: FileReport[];
@@ -475,6 +545,8 @@ function checkFile(
 		metadata: null,
 		claims: [],
 		obligations: [],
+		computed: count([]),
+		computedLine: null,
 		complete: false,
 	};
 	if (!SLUG.test(stem))
@@ -523,6 +595,8 @@ function checkFile(
 	report.obligations = checkObligations(doc, legacy, ctx, add);
 	checkDecisions(doc, ctx, add);
 	report.complete = !legacy && report.metadata !== null;
+	report.computed = count(report.obligations);
+	checkCoverage(report, add);
 	return report;
 }
 
