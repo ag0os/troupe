@@ -75,7 +75,12 @@ export type Metadata = {
 };
 
 /** A path a component's covers name or match, and whether it is a directory. */
-export type Claim = { path: string; directory: boolean; pattern: string };
+export type Claim = {
+	path: string;
+	directory: boolean;
+	pattern: string;
+	line?: number;
+};
 
 export type Counts = {
 	obligations: number;
@@ -158,11 +163,19 @@ function checkCoverage(report: FileReport, add: Add) {
 		);
 }
 
+export type Conflict = {
+	kind: "duplicate" | "nested";
+	path: string;
+	other: string;
+	components: string[];
+};
+
 export type Analysis = {
 	files: FileReport[];
 	sections: ProductSection[];
 	selected: Set<string>;
 	findings: Finding[];
+	conflicts: Conflict[];
 	result: { files: unknown[]; complete: boolean };
 };
 
@@ -658,7 +671,7 @@ function checkFields(
 		const line = lineOf("covers", i);
 		const claims = coverClaims(ctx.top, inv, pattern);
 		if ("code" in claims) add(claims.code, claims.message, line);
-		else report.claims.push(...claims);
+		else report.claims.push(...claims.map((c) => ({ ...c, line })));
 	});
 	meta.depends_on.forEach((slug, i) => {
 		if (!SLUG.test(slug))
@@ -823,6 +836,8 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 			),
 		);
 	all.push(...sharedPrefixes(reports, sections));
+	const conflicts = directoryConflicts(reports);
+	for (const c of conflicts) all.push(...c.findings);
 
 	const findings = all.filter(
 		(f) => selected.has(f.file) || (f.file === CONTRACTS_DIR && !args.length),
@@ -854,8 +869,88 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 		sections,
 		selected,
 		findings,
+		conflicts: conflicts.map(({ findings: _, ...c }) => c),
 		result: { files: resultFiles, complete },
 	};
+}
+
+/** Directories two components both claim, or one claims inside another's. */
+function directoryConflicts(
+	reports: FileReport[],
+): (Conflict & { findings: Finding[] })[] {
+	const out = new Map<string, Conflict & { findings: Finding[] }>();
+	const dirs = reports.map((r) => ({
+		r,
+		claims: r.claims
+			.filter((c) => c.directory)
+			.map((c) => ({ ...c, path: c.path.replace(/\/+$/, "") })),
+	}));
+	const sorted = [...dirs].sort((a, b) =>
+		a.r.component < b.r.component ? -1 : 1,
+	);
+	for (const [i, a] of sorted.entries())
+		for (const b of sorted.slice(i + 1))
+			for (const ca of a.claims)
+				for (const cb of b.claims) {
+					const nested = (x: string, y: string) => y.startsWith(`${x}/`);
+					let conflict: Conflict | null = null;
+					let lines: [typeof ca, typeof cb] = [ca, cb];
+					if (ca.path === cb.path)
+						conflict = {
+							kind: "duplicate",
+							path: ca.path,
+							other: cb.path,
+							components: [a.r.component, b.r.component],
+						};
+					else if (nested(ca.path, cb.path))
+						conflict = {
+							kind: "nested",
+							path: ca.path,
+							other: cb.path,
+							components: [a.r.component, b.r.component],
+						};
+					else if (nested(cb.path, ca.path)) {
+						conflict = {
+							kind: "nested",
+							path: cb.path,
+							other: ca.path,
+							components: [b.r.component, a.r.component],
+						};
+						lines = [cb, ca];
+					}
+					if (!conflict) continue;
+					const key = `${conflict.kind} ${conflict.path} ${conflict.other} ${conflict.components.join(" ")}`;
+					if (out.has(key)) continue;
+					const [outer, inner] = conflict.components;
+					const fileOf = (component: string | undefined) =>
+						(reports.find((r) => r.component === component) as FileReport).file;
+					const code =
+						conflict.kind === "duplicate"
+							? "directory-duplicate"
+							: "directory-nested";
+					out.set(key, {
+						...conflict,
+						findings: [
+							finding(
+								fileOf(outer),
+								code,
+								conflict.kind === "duplicate"
+									? `${conflict.path} is also claimed by ${inner}`
+									: `${conflict.path} contains ${conflict.other}, claimed by ${inner}`,
+								lines[0].line,
+							),
+							finding(
+								fileOf(inner),
+								code,
+								conflict.kind === "duplicate"
+									? `${conflict.path} is also claimed by ${outer}`
+									: `${conflict.other} is inside ${conflict.path}, claimed by ${outer}`,
+								lines[1].line,
+							),
+						],
+					});
+				}
+	return [...out.values()];
 }
 
 function sharedPrefixes(

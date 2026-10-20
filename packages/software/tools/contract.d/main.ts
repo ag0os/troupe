@@ -173,6 +173,64 @@ function coverage(analysis: Analysis, line: boolean): Outcome {
 	return { findings: analysis.findings, result, text };
 }
 
+function map(analysis: Analysis): Outcome {
+	const names = new Set(analysis.files.map((f) => f.component));
+	const components = analysis.files.map((f) => ({
+		component: f.component,
+		file: f.file,
+		format: f.format,
+		covers: f.metadata?.covers ?? [],
+		tests: f.metadata?.tests ?? [],
+		dependsOn: f.metadata?.depends_on ?? [],
+	}));
+	const edges = components.flatMap((c) =>
+		c.dependsOn
+			.filter((d) => names.has(d))
+			.map((to) => ({ from: c.component, to })),
+	);
+	const unresolvedEdges = components.flatMap((c) =>
+		c.dependsOn
+			.filter((d) => !names.has(d))
+			.map((to) => ({ from: c.component, to })),
+	);
+	const gaps = [
+		...analysis.sections.map((s) => `${PRODUCT} section "${s.name}"`),
+		...analysis.files
+			.filter((f) => f.format !== "canonical")
+			.map((f) => `${f.file} (legacy, no metadata)`),
+	];
+	const text = [
+		...components.flatMap((c) => [
+			`${c.component} (${c.file})`,
+			...(c.covers.length ? [`  covers: ${c.covers.join(", ")}`] : []),
+			...(c.dependsOn.length
+				? [
+						`  depends on: ${c.dependsOn.map((d) => (names.has(d) ? d : `${d} (no Contract file)`)).join(", ")}`,
+					]
+				: []),
+		]),
+		...analysis.conflicts.map((c) =>
+			c.kind === "duplicate"
+				? `conflict: ${c.path} is claimed by ${c.components.join(" and ")}`
+				: `conflict: ${c.path} (${c.components[0]}) contains ${c.other} (${c.components[1]})`,
+		),
+		...gaps.map((g) => `migration gap: ${g}`),
+	]
+		.map((l) => `${l}\n`)
+		.join("");
+	return {
+		findings: analysis.findings,
+		result: {
+			components,
+			edges,
+			unresolvedEdges,
+			directoryConflicts: analysis.conflicts,
+			complete: analysis.result.complete,
+		},
+		text,
+	};
+}
+
 function compareFindings(a: Finding, b: Finding): number {
 	return (
 		(a.file < b.file ? -1 : a.file > b.file ? 1 : 0) ||
@@ -253,6 +311,7 @@ function main(argv: string[]): number {
 		const analysis = analyze(top, cwd, options.files);
 		if (options.command === "coverage")
 			return report(options, coverage(analysis, options.line));
+		if (options.command === "map") return report(options, map(analysis));
 		return report(options, {
 			findings: analysis.findings,
 			result: analysis.result,

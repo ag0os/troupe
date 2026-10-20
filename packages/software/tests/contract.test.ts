@@ -1479,6 +1479,152 @@ describe("convention examples keep their excerpt totals (CT-5)", () => {
 	});
 });
 
+describe("map ownership (CT-8)", () => {
+	function component(
+		name: string,
+		prefix: string,
+		covers: string[],
+		depends_on: string[] = [],
+		prose = "",
+	) {
+		write(
+			`docs/contracts/${name}.md`,
+			`${frontMatter(name, { covers, depends_on, tests: [WRITING_TEST] })}${coverageLine(1, 1)}\n# Contract: ${name}\n\n${prose}\n\n${obligation(`${prefix}-1`)}`,
+		);
+	}
+	beforeEach(() => {
+		write(WRITING_TEST, "#\n");
+		for (const f of [
+			"app/shared/a.rb",
+			"app/shared/held/b.rb",
+			"app/models/c.rb",
+			"config/routes.rb",
+		])
+			write(f, "#\n");
+	});
+	type MapResult = {
+		components: { component: string; covers: string[]; tests: string[] }[];
+		edges: { from: string; to: string }[];
+		unresolvedEdges: { from: string; to: string }[];
+		directoryConflicts: {
+			kind: string;
+			path: string;
+			other: string;
+			components: string[];
+		}[];
+		complete: boolean;
+	};
+	const map = () =>
+		json(["map"]) as { code: number; report: Report & { result: MapResult } };
+
+	test("a literal directory claimed twice is directory-duplicate on both files; a shared file is fine", () => {
+		component("writing", "WR", ["app/shared/", "config/routes.rb"]);
+		component("reading", "RD", ["app/shared", "config/routes.rb"]);
+		const { code, report } = map();
+		expect(code).toBe(1);
+		expect(
+			report.findings.map((f) => `${f.file}:${f.line} ${f.code} ${f.severity}`),
+		).toEqual([
+			"docs/contracts/reading.md:4 directory-duplicate error",
+			"docs/contracts/writing.md:4 directory-duplicate error",
+		]);
+		expect(report.result.directoryConflicts).toEqual([
+			{
+				kind: "duplicate",
+				path: "app/shared",
+				other: "app/shared",
+				components: ["reading", "writing"],
+			},
+		]);
+		expect(found(["lint", "docs/contracts/writing.md"])).toEqual([
+			"docs/contracts/writing.md:4 directory-duplicate",
+		]);
+	});
+
+	test("a directory matched by a glob collides with a literal claim", () => {
+		component("writing", "WR", ["app/*/"]);
+		component("reading", "RD", ["app/models/"]);
+		expect(found(["map"])).toEqual([
+			"docs/contracts/reading.md:4 directory-duplicate",
+			"docs/contracts/writing.md:4 directory-duplicate",
+		]);
+	});
+
+	test("an ancestor and a descendant warn; prose exceptions subtract nothing", () => {
+		component(
+			"writing",
+			"WR",
+			["app/shared/"],
+			[],
+			"Except `app/shared/held/`, which is held.",
+		);
+		component("held", "HD", ["app/shared/held/"]);
+		const { code, report } = map();
+		expect(code).toBe(0);
+		expect(
+			report.findings.map((f) => `${f.file} ${f.code} ${f.severity}`),
+		).toEqual([
+			"docs/contracts/held.md directory-nested warning",
+			"docs/contracts/writing.md directory-nested warning",
+		]);
+		expect(report.result.directoryConflicts).toEqual([
+			{
+				kind: "nested",
+				path: "app/shared",
+				other: "app/shared/held",
+				components: ["writing", "held"],
+			},
+		]);
+	});
+
+	test("a dependency on an unmigrated component stays unresolved; PRODUCT makes no node", () => {
+		component(
+			"writing",
+			"WR",
+			["app/models/"],
+			["markdown_renderer", "reading"],
+		);
+		component("reading", "RD", ["app/shared/"]);
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: markdown_renderer\n\n- **MR-1** renders.\n",
+		);
+		const { code, report } = map();
+		expect(code).toBe(0);
+		expect(report.findings.map((f) => `${f.file} ${f.code}`)).toEqual([
+			"PRODUCT.md legacy-format",
+			"docs/contracts/writing.md dependency-missing",
+		]);
+		expect(report.result.components.map((c) => c.component)).toEqual([
+			"reading",
+			"writing",
+		]);
+		expect(report.result.edges).toEqual([{ from: "writing", to: "reading" }]);
+		expect(report.result.unresolvedEdges).toEqual([
+			{ from: "writing", to: "markdown_renderer" },
+		]);
+		expect(report.result.components[1]).toMatchObject({
+			covers: ["app/models/"],
+			tests: [WRITING_TEST],
+		});
+		expect(report.result.complete).toBe(false);
+		expect(run(["map"]).stdout).toBe(
+			[
+				"reading (docs/contracts/reading.md)",
+				"  covers: app/shared/",
+				"writing (docs/contracts/writing.md)",
+				"  covers: app/models/",
+				"  depends on: markdown_renderer (no Contract file), reading",
+				'migration gap: PRODUCT.md section "markdown_renderer"',
+				'PRODUCT.md:3: legacy-format: section "markdown_renderer" is not yet a Contract file; it is read by name and ID only, and its proof coverage is unknown',
+				"docs/contracts/writing.md:6: dependency-missing: depends on markdown_renderer, which has no Contract file",
+				"contract map: 2 findings, 0 failing",
+				"",
+			].join("\n"),
+		);
+	});
+});
+
 /** Every file under the repository, with its content, for a before/after check. */
 function snapshot(dir: string): Record<string, string> {
 	const out: Record<string, string> = {};
