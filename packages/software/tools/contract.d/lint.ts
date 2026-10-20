@@ -1,7 +1,7 @@
 // Analysis for lint, coverage and map: discovery, parsing and validation of
 // the Contract index in the worktree.
-import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import {
 	type ContractDoc,
 	type Obligation,
@@ -16,7 +16,9 @@ import {
 	CONTRACTS_DIR,
 	contractFiles,
 	git,
+	gitlinks,
 	isDirectory,
+	lstat,
 	PRODUCT,
 	README,
 	readText,
@@ -251,10 +253,9 @@ function checkPath(
 				code: "path-invalid",
 				message: `${raw} is inside a submodule`,
 			};
-	let current = top;
-	for (const [i, segment] of segments.entries()) {
-		current = join(current, segment);
-		const stat = lstatSync(current, { throwIfNoEntry: false });
+	for (const i of segments.keys()) {
+		const walked = segments.slice(0, i + 1).join("/");
+		const stat = lstat(top, walked);
 		if (!stat) return { ok: true, kind: "missing", path };
 		if (stat.isSymbolicLink())
 			return {
@@ -262,7 +263,7 @@ function checkPath(
 				code: "path-symlink",
 				message: `${raw} goes through a symlink`,
 			};
-		if (stat.isDirectory() && existsSync(join(current, ".git")))
+		if (stat.isDirectory() && lstat(top, `${walked}/.git`))
 			return {
 				ok: false,
 				code: "path-invalid",
@@ -756,8 +757,17 @@ function select(
 	cwd: string,
 	args: string[],
 	index: Set<string>,
+	refused: string[],
 ): Set<string> {
-	const base = realpathSync(cwd);
+	let base: string;
+	try {
+		base = realpathSync(cwd);
+	} catch (error) {
+		throw new ToolError(
+			"unreadable",
+			`cannot resolve ${cwd}: ${(error as { code?: string }).code ?? error}`,
+		);
+	}
 	const out = new Set<string>();
 	for (const arg of args) {
 		const rel = relative(top, resolve(base, arg)).split("\\").join("/");
@@ -773,6 +783,12 @@ function select(
 				"usage",
 				`${arg} is not a Contract file under ${CONTRACTS_DIR}/ or ${PRODUCT}`,
 			);
+		// A selection behind a refused boundary gets that boundary's finding.
+		const behind = refused.find((r) => rel === r || rel.startsWith(`${r}/`));
+		if (behind) {
+			out.add(behind);
+			continue;
+		}
 		if (!index.has(rel)) throw new ToolError("usage", `${arg} does not exist`);
 		out.add(rel);
 	}
@@ -781,8 +797,12 @@ function select(
 
 export function analyze(top: string, cwd: string, args: string[]): Analysis {
 	const all: Finding[] = [];
-	const contractsBoundary = boundary(top, CONTRACTS_DIR);
-	const productBoundary = boundary(top, PRODUCT);
+	const links = gitlinks(top);
+	const refused: string[] = [];
+	const contractsBoundary = boundary(top, CONTRACTS_DIR, links);
+	const productBoundary = boundary(top, PRODUCT, links);
+	if (contractsBoundary) refused.push(CONTRACTS_DIR);
+	if (productBoundary) refused.push(PRODUCT);
 	if (contractsBoundary)
 		all.push(
 			finding(CONTRACTS_DIR, contractsBoundary.code, contractsBoundary.message),
@@ -791,14 +811,17 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 		all.push(finding(PRODUCT, productBoundary.code, productBoundary.message));
 	const files = contractsBoundary
 		? []
-		: contractFiles(top, (path, message) =>
-				all.push(finding(path, "path-invalid", message)),
-			);
+		: contractFiles(top, links, (path, message) => {
+				refused.push(path);
+				all.push(finding(path, "path-invalid", message));
+			});
 	const productText = productBoundary ? undefined : readText(top, PRODUCT);
 	const sections = productText === undefined ? [] : parseProduct(productText);
 	const index = new Set(files);
 	if (productText !== undefined) index.add(PRODUCT);
-	const selected = args.length ? select(top, cwd, args, index) : new Set(index);
+	const selected = args.length
+		? select(top, cwd, args, index, refused)
+		: new Set(index);
 	if (
 		!contractsBoundary &&
 		!productBoundary &&
@@ -816,7 +839,8 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 	const docs = new Map<string, ContractDoc>();
 	const prefixes = new Set<string>();
 	for (const file of files) {
-		const stat = lstatSync(join(top, file));
+		const stat = lstat(top, file);
+		if (!stat) continue;
 		if (file.split("/").length !== 3)
 			all.push(
 				finding(

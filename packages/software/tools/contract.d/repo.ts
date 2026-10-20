@@ -2,7 +2,7 @@
 // argument array run in the repository with drivers, pagers, optional locks
 // and lazy fetches off, so neither the caller's configuration nor the target's
 // can run anything or write anything.
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 
 export class ToolError extends Error {
@@ -68,29 +68,69 @@ function unreadable(rel: string, error: unknown): ToolError {
 }
 
 /**
- * Why `rel` may not be read: a symlink or a nested repository on the way
- * from the repository root, or null when every component is safe.
+ * lstat of a repository-relative path: undefined when it is absent, an
+ * unreadable error when it cannot be inspected (a permission on the way).
+ */
+export function lstat(top: string, rel: string): Stats | undefined {
+	try {
+		return lstatSync(join(top, rel), { throwIfNoEntry: false });
+	} catch (error) {
+		if ((error as { code?: string }).code === "ENOTDIR") return undefined;
+		throw unreadable(rel, error);
+	}
+}
+
+/** Paths the index records as gitlinks (mode 160000): submodule roots. */
+export function gitlinks(top: string): Set<string> {
+	const listed = git(top, ["ls-files", "-z", "-s", "--full-name"]);
+	if (!listed.ok)
+		throw new ToolError("git", "git could not list the index's entries");
+	const out = new Set<string>();
+	for (const entry of listed.stdout.split("\0"))
+		if (entry.startsWith("160000 "))
+			out.add(entry.slice(entry.indexOf("\t") + 1));
+	return out;
+}
+
+/** Why a directory may not be entered: a gitlink or a nested repository. */
+function repositoryBoundary(
+	top: string,
+	rel: string,
+	links: Set<string>,
+): string | null {
+	if (links.has(rel)) return "a submodule recorded in the index";
+	return lstat(top, `${rel}/.git`) ? "a nested repository" : null;
+}
+
+/**
+ * Why `rel` may not be read: a symlink, a gitlink or a nested repository on
+ * the way from the repository root, or null when every component is safe.
  */
 export function boundary(
 	top: string,
 	rel: string,
+	links: Set<string>,
 ): { code: "path-symlink" | "path-invalid"; message: string } | null {
-	let current = top;
 	let walked = "";
 	for (const segment of rel.split("/")) {
-		current = join(current, segment);
 		walked = walked ? `${walked}/${segment}` : segment;
-		const stat = lstatSync(current, { throwIfNoEntry: false });
+		if (links.has(walked))
+			return {
+				code: "path-invalid",
+				message: `${walked} is a submodule recorded in the index; ${rel} is not read inside it`,
+			};
+		const stat = lstat(top, walked);
 		if (!stat) return null;
 		if (stat.isSymbolicLink())
 			return {
 				code: "path-symlink",
 				message: `${walked} is a symlink; ${rel} is not read through it`,
 			};
-		if (stat.isDirectory() && existsSync(join(current, ".git")))
+		const nested = stat.isDirectory() && repositoryBoundary(top, walked, links);
+		if (nested)
 			return {
 				code: "path-invalid",
-				message: `${walked} is a nested repository; ${rel} is not read inside it`,
+				message: `${walked} is ${nested}; ${rel} is not read inside it`,
 			};
 	}
 	return null;
@@ -98,10 +138,12 @@ export function boundary(
 
 /**
  * Every Markdown file beneath docs/contracts/, README excluded, sorted. A
- * nested repository inside is reported through `refuse` and not entered.
+ * gitlink or nested repository inside is reported through `refuse` and not
+ * entered.
  */
 export function contractFiles(
 	top: string,
+	links: Set<string>,
 	refuse: (path: string, message: string) => void,
 ): string[] {
 	const out: string[] = [];
@@ -114,9 +156,17 @@ export function contractFiles(
 		}
 		for (const name of names) {
 			const path = `${rel}/${name}`;
-			const stat = lstatSync(join(top, path));
-			if (stat.isDirectory() && existsSync(join(top, path, ".git")))
-				refuse(path, `${path} is a nested repository and is not read`);
+			if (links.has(path)) {
+				refuse(
+					path,
+					`${path} is a submodule recorded in the index and is not read`,
+				);
+				continue;
+			}
+			const stat = lstat(top, path);
+			if (!stat) continue;
+			const nested = stat.isDirectory() && repositoryBoundary(top, path, links);
+			if (nested) refuse(path, `${path} is ${nested} and is not read`);
 			else if (stat.isDirectory()) walk(path);
 			else if (name.endsWith(".md") && path !== README) out.push(path);
 		}
@@ -126,12 +176,11 @@ export function contractFiles(
 }
 
 export function isDirectory(top: string, rel: string): boolean {
-	return !!lstatSync(join(top, rel), { throwIfNoEntry: false })?.isDirectory();
+	return !!lstat(top, rel)?.isDirectory();
 }
 
 export function readText(top: string, rel: string): string | undefined {
-	const stat = lstatSync(join(top, rel), { throwIfNoEntry: false });
-	if (!stat?.isFile()) return undefined;
+	if (!lstat(top, rel)?.isFile()) return undefined;
 	try {
 		return readFileSync(join(top, rel), "utf8");
 	} catch (error) {

@@ -2021,7 +2021,11 @@ describe("discovery boundary and unreadable inputs (fix round 1, findings 1 and 
 			findings: ["docs/contracts path-symlink"],
 			files: [],
 		});
-		expect(json(["lint", "docs/contracts/writing.md"]).code).toBe(2);
+		// A selection under a refused root gets that root's finding (fix round 2).
+		expect(json(["lint", "docs/contracts/writing.md"])).toMatchObject({
+			code: 1,
+			report: { findings: [{ file: "docs/contracts", code: "path-symlink" }] },
+		});
 	});
 
 	test("a nested repository at docs is path-invalid, exit 1", () => {
@@ -2296,6 +2300,80 @@ describe("no lazy object retrieval (CT-10, fix round 1, finding 10)", () => {
 			error: "object-missing",
 		});
 		expect(present()).toBe(false);
+	});
+});
+
+describe("gitlinks and metadata failures (fix round 2)", () => {
+	const lintJson = (args: string[] = []) => {
+		const { code, report } = json(["lint", ...args]);
+		return {
+			code,
+			findings: report.findings.map((f) => `${f.file} ${f.code}`),
+			files: report.result.files,
+		};
+	};
+	const gitlink = (path: string) =>
+		git(
+			"update-index",
+			"--add",
+			"--cacheinfo",
+			`160000,${git("rev-parse", "HEAD")},${path}`,
+		);
+
+	test("a populated gitlink at docs, with no .git marker, is path-invalid and nothing behind it is read", () => {
+		writing();
+		gitlink("docs");
+		expect(existsSync(join(repo, "docs/.git"))).toBe(false);
+		const refused = {
+			code: 1,
+			findings: ["docs/contracts path-invalid"],
+			files: [],
+		};
+		expect(lintJson()).toEqual(refused);
+		expect(lintJson(["docs/contracts/writing.md"])).toEqual(refused);
+	});
+
+	test("a gitlink inside docs/contracts is path-invalid, not entered, and refuses a selection under it", () => {
+		writing();
+		write("docs/contracts/vendor/inner.md", "# Inner\n");
+		gitlink("docs/contracts/vendor");
+		expect(lintJson().findings).toEqual(["docs/contracts/vendor path-invalid"]);
+		expect(lintJson(["docs/contracts/vendor/inner.md"])).toEqual({
+			code: 1,
+			findings: ["docs/contracts/vendor path-invalid"],
+			files: [],
+		});
+	});
+
+	test("an ancestor without permission and a directory without search permission are environment errors, exit 2", () => {
+		writing();
+		const docs = join(repo, "docs");
+		const contracts = join(docs, "contracts");
+		try {
+			for (const [target, mode] of [
+				[docs, 0o000],
+				[contracts, 0o400],
+			] as const) {
+				chmodSync(target, mode);
+				const result = run(["lint", "--json"]);
+				expect({ target, code: result.code, stderr: result.stderr }).toEqual({
+					target,
+					code: 2,
+					stderr: "",
+				});
+				expect(JSON.parse(result.stdout)).toMatchObject({
+					status: "error",
+					error: { code: "unreadable" },
+				});
+				expect(run(["coverage"]).stderr).toMatch(
+					/^contract: cannot read docs[^\n]*: EACCES\n$/,
+				);
+				chmodSync(target, 0o755);
+			}
+		} finally {
+			chmodSync(docs, 0o755);
+			chmodSync(contracts, 0o755);
+		}
 	});
 });
 
