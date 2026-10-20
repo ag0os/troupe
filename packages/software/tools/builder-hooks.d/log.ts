@@ -16,7 +16,8 @@ export type Status =
 	| "PASS"
 	| "COULD-NOT-RUN";
 
-function encode(text: string, spaces: boolean): string {
+/** A field as the log writes it; `spaces` encodes whitespace too. */
+export function encode(text: string, spaces: boolean): string {
 	let out = "";
 	for (const ch of text) {
 		const code = ch.codePointAt(0) as number;

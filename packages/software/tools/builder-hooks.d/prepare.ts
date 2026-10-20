@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { hookGit } from "./git";
+import { encode } from "./log";
 import { checkInput, type Manifest, SENTINEL, ToolError } from "./manifest";
 import { resolveDeep } from "./paths";
 
@@ -78,7 +79,9 @@ function checkDestination(runDir: string, repo: string, gitDirs: string[]) {
  * failure is the wrapper's path alone. A fallback line, its own or the
  * launcher's, goes to the log only while the run directory is still the
  * real path prepare made, outside the repository's real path resolved now,
- * and the manifest is byte for byte the one prepare wrote.
+ * and the manifest is byte for byte the one prepare wrote. Only then does
+ * the launcher's own fallback write a line. Captured paths keep a trailing
+ * newline, and the fixed reasons are encoded as the log encodes them.
  */
 function wrapper(
 	launcher: string,
@@ -93,15 +96,19 @@ function wrapper(
 	const head = `#!/bin/sh
 # builder-hooks ${mode} hook for this run, written by prepare.
 PATH=$PATH:/usr/bin:/bin
+nl='
+'
 log=
-if run=$(cd ${shq(runDir)} 2>/dev/null && pwd -P) && [ "$run" = ${shq(runDir)} ] &&
-	real=$(cd ${shq(repo)} 2>/dev/null && pwd -P); then
+checked=
+if run=$(cd ${shq(runDir)} 2>/dev/null && pwd -P && echo x) && run=\${run%x} && run=\${run%"$nl"} &&
+	[ "$run" = ${shq(runDir)} ] &&
+	real=$(cd ${shq(repo)} 2>/dev/null && pwd -P && echo x) && real=\${real%x} && real=\${real%"$nl"}; then
 	case "$run/" in
 	"$real"/* | ${shq(repo)}/*) ;;
-	*) printf '%s' ${shq(manifest)} | cmp -s - "$run/${MANIFEST}" && log=${shq(join(runDir, LOG))} ;;
+	*) printf '%s' ${shq(manifest)} | cmp -s - "$run/${MANIFEST}" && log=${shq(join(runDir, LOG))} && checked=1 ;;
 	esac
 fi
-export SHEPHERD_HOOK_MANIFEST=${shq(join(runDir, MANIFEST))} SHEPHERD_HOOK_LOG="$log"
+export SHEPHERD_HOOK_MANIFEST=${shq(join(runDir, MANIFEST))} SHEPHERD_HOOK_LOG="$log" BUILDER_HOOKS_LOG_CHECKED="$checked"
 `;
 	const run = `${shq(launcher)} ${mode}`;
 	if (mode === "guard") {
@@ -115,22 +122,22 @@ export SHEPHERD_HOOK_MANIFEST=${shq(join(runDir, MANIFEST))} SHEPHERD_HOOK_LOG="
 				additionalContext: `health check could not run on the edited file: ${why}`,
 			},
 		});
-		return `${head}[ -x ${shq(launcher)} ] || {\n\tprintf '%s\\n' ${shq(context)}\n\t${logged(shq(why))}\n\texit 0\n}\nexec ${run}\n`;
+		return `${head}[ -x ${shq(launcher)} ] || {\n\tprintf '%s\\n' ${shq(context)}\n\t${logged(shq(encode(why, false)))}\n\texit 0\n}\nexec ${run}\n`;
 	}
 	// Stop answers by exit 0 or 2; anything else, or no launcher, ends the
 	// gate without blocking and leaves a line for the host.
 	return `${head}unable() {
 \tprintf 'Stop gate could not run: %s. Not blocking; the host will re-check.\\n' "$1" >&2
-\t${logged('"$1"')}
+\t${logged('"$2"')}
 \texit 0
 }
-[ -x ${shq(launcher)} ] || unable ${shq(why)}
+[ -x ${shq(launcher)} ] || unable ${shq(why)} ${shq(encode(why, false))}
 ${run}
 code=$?
 case $code in
 0 | 2) exit "$code" ;;
 esac
-unable "the runtime exited $code"
+unable "the runtime exited $code" "the runtime exited $code"
 `;
 }
 

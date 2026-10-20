@@ -78,11 +78,11 @@ export class Fixture {
 	 * Run this fixture through its own copy of the package, so a test can move
 	 * or replace that copy's launcher; returns the copy's launcher path.
 	 */
-	ownPackage(): string {
-		cpSync(join(extracted, "software"), join(this.root, "pkg/software"), {
+	ownPackage(dir = "pkg"): string {
+		cpSync(join(extracted, "software"), join(this.root, dir, "software"), {
 			recursive: true,
 		});
-		this.launcher = join(this.root, "pkg/software/tools/builder-hooks");
+		this.launcher = join(this.root, dir, "software/tools/builder-hooks");
 		return this.launcher;
 	}
 

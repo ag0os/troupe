@@ -61,6 +61,9 @@ const edited = (file: string) =>
 		tool_name: "Edit",
 		tool_input: { file_path: join(f.repo, file) },
 	});
+// The mark a wrapper sets on a log it checked; the launcher run directly
+// writes a fallback line only with it.
+const CHECKED = { BUILDER_HOOKS_LOG_CHECKED: "1" };
 const context = (text: string) =>
 	`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } })}\n`;
 
@@ -266,7 +269,11 @@ describe("BH-9: health inability and budget", () => {
 		const event = `{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"${join(f.repo, "app/a.rb")}","note":"a\\u0000b"}}`;
 		const r = f.run(["health"], {
 			stdin: event,
-			env: { SHEPHERD_HOOK_MANIFEST: f.manifest, SHEPHERD_HOOK_LOG: f.log },
+			env: {
+				SHEPHERD_HOOK_MANIFEST: f.manifest,
+				SHEPHERD_HOOK_LOG: f.log,
+				...CHECKED,
+			},
 		});
 		expect(r).toEqual({ code: 0, stdout: "", stderr: "" });
 		expect(f.recordedArgv("checker")).toEqual([
@@ -279,7 +286,11 @@ describe("BH-9: health inability and budget", () => {
 		const event = `{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"${join(f.repo, "app/a.rb")}\u0000x"}}`;
 		const r = f.run(["health"], {
 			stdin: event,
-			env: { SHEPHERD_HOOK_MANIFEST: f.manifest, SHEPHERD_HOOK_LOG: f.log },
+			env: {
+				SHEPHERD_HOOK_MANIFEST: f.manifest,
+				SHEPHERD_HOOK_LOG: f.log,
+				...CHECKED,
+			},
 		});
 		expect(r.code).toBe(0);
 		expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toEndWith(
@@ -319,7 +330,7 @@ describe("BH-9: health inability and budget", () => {
 			" health launcher - 0 COULD-NOT-RUN the launcher",
 		);
 		writeFileSync(join(f.bin, "bun"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
-		const silent = f.hook("health", JSON.parse(event));
+		const silent = f.hook("health", JSON.parse(event), CHECKED);
 		expect(silent).toEqual({
 			code: 0,
 			stdout: context(
@@ -356,6 +367,7 @@ describe("BH-9: health inability and budget", () => {
 				PATH: "/nonexistent",
 				SHEPHERD_HOOK_LOG: f.log,
 				SHEPHERD_HOOK_MANIFEST: f.manifest,
+				...CHECKED,
 			},
 		});
 		expect(nobun).toEqual({

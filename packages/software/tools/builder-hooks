@@ -13,6 +13,22 @@
 
 mode=$1
 
+# A log reason: control characters and % percent-encoded, as log.ts does.
+encode() {
+	rest=$1
+	out=
+	while [ -n "$rest" ]; do
+		c=${rest%"${rest#?}"}
+		rest=${rest#?}
+		case $c in
+		%) out="$out%25" ;;
+		[[:cntrl:]]) out="$out$(printf '%%%02X' "'$c")" ;;
+		*) out="$out$c" ;;
+		esac
+	done
+	printf '%s' "$out"
+}
+
 fail() {
 	# The diagnostics need sed, head and date even when PATH lost them.
 	PATH=$PATH:/usr/bin:/bin
@@ -39,25 +55,26 @@ fail() {
 		code=2
 		;;
 	esac
+	# A fallback line goes only to a log the hook's wrapper checked (its run
+	# directory, the repository's real path and the manifest prepare wrote);
+	# run directly, the launcher cannot validate the manifest without bun
+	# and writes none. The location is checked again here.
 	case $mode in
 	guard | health | stop)
 		log=$SHEPHERD_HOOK_LOG
-		case $log in
-		/*/hooks.log)
-			# Only beside a manifest whose repository, as named and as its
-			# real path now, does not hold the run directory's real path: a
-			# redirected run directory or a moved repository gets no log. The
-			# wrapper passes an empty log unless the manifest is the one
-			# prepare wrote.
-			rundir=$(cd "${log%/hooks.log}" 2>/dev/null && pwd -P) || rundir=
+		case $BUILDER_HOOKS_LOG_CHECKED:$log in
+		1:/*/hooks.log)
+			nl='
+'
+			rundir=$(cd "${log%/hooks.log}" 2>/dev/null && pwd -P && echo x) && rundir=${rundir%x} && rundir=${rundir%"$nl"} || rundir=
 			repo=
 			[ -z "$rundir" ] || repo=$(sed -n 's/^  "repo": "\([^"\\]*\)",$/\1/p' "$rundir/builder-manifest.json" 2>/dev/null | head -n 1)
 			real=
-			[ -z "$repo" ] || real=$(cd "$repo" 2>/dev/null && pwd -P) || real=
+			[ -z "$repo" ] || { real=$(cd "$repo" 2>/dev/null && pwd -P && echo x) && real=${real%x} && real=${real%"$nl"}; } || real=
 			if [ -n "$real" ]; then
 				case "$rundir/" in
 				"$repo"/* | "$real"/*) ;;
-				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$1" >>"$rundir/hooks.log" 2>/dev/null ;;
+				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(encode "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
 				esac
 			fi
 			;;

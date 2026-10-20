@@ -19,6 +19,9 @@ const excludedReason = (p: string) =>
 	`Role guard: ${p} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
 const cannot = (why: string) =>
 	`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`;
+// The mark a wrapper sets on a log it checked; the launcher run directly
+// writes a fallback line only with it.
+const CHECKED = { BUILDER_HOOKS_LOG_CHECKED: "1" };
 // Code points, so this file holds no dash for publish-check to find.
 const DASH = String.fromCodePoint(0x2d);
 
@@ -171,6 +174,7 @@ describe("BH-5: guard infrastructure", () => {
 				PATH: "/nonexistent",
 				SHEPHERD_HOOK_LOG: f.log,
 				SHEPHERD_HOOK_MANIFEST: f.manifest,
+				...CHECKED,
 			},
 		});
 		expect(r.code).toBe(2);
@@ -309,7 +313,45 @@ describe("BH-5: fallback log destinations", () => {
 			writeFileSync(g.manifest, `${readFileSync(g.manifest, "utf8")}{\n`);
 			closed(wrapper(g, "guard", commit, noBun));
 			asContext(wrapper(g, "health", edited(g), noBun));
+			closed(g.hook("guard", commit, noBun));
+			asContext(g.hook("health", edited(g), noBun));
 			expect(existsSync(g.log)).toBe(false);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a launcher path holding a newline still writes one record per fallback", () => {
+		const g = new Fixture();
+		try {
+			const launcher = g.ownPackage("pk\ng%");
+			g.prepare(g.input());
+			renameSync(launcher, `${launcher}-gone`);
+			asContext(wrapper(g, "health", edited(g)));
+			expect(wrapper(g, "stop", { session_id: "s1" }).code).toBe(0);
+			const lines = readFileSync(g.log, "utf8").split("\n").filter(Boolean);
+			expect(lines).toHaveLength(2);
+			for (const line of lines) {
+				expect(line).toMatch(
+					/^\d\d:\d\d:\d\d (health|stop) launcher - 0 COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
+				);
+				expect(line).toContain("pk%0Ag%25/software");
+			}
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a run directory whose name ends in a newline still gets its fallback line", () => {
+		const g = new Fixture();
+		try {
+			const launcher = g.ownPackage();
+			g.runDir = join(g.root, "run\n");
+			g.prepare(g.input());
+			renameSync(launcher, `${launcher}-gone`);
+			asContext(wrapper(g, "health", edited(g)));
+			expect(g.logLines()).toHaveLength(1);
+			expect(g.logLines()[0]).toContain(" health launcher - 0 COULD-NOT-RUN ");
 		} finally {
 			g.cleanup();
 		}
