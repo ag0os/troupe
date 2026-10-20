@@ -53,7 +53,15 @@ const NOTE_NAME = /^(?:[tT]\d+-)?measurements\.md$/;
 const PR_TOKEN = /\b(?:PR|pull\s+request|as)\s*#(\d+)\b/gi;
 const MERGE_SHA =
 	/\b(?:merged|merge\s+commit|main\s+at)(?:\s+(?:as|at|in))?[\s:(`]+([0-9a-f]{7,40})\b/gi;
-const SHA = /\b[0-9a-f]{7,40}\b/i;
+/** The forms of landing a STATUS Outcome may use. */
+const LANDED = [
+	/\bmerged\s+as\s+#(\d+)/i,
+	/\blanded\s+as\s+#(\d+)/i,
+	/\bmerged[\s:(`]+([0-9a-f]{7,40})\b/i,
+	/\bmerge\s+commit[\s:(`]+([0-9a-f]{7,40})\b/i,
+	/\bfast-forwarded\s+to\s+main\b/i,
+	/\blive\s+at[\s:(`]+([0-9a-f]{7,40})\b/i,
+];
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/;
 const DASHES = String.fromCodePoint(0x2013, 0x2014);
 const STATUS_LABEL = new RegExp(`\\bstatus\\b[\\s*_]*[:${DASHES}](.*)`, "i");
@@ -124,21 +132,23 @@ export function itemRecord(
 export function landedInFiles(record: ItemRecord): Landed | undefined {
 	if (!record.done || record.outcome === undefined) return undefined;
 	const outcome = record.outcome;
-	const landed = outcome
-		.split("\n")
-		.some(
-			(line) =>
-				/(?<!\bnot\s+)\bmerged\b/i.test(line) ||
-				/\bfast-forwarded to main\b/i.test(line) ||
-				(/\blive\b/i.test(line) && SHA.test(line)) ||
-				(/#\d+\b/.test(line) && DATE.test(line)),
-		);
-	if (!landed) return undefined;
+	const found = outcome.split(/(?<=[.!?])\s+|\n/).flatMap((sentence) =>
+		LANDED.flatMap((form) => {
+			const match = sentence.match(form);
+			if (!match) return [];
+			const negated =
+				/^merged/i.test(match[0]) &&
+				/\b(?:not|yet)\b/i.test(sentence.slice(0, match.index));
+			return negated ? [] : [match];
+		}),
+	);
+	if (!found.length) return undefined;
 	const pr =
-		outcome.match(/merged as #(\d+)/i)?.[1] ??
-		outcome.match(/#(\d+)\b/)?.[1] ??
-		record.prs[0];
-	const sha = outcome.match(SHA)?.[0]?.toLowerCase();
+		found.find((match) => match[0].includes("#"))?.[1] ?? record.prs[0];
+	const sha =
+		found
+			.find((match) => match[1] && !match[0].includes("#"))?.[1]
+			?.toLowerCase() ?? mergeShas(outcome)[0];
 	const date = outcome.match(DATE)?.[0];
 	return {
 		by: "STATUS",

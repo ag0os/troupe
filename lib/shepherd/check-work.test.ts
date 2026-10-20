@@ -730,10 +730,13 @@ describe("record rules", () => {
 	test("each landed form in STATUS's Outcome is recognized", () => {
 		for (const [outcome, says] of [
 			["Merged as #23 (2026-10-14).", "merged as #23 on 2026-10-14"],
-			["PR #23 merged.", "merged as #23"],
+			["Landed as #23.", "merged as #23"],
+			["Merged 88a6e379.", "merged at 88a6e379"],
+			["Merge commit `88a6e379`.", "merged at 88a6e379"],
 			["Fast-forwarded to main at b300d88.", "merged at b300d88"],
+			["Fast-forwarded to main; PR #23.", "merged as #23"],
 			["Live at b300d88 since PR #23.", "merged as #23"],
-			["Shipped as #23, 2026-10-14.", "merged as #23 on 2026-10-14"],
+			["Review is not done yet. Merged as #23.", "merged as #23"],
 		])
 			expect(
 				stale("Status: parked", outcome).map(({ message }) => message),
@@ -744,6 +747,14 @@ describe("record rules", () => {
 			"Not merged; the PR #23 stays open.",
 			"Live behind a flag, PR #23.",
 			"Parked; PR #23 open.",
+			"PR #23 merged.",
+			"Shipped as #23, 2026-10-14.",
+			"PR #23 is not yet merged.",
+			"PR #23 merged into the plan.",
+			"PR #23 not merged as of 2026-10-14.",
+			"Issue #99 opened on 2026-10-14; PR #23 remains open.",
+			"Not merged as #23; it was reverted.",
+			"Not yet merged 88a6e379 into main.",
 		])
 			expect(stale("Status: parked", outcome)).toEqual([]);
 		expect(
