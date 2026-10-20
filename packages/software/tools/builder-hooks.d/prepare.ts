@@ -78,6 +78,16 @@ function hookCommand(
 	mode: string,
 ): string {
 	const run = `env SHEPHERD_HOOK_MANIFEST=${shq(manifest)} SHEPHERD_HOOK_LOG=${shq(log)} ${shq(launcher)} ${mode}`;
+	if (mode === "health") {
+		const why = `the launcher ${launcher} is missing or not executable`;
+		const context = JSON.stringify({
+			hookSpecificOutput: {
+				hookEventName: "PostToolUse",
+				additionalContext: `health check could not run on the edited file: ${why}`,
+			},
+		});
+		return `[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(context)}; printf '%s health launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${shq(why)} >>${shq(log)} 2>/dev/null; exit 0; }; ${run}`;
+	}
 	if (mode !== "guard") return run;
 	const why = `Role guard could not run: the launcher ${launcher} is missing or not executable. The call is refused until the host repairs the hooks.`;
 	return `[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(why)} >&2; exit 2; }; ${run}`;

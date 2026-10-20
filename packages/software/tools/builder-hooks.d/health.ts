@@ -12,7 +12,7 @@ import { argPath, resolveOs } from "./paths";
 import { runBounded } from "./run";
 
 export type Checked =
-	| { kind: "clean" }
+	| { kind: "clean"; why: string }
 	| { kind: "findings"; lines: string[] }
 	| { kind: "could-not-run"; why: string }
 	| { kind: "timeout" };
@@ -35,32 +35,55 @@ type Offense = {
 	location?: { start_line?: unknown; line?: unknown };
 };
 
-function parseRubocop(output: string, rel: string): Checked {
-	let data: { files?: { offenses?: Offense[] }[] };
+function parseRubocop(output: string, rel: string, code: number): Checked {
+	const notJson: Checked = {
+		kind: "could-not-run",
+		why: "its output is not rubocop JSON",
+	};
+	let data: { summary?: unknown; files?: unknown };
 	try {
 		data = JSON.parse(output);
 	} catch {
-		return { kind: "could-not-run", why: "its output is not rubocop JSON" };
+		return notJson;
 	}
-	if (!Array.isArray(data?.files))
-		return { kind: "could-not-run", why: "its output is not rubocop JSON" };
+	const files = data?.files;
+	if (
+		typeof data?.summary !== "object" ||
+		data.summary === null ||
+		!Array.isArray(files) ||
+		files.some(
+			(f: { offenses?: unknown }) =>
+				typeof f !== "object" || f === null || !Array.isArray(f.offenses),
+		)
+	)
+		return notJson;
+	const offenses = (files as { offenses: Offense[] }[]).flatMap(
+		(f) => f.offenses,
+	);
+	if ((code === 1) !== offenses.length > 0)
+		return {
+			kind: "could-not-run",
+			why: `its exit ${code} disagrees with its ${offenses.length} offenses`,
+		};
+	if (files.length === 0) return { kind: "clean", why: "no file inspected" };
 	const lines: string[] = [];
-	for (const file of data.files)
-		for (const o of file.offenses ?? []) {
-			const values = /\[(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)\]/.exec(
-				String(o.message ?? ""),
-			);
-			const line = o.location?.start_line ?? o.location?.line;
-			if (typeof o.cop_name !== "string" || !values || typeof line !== "number")
-				return {
-					kind: "could-not-run",
-					why: "a finding without a cop, a value or a line",
-				};
-			lines.push(
-				`Health check on ${rel}: ${o.cop_name} ${values[1]} over the floor ${values[2]} at ${line}. Keep complexity at or below the base: split the logic into small helpers.`,
-			);
-		}
-	return lines.length ? { kind: "findings", lines } : { kind: "clean" };
+	for (const o of offenses) {
+		const values = /\[(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)\]/.exec(
+			String(o.message ?? ""),
+		);
+		const line = o.location?.start_line ?? o.location?.line;
+		if (typeof o.cop_name !== "string" || !values || typeof line !== "number")
+			return {
+				kind: "could-not-run",
+				why: "a finding without a cop, a value or a line",
+			};
+		lines.push(
+			`Health check on ${rel}: ${o.cop_name} ${values[1]} over the floor ${values[2]} at ${line}. Keep complexity at or below the base: split the logic into small helpers.`,
+		);
+	}
+	return lines.length
+		? { kind: "findings", lines }
+		: { kind: "clean", why: "no findings" };
 }
 
 /** Run one stack's checker on one repository-relative file. */
@@ -76,7 +99,7 @@ export async function checkFile(
 	if (ran.kind !== "exited") return { kind: "could-not-run", why: ran.why };
 	if (ran.code !== 0 && ran.code !== 1)
 		return { kind: "could-not-run", why: `it exited ${ran.code}` };
-	return parseRubocop(ran.output, rel);
+	return parseRubocop(ran.output, rel, ran.code);
 }
 
 /** The edited file relative to the repository, lexically or through symlinks. */
@@ -125,7 +148,7 @@ export async function health(
 	}
 	const result = await checkFile(m, stack, rel, deadline);
 	if (result.kind === "clean") {
-		log(tool, "CLEAN", "no findings");
+		log(tool, "CLEAN", result.why);
 		return null;
 	}
 	if (result.kind === "findings") {

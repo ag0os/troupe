@@ -8,8 +8,8 @@
 # (contract 1) for prepare and recheck; Claude's hook protocol for the hooks.
 #
 # When bun cannot start, the hook modes fail as their protocol needs: the
-# guard refuses (exit 2), health says so as context (exit 0) and stop does
-# not block (exit 1).
+# guard refuses (exit 2), health says so as context (exit 0), also when the
+# runtime exits without answering, and stop does not block (exit 1).
 
 mode=$1
 
@@ -23,8 +23,8 @@ fail() {
 		;;
 	health)
 		# Context, not an exit code: the model sees only context.
-		input=$(cat 2>/dev/null)
-		file=$(printf '%s' "$input" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
+		[ -n "${hook_input+set}" ] || hook_input=$(cat 2>/dev/null)
+		file=$(printf '%s' "$hook_input" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
 		[ -n "$file" ] || file='the edited file'
 		text=$(printf 'health check could not run on %s: %s' "$file" "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
 		printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$text"
@@ -63,4 +63,17 @@ command -v bun >/dev/null 2>&1 || fail "bun is not on PATH; this tool requires b
 BUILDER_HOOKS_TARGET_CWD=$PWD
 export BUILDER_HOOKS_TARGET_CWD
 cd "$dir" || fail "cannot enter $dir"
+if [ "$mode" = health ]; then
+	# Health answers only through context: a runtime that exits without
+	# answering is said as context too, so bun runs as a child here.
+	hook_input=$(cat 2>/dev/null)
+	out=$(printf '%s' "$hook_input" | bun --no-install --env-file=/dev/null "$dir/main.ts" "$@")
+	code=$?
+	if [ -n "$out" ]; then
+		printf '%s\n' "$out"
+		exit 0
+	fi
+	[ "$code" -eq 0 ] || fail "the runtime exited $code"
+	exit 0
+fi
 exec bun --no-install --env-file=/dev/null "$dir/main.ts" "$@"

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Fixture } from "./builder-hooks-fixture";
+import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
 // Code points, so this file holds no dash for publish-check to find.
 const DASH = String.fromCodePoint(0x2d);
@@ -25,7 +25,10 @@ const offense = (cop: string, message: string, line: number) => ({
 	location: { start_line: line },
 });
 const rubocop = (...offenses: unknown[]) =>
-	JSON.stringify({ files: [{ path: "x", offenses }] });
+	JSON.stringify({
+		summary: { offense_count: offenses.length, inspected_file_count: 1 },
+		files: [{ path: "x", offenses }],
+	});
 
 function prepare(floor: string | null = ".rubocop_todo.yml", argv?: string[]) {
 	const r = f.prepare(
@@ -142,6 +145,22 @@ describe("BH-8: a path through a symlink to the repository", () => {
 	});
 });
 
+describe("BH-8: a result that inspected no file", () => {
+	test("is silent and logged clean with that reason", () => {
+		prepare();
+		f.set(
+			"checker",
+			"out",
+			JSON.stringify({
+				summary: { offense_count: 0, inspected_file_count: 0 },
+				files: [],
+			}),
+		);
+		expect(edited("app/a.rb")).toEqual({ code: 0, stdout: "", stderr: "" });
+		expect(f.logLines().at(-1)).toContain(" CLEAN no file inspected");
+	});
+});
+
 describe("BH-9: health inability and budget", () => {
 	test("a missing checker", () => {
 		prepare(".rubocop_todo.yml", [join(f.root, "bin/none"), "{file}"]);
@@ -166,6 +185,7 @@ describe("BH-9: health inability and budget", () => {
 			),
 		);
 		f.set("checker", "out", rubocop(offense("Style/X", "no numbers here", 3)));
+		f.set("checker", "code", "1");
 		expect(edited("app/a.rb").stdout).toBe(
 			context(
 				"health check could not run on app/a.rb: a finding without a cop, a value or a line",
@@ -202,6 +222,75 @@ describe("BH-9: health inability and budget", () => {
 		expect(existsSync(late)).toBe(false);
 		expect(f.logLines().at(-1)).toContain(
 			" COULD-NOT-RUN health check did not finish on app/a.rb within 2 s",
+		);
+	});
+
+	test("a result whose shape or exit disagrees with its offenses is an inability", () => {
+		prepare();
+		const cases: [string, string, string][] = [
+			[
+				JSON.stringify({ summary: {}, files: [{ path: "x", offenses: [] }] }),
+				"1",
+				"its exit 1 disagrees with its 0 offenses",
+			],
+			[
+				rubocop(offense("Metrics/AbcSize", "too big [20/17]", 4)),
+				"0",
+				"its exit 0 disagrees with its 1 offenses",
+			],
+			[JSON.stringify({ files: [] }), "0", "its output is not rubocop JSON"],
+			[
+				JSON.stringify({ summary: {}, files: [{ path: "x" }] }),
+				"0",
+				"its output is not rubocop JSON",
+			],
+		];
+		for (const [out, code, why] of cases) {
+			f.set("checker", "out", out);
+			f.set("checker", "code", code);
+			expect(edited("app/a.rb").stdout).toBe(
+				context(`health check could not run on app/a.rb: ${why}`),
+			);
+		}
+	});
+
+	test("a missing launcher in the generated command and a runtime that exits silently answer as context", () => {
+		prepare();
+		const settings = JSON.parse(
+			readFileSync(join(f.runDir, "builder-hooks.settings.json"), "utf8"),
+		);
+		const command = (
+			settings.hooks.PostToolUse[0].hooks[0].command as string
+		).replaceAll(tool, `${tool}-gone`);
+		const event = JSON.stringify({
+			tool_name: "Edit",
+			tool_input: { file_path: join(f.repo, "app/a.rb") },
+		});
+		const moved = spawn(["/bin/sh", "-c", command], {
+			input: event,
+			env: f.env(),
+		});
+		expect(moved).toEqual({
+			code: 0,
+			stdout: context(
+				`health check could not run on the edited file: the launcher ${tool}-gone is missing or not executable`,
+			),
+			stderr: "",
+		});
+		expect(f.logLines().at(-1)).toContain(
+			" health launcher - 0 COULD-NOT-RUN the launcher",
+		);
+		writeFileSync(join(f.bin, "bun"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+		const silent = f.hook("health", JSON.parse(event));
+		expect(silent).toEqual({
+			code: 0,
+			stdout: context(
+				`health check could not run on ${join(f.repo, "app/a.rb")}: the runtime exited 7`,
+			),
+			stderr: "",
+		});
+		expect(f.logLines().at(-1)).toContain(
+			" health launcher - 0 COULD-NOT-RUN the runtime exited 7",
 		);
 	});
 
