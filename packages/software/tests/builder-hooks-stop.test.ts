@@ -333,6 +333,7 @@ describe("BH-14: bounded state", () => {
 	test("a malformed counter reads as zero and is overwritten", () => {
 		writeFileSync(counter(), "garbage");
 		expect(stopHook().stderr).toContain("(attempt 1 of 3)");
+		expect(readFileSync(counter(), "utf8")).toBe("1\n");
 	});
 
 	test("a counter that cannot be written does not block and never logs PASS", () => {
@@ -581,6 +582,41 @@ describe("BH-2: repository variables", () => {
 });
 
 describe("BH-16: recheck independence", () => {
+	test("an excluded change and a failing check exit 1 with both findings", () => {
+		prepare({ excluded: ["app/other.rb"] });
+		f.write("app/other.rb", "changed\n");
+		f.set("lint", "code", "1");
+		const r = recheck();
+		expect(r.code).toBe(1);
+		const codes = r.json.findings.map((x: { code: string }) => x.code);
+		expect(codes).toContain("excluded-path-changed");
+		expect(codes).toContain("check-failed");
+	});
+
+	test("after a failure every phase runs: tests, lint, Contract tests, floors, exhale", () => {
+		prepare({
+			health: {
+				stacks: [
+					{
+						extensions: [".rb"],
+						argv: [gates.lint, "{file}"],
+						format: "rubocop-json",
+						floor: null,
+					},
+				],
+				recheck: [[gates.exhale, "--base", "{base}"]],
+			},
+		});
+		f.write("test/models/a_test.rb", "changed\n");
+		f.write("app/posts/show.rb", "changed\n");
+		f.set("tests", "code", "1");
+		const r = recheck();
+		expect(r.code).toBe(1);
+		expect(r.json.result.checks.map((c: { check: string }) => c.check)).toEqual(
+			["tests", "lint", "contracts", `floors ${gates.lint}`, "exhale"],
+		);
+	});
+
 	test("finds failures after the cap and an exemption, then succeeds after correction", () => {
 		prepare();
 		f.write("app/other.rb", "changed\n");

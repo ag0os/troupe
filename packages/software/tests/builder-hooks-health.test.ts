@@ -260,6 +260,20 @@ describe("BH-9: health inability and budget", () => {
 		}
 	});
 
+	test("an escaped NUL inside a JSON string stays valid", () => {
+		prepare();
+		f.set("checker", "out", rubocop());
+		const event = `{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"${join(f.repo, "app/a.rb")}","note":"a\\u0000b"}}`;
+		const r = f.run(["health"], {
+			stdin: event,
+			env: { SHEPHERD_HOOK_MANIFEST: f.manifest, SHEPHERD_HOOK_LOG: f.log },
+		});
+		expect(r).toEqual({ code: 0, stdout: "", stderr: "" });
+		expect(f.recordedArgv("checker")).toEqual([
+			[`${DASH}${DASH}format`, "json", "app/a.rb"],
+		]);
+	});
+
 	test("an event holding a NUL byte is an inability, said as context", () => {
 		prepare();
 		const event = `{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"${join(f.repo, "app/a.rb")}\u0000x"}}`;
@@ -397,6 +411,8 @@ describe("BH-10: checker arguments", () => {
 			["bin/rubocop", "{files}"],
 			["{file}"],
 			["bin/rubocop", `${DASH}aD`, "{file}"],
+			["bin/rubocop", `${DASH}DA`, "{file}"],
+			["bin/rubocop", `${DASH}Dx`, "{file}"],
 		]) {
 			const g = new Fixture();
 			try {
