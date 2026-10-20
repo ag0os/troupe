@@ -304,6 +304,10 @@ describe("BH-6: history classification", () => {
 		`find . ${DASH}execdir git push {} +`,
 		`echo "\${x:-'$(git commit)'}"`,
 		`find . ${DASH}name '${DASH}exec' ${DASH}o ${DASH}exec git commit \\;`,
+		`find . ${DASH}ok git commit \\;`,
+		`find . ${DASH}okdir git push \\;`,
+		`echo \${x:${DASH}"'$(git commit)'"}`,
+		`echo \${x:${DASH}"it's $(git commit) now's"}`,
 	])("denies through wrappers, separators and substitutions: %s", (command) => {
 		expect(denial(bash(command))?.permissionDecision).toBe("deny");
 	});
@@ -328,6 +332,10 @@ describe("BH-6: history classification", () => {
 		"cat > notes.md <<'EOF'\nthen git push origin main\nit's fine\nEOF\nls",
 		"cat <<-EOF\n\tgit commit\n\tEOF",
 		`command ${DASH}v git`,
+		`command ${DASH}V git`,
+		`echo "it's \${x}"`,
+		`echo "\${x:${DASH}it's}"`,
+		`echo \${x:${DASH}"it's"}`,
 	])("allows %s", (command) => {
 		const r = bash(command);
 		expect(r).toEqual({ code: 0, stdout: "", stderr: "" });

@@ -151,11 +151,14 @@ class Lexer {
 	/**
 	 * Skip from an opening bracket to its partner; the content is dynamic.
 	 * A command substitution met inside is lifted out as commands of its own.
-	 * Inside double quotes a single quote is a literal, as Bash reads it.
+	 * Quote state is tracked through the expansion: a double quote toggles
+	 * it, and inside double quotes, enclosing or opened here, a single quote
+	 * is a literal and brackets do not count, as Bash reads it.
 	 */
 	skipTo(open: string, closeCh: string, from: number, quoted = false): void {
 		const s = this.s;
 		let depth = 0;
+		let inner = false;
 		let j = from;
 		while (j < s.length) {
 			const ch = s[j];
@@ -163,7 +166,12 @@ class Lexer {
 				j += 2;
 				continue;
 			}
-			if (ch === "'" && !quoted) {
+			if (ch === '"') {
+				inner = !inner;
+				j++;
+				continue;
+			}
+			if (ch === "'" && !quoted && !inner) {
 				const end = s.indexOf("'", j + 1);
 				if (end < 0) break;
 				j = end + 1;
@@ -181,8 +189,8 @@ class Lexer {
 				j = this.i;
 				continue;
 			}
-			if (ch === open) depth++;
-			else if (ch === closeCh && --depth === 0) {
+			if (!inner && ch === open) depth++;
+			else if (!inner && ch === closeCh && --depth === 0) {
 				this.i = j + 1;
 				return;
 			}
