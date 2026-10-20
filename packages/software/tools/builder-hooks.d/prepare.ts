@@ -15,7 +15,7 @@ import {
 	writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { git } from "../contract.d/repo";
 import { checkInput, type Manifest, SENTINEL, ToolError } from "./manifest";
 import { resolveDeep } from "./paths";
@@ -151,7 +151,7 @@ export function prepare(
 			"history_writes is true: the brief must carry the grant that allows it",
 		);
 
-	if (!isAbsolute(runDirArg) && runDirArg === "") usage("--run-dir is empty");
+	if (runDirArg === "") usage("--run-dir is empty");
 	const runDir = resolve(cwd, runDirArg);
 	checkDestination(runDir, repo, gitDirs);
 	let stat: ReturnType<typeof lstatSync> | undefined;
