@@ -27,8 +27,10 @@ prepare   check the Shepherd's policy file, resolve the repository and base,
           into a new or empty run directory outside the repository; prints
           the settings path to pass to claude --settings, which adds
           these hooks to the project's own
-guard     PreToolUse hook: deny history writes and excluded edits
-health    PostToolUse hook: one checker on the edited file
+guard     PreToolUse hook: deny history writes and excluded edits;
+          refuse what it cannot check
+health    PostToolUse hook: one checker on the edited file; anything it
+          cannot do is said as context
 stop      Stop hook: the changed scope's gates, at most three blocks
           between passes
 recheck   the Stop evaluator after a session, with no counter or exemption,
@@ -37,8 +39,47 @@ recheck   the Stop evaluator after a session, with no counter or exemption,
 Hook modes read one JSON event on stdin and the manifest named by
 SHEPHERD_HOOK_MANIFEST, take no arguments and speak Claude's hook protocol.
 
-Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment or a
-check that could not run.
+An input file, for a Rails repository:
+
+  {
+    "role": "builder",
+    "repo": "/path/to/worktree",
+    "base": "origin/main",
+    "history_writes": false,
+    "excluded": ["bin/ci", "config/ci.rb", "app/controllers/admin/base_controller.rb"],
+    "gates": {
+      "test": { "argv": ["bin/rails", "test", "{files}"],
+                "include": ["test/**/*_test.rb"], "system": ["test/system/"] },
+      "lint": { "argv": ["bin/rubocop", "--force-exclusion", "--cache", "false", "{files}"],
+                "include": ["**/*.rb", "**/*.rake", "Gemfile"] }
+    },
+    "contract_tests": ["test/integration/admin_test.rb"],
+    "health": {
+      "stacks": [{ "extensions": [".rb"], "format": "rubocop-json", "floor": null,
+                   "argv": ["bin/rubocop", "--format", "json", "--only",
+                            "Metrics/MethodLength,Metrics/AbcSize", "{file}"] }],
+      "recheck": [["bin/exhale", "dry", "--base", "{base}", "--introduced-only"],
+                  ["bin/exhale", "complexity", "--base", "{base}"]]
+    }
+  }
+
+The runbook:
+
+  1. Prepare through the installed binary into the item's runs/<run>/
+     directory; do not reinstall while the builder runs.
+  2. Copy the resolved base and exclusions from prepare --json into the
+     brief, with history authority, attribution, the reserved-stop line and
+     the third-block reporting instruction.
+  3. Launch with --settings <path>; a one-shot builder runs claude -p with a
+     finite --max-turns.
+  4. After the first guarded tool call, confirm an ALLOW or DENY line in
+     hooks.log; none means the run is unguarded: stop it.
+  5. Always run recheck when the session ends; read excluded first.
+
+Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a
+check that could not run, a changed excluded path or a changed system test.
+A recheck that exits 2 without an error reports status "warnings" and
+result.complete false.
 `;
 
 const BUDGET_MS = { guard: 200, health: 2000, stop: 120_000, recheck: 120_000 };
