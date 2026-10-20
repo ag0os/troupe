@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { git } from "../contract.d/repo";
+import { hookGit } from "./git";
 import { checkInput, type Manifest, SENTINEL, ToolError } from "./manifest";
 import { resolveDeep } from "./paths";
 
@@ -135,15 +135,15 @@ export function prepare(
 	} catch {
 		usage(`the repository ${input.repo} does not exist`);
 	}
-	const top = git(repo, ["rev-parse", "--show-toplevel"]);
+	const top = hookGit(repo, ["rev-parse", "--show-toplevel"]);
 	if (!top.ok || realpathSync(top.stdout.trim()) !== repo)
 		usage(`${input.repo} is not the top of a git worktree`);
 	const gitDirs = ["--absolute-git-dir", "--git-common-dir"].map((flag) => {
-		const out = git(repo, ["rev-parse", "--path-format=absolute", flag]);
+		const out = hookGit(repo, ["rev-parse", "--path-format=absolute", flag]);
 		if (!out.ok) usage("git cannot name the repository's git directory");
 		return resolveDeep(out.stdout.trim());
 	});
-	const base = git(repo, [
+	const base = hookGit(repo, [
 		"rev-parse",
 		"--verify",
 		"--end-of-options",
@@ -154,7 +154,7 @@ export function prepare(
 
 	if (input.contract_tests !== SENTINEL)
 		for (const p of input.contract_tests)
-			if (!git(repo, ["cat-file", "-e", `${sha}:${p}`]).ok)
+			if (!hookGit(repo, ["cat-file", "-e", `${sha}:${p}`]).ok)
 				usage(`contract_tests names ${p}, which is absent at the base`);
 	if (input.history_writes)
 		warnings.push(

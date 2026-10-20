@@ -4,8 +4,8 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { git } from "../contract.d/repo";
 import { type Evaluation, evaluate } from "./evaluate";
+import { hookGit } from "./git";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
 
@@ -18,15 +18,23 @@ export type Finding = {
 
 /** Status, index, refs and the bytes of every dirty or untracked file. */
 export function snapshot(repo: string): string {
-	const status = git(repo, [
+	const status = hookGit(repo, [
 		"status",
 		"--porcelain=v1",
 		"-z",
 		"--untracked-files=all",
 	]);
-	const index = git(repo, ["ls-files", "-s", "-z"]);
-	const refs = git(repo, ["for-each-ref", "--format=%(refname) %(objectname)"]);
-	const head = git(repo, ["rev-parse", "--symbolic-full-name", "HEAD", "HEAD"]);
+	const index = hookGit(repo, ["ls-files", "-s", "-z"]);
+	const refs = hookGit(repo, [
+		"for-each-ref",
+		"--format=%(refname) %(objectname)",
+	]);
+	const head = hookGit(repo, [
+		"rev-parse",
+		"--symbolic-full-name",
+		"HEAD",
+		"HEAD",
+	]);
 	if (!status.ok || !index.ok || !refs.ok)
 		throw new Error("git cannot report the worktree's state");
 	const hashes = status.stdout
@@ -117,6 +125,13 @@ export async function recheck(
 			file: m.repo,
 			message:
 				"a checker changed tracked content, the index, refs or nonignored files",
+		});
+	for (const p of e.excluded)
+		findings.push({
+			code: "excluded-path-changed",
+			severity: "warning",
+			file: p,
+			message: "an excluded path changed; the PR is outside the grant",
 		});
 	for (const p of e.systemTests)
 		findings.push({

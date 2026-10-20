@@ -7,7 +7,7 @@ import { lstatSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseContract } from "../contract.d/parse";
-import { git } from "../contract.d/repo";
+import { hookGit } from "./git";
 import { adopted, checkFile } from "./health";
 import { type Manifest, SENTINEL } from "./manifest";
 import { argPath, excludedBy, matches } from "./paths";
@@ -37,9 +37,9 @@ function nul(text: string): string[] {
 
 /** Every path changed between the base and the worktree, untracked included. */
 export function changedScope(m: Manifest): string[] {
-	const diff = git(m.repo, ["diff", "--name-only", ...DIFF, m.base, "--"]);
+	const diff = hookGit(m.repo, ["diff", "--name-only", ...DIFF, m.base, "--"]);
 	if (!diff.ok) throw new Error(`git diff failed: ${diff.stderr.trim()}`);
-	const untracked = git(m.repo, [
+	const untracked = hookGit(m.repo, [
 		"ls-files",
 		"-z",
 		"--others",
@@ -78,7 +78,7 @@ function components(
 	const out = new Map<string, { base?: Component; now?: Component }>();
 	const isContract = (name: string) =>
 		name.endsWith(".md") && name !== "README.md";
-	const listed = git(m.repo, [
+	const listed = hookGit(m.repo, [
 		"ls-tree",
 		"-z",
 		"--name-only",
@@ -86,7 +86,10 @@ function components(
 	]);
 	if (listed.ok)
 		for (const name of nul(listed.stdout).filter(isContract)) {
-			const show = git(m.repo, ["show", `${m.base}:docs/contracts/${name}`]);
+			const show = hookGit(m.repo, [
+				"show",
+				`${m.base}:docs/contracts/${name}`,
+			]);
 			if (!show.ok)
 				throw new Error(`cannot read docs/contracts/${name} at the base`);
 			out.set(name, {
@@ -174,6 +177,14 @@ export async function evaluate(
 		checks: [],
 		failure: null,
 	};
+	const present = scope.filter((p) => isFile(m, p));
+	const test = m.gates.test;
+	const isSystem = (p: string) =>
+		(test?.system ?? []).some((s) => matches(s, p));
+	const changedTests = test
+		? present.filter((p) => test.include.some((i) => matches(i, p)))
+		: [];
+	out.systemTests.push(...changedTests.filter(isSystem));
 	if (options.scopeOnly) return out;
 	const record = (c: Check): boolean => {
 		out.checks.push(c);
@@ -181,17 +192,23 @@ export async function evaluate(
 			out.failure = c;
 		return out.failure !== null && !options.all;
 	};
-	const present = scope.filter((p) => isFile(m, p));
-	const test = m.gates.test;
-	const isSystem = (p: string) =>
-		(test?.system ?? []).some((s) => matches(s, p));
+	// The budget covers scope collection and selection too: a phase that
+	// cannot start in time is an inability, and nothing after it runs.
+	const spent = (check: string): boolean => {
+		if (Date.now() < deadline) return false;
+		record({
+			check,
+			status: "could-not-run",
+			files: [],
+			lines: [],
+			why: `the evaluation budget was spent before ${check} started`,
+		});
+		return true;
+	};
 	const ran = new Set<string>();
 
 	// Changed ordinary tests.
-	const changedTests = test
-		? present.filter((p) => test.include.some((i) => matches(i, p)))
-		: [];
-	out.systemTests.push(...changedTests.filter(isSystem));
+	if (spent("tests")) return out;
 	const ordinary = changedTests.filter((p) => !isSystem(p));
 	if (test && ordinary.length) {
 		const c = await run(
@@ -207,6 +224,7 @@ export async function evaluate(
 	}
 
 	// Lint on changed files.
+	if (spent("lint")) return out;
 	const lint = m.gates.lint;
 	const linted = lint
 		? present.filter((p) => lint.include.some((i) => matches(i, p)))
@@ -221,6 +239,7 @@ export async function evaluate(
 		return out;
 
 	// Contract tests.
+	if (spent("contracts")) return out;
 	if (scope.length) {
 		let selected: string[];
 		try {
@@ -278,6 +297,7 @@ export async function evaluate(
 	}
 
 	// Adopted floors on changed files.
+	if (spent("floors")) return out;
 	for (const stack of m.health.stacks) {
 		const files = present.filter((p) =>
 			stack.extensions.some((e) => p.endsWith(e)),
@@ -332,16 +352,17 @@ export async function evaluate(
 		});
 		return out;
 	}
-	if (!m.health.recheck.length) {
+	if (!m.health.recheck.length || !scope.length) {
 		record({
 			check: "exhale",
 			status: "skipped",
 			files: [],
 			lines: [],
-			why: "exhale not adopted",
+			why: scope.length ? "exhale not adopted" : "empty scope",
 		});
 		return out;
 	}
+	if (spent("exhale")) return out;
 	const cache = mkdtempSync(join(tmpdir(), "builder-hooks-exhale-"));
 	for (const template of m.health.recheck) {
 		const argv = template.map((a) =>

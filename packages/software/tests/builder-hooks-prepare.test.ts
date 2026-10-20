@@ -139,6 +139,29 @@ describe("BH-2: runtime isolation", () => {
 	});
 });
 
+describe("BH-2: git filter drivers", () => {
+	test("clean, smudge and process filters configured anywhere never run in the hooks", () => {
+		const canary = join(f.root, "filter-canary");
+		const script = join(f.root, "filter.sh");
+		writeFileSync(script, `#!/bin/sh\ntouch '${canary}'\ncat\n`, {
+			mode: 0o755,
+		});
+		f.write(".gitattributes", "*.txt filter=review\n");
+		f.write("tracked.txt", "one\n");
+		f.commit("Filtered file");
+		for (const kind of ["clean", "smudge", "process"])
+			f.git("config", `filter.review.${kind}`, script);
+		f.write("tracked.txt", "two\n");
+		expect(f.prepare(f.input()).code).toBe(0);
+		expect(
+			f.hook("stop", { session_id: "s1", stop_hook_active: false }),
+		).toEqual({ code: 0, stdout: "", stderr: "" });
+		const r = f.run(["recheck", "--manifest", f.manifest, "--json"]);
+		expect(JSON.parse(r.stdout).result.scope).toContain("tracked.txt");
+		expect(existsSync(canary)).toBe(false);
+	});
+});
+
 describe("BH-3: preparation boundaries and shared policy", () => {
 	test("publishes private files, settings path on stdout, resolved base and exact exclusions", () => {
 		const first = f.git("rev-parse", "HEAD");

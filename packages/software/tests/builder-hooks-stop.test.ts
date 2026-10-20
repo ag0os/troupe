@@ -243,6 +243,16 @@ describe("BH-13: reserved stop field", () => {
 		expect(f.recorded()).toEqual([]);
 	});
 
+	test("a reserved stop names a changed system test in its PASS line", () => {
+		f.write("test/system/flow_test.rb", "changed\n");
+		stopHook({
+			last_assistant_message: "Reserved decision stop: D1. Needs a ruling.",
+		});
+		expect(f.logLines().at(-1)).toMatch(
+			/ PASS reserved-stop session=s1 active=false not run here: test\/system\/flow_test\.rb$/,
+		);
+	});
+
 	test("missing, empty, non-string, quoted, embedded, bare and other markers do not", () => {
 		for (const message of [
 			undefined,
@@ -416,6 +426,31 @@ describe("BH-15: Stop messages and deadline", () => {
 		expect(f.logLines().some((l) => l.includes(" PASS "))).toBe(false);
 	});
 
+	test("a budget spent before a phase starts is an inability, never PASS", () => {
+		prepare();
+		f.write("notes.txt", "x\n");
+		const slow = join(f.root, "slow-bin");
+		mkdirSync(slow);
+		const real = Bun.which("git") as string;
+		writeFileSync(
+			join(slow, "git"),
+			`#!/bin/sh\nsleep 0.2\nexec '${real}' "$@"\n`,
+			{ mode: 0o755 },
+		);
+		const r = stopHook(
+			{},
+			{
+				BUILDER_HOOKS_TEST_BUDGET_MS: "50",
+				PATH: `${slow}:${process.env.PATH}`,
+			},
+		);
+		expect(r.code).toBe(2);
+		expect(r.stderr).toMatch(
+			/^Stop gate: \S+ could not run on the changed scope \(attempt 1 of 3\): the evaluation budget was spent before \S+ started/,
+		);
+		expect(f.logLines().some((l) => l.includes(" PASS "))).toBe(false);
+	});
+
 	test("production budgets are fixed in the tool, not the manifest or settings", () => {
 		prepare();
 		const settings = readFileSync(
@@ -490,6 +525,34 @@ describe("BH-16: recheck independence", () => {
 		expect(r.json.findings).toContainEqual(
 			expect.objectContaining({ code: "check-could-not-run" }),
 		);
+	});
+
+	test("an empty scope runs no exhale and lists the skip", () => {
+		prepare();
+		const r = recheck();
+		expect(r.code).toBe(0);
+		expect(ran("exhale")).toEqual([]);
+		expect(r.json.result.checks).toContainEqual({
+			check: "exhale",
+			status: "skipped",
+			files: [],
+			why: "empty scope",
+		});
+	});
+
+	test("a changed excluded path is a warning finding and exits 2", () => {
+		prepare({ excluded: ["bin/ci"] });
+		f.write("bin/ci", "changed\n");
+		const r = recheck();
+		expect(r.code).toBe(2);
+		expect(r.json.status).toBe("warnings");
+		expect(r.json.result.excluded).toEqual(["bin/ci"]);
+		expect(r.json.findings).toContainEqual({
+			code: "excluded-path-changed",
+			severity: "warning",
+			file: "bin/ci",
+			message: "an excluded path changed; the PR is outside the grant",
+		});
 	});
 
 	test("text output lists checks and gaps", () => {

@@ -5,7 +5,7 @@
 // recorded as clean.
 import { existsSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative } from "node:path";
-import { git } from "../contract.d/repo";
+import { hookGit } from "./git";
 import { logLine } from "./log";
 import type { Manifest, Stack } from "./manifest";
 import { argPath, resolveOs } from "./paths";
@@ -26,7 +26,7 @@ export function stackFor(m: Manifest, rel: string): Stack | undefined {
 export function adopted(m: Manifest, stack: Stack): boolean {
 	if (stack.floor === null) return false;
 	if (!existsSync(join(m.repo, stack.floor))) return false;
-	return git(m.repo, ["cat-file", "-e", `${m.base}:${stack.floor}`]).ok;
+	return hookGit(m.repo, ["cat-file", "-e", `${m.base}:${stack.floor}`]).ok;
 }
 
 type Offense = {
