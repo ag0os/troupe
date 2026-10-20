@@ -427,6 +427,32 @@ describe("BH-7: excluded edits", () => {
 			}).toEqual({ path, d: "deny" });
 	});
 
+	test("the reason names the path relative to the repository", () => {
+		const g = new Fixture();
+		try {
+			g.write("config/secrets.yml", "x\n");
+			g.commit("Secrets");
+			symlinkSync(join(g.repo, "config"), join(g.repo, "cfg"));
+			g.prepare(g.input({ excluded: ["config/secrets.yml"] }));
+			for (const path of [
+				join(g.repo, "config/secrets.yml"),
+				"config/secrets.yml",
+				"cfg/secrets.yml",
+			]) {
+				const r = g.hook("guard", {
+					tool_name: "Write",
+					tool_input: { file_path: path },
+				});
+				expect({ path, reason: denial(r)?.permissionDecisionReason }).toEqual({
+					path,
+					reason: excludedReason("config/secrets.yml"),
+				});
+			}
+		} finally {
+			g.cleanup();
+		}
+	});
+
 	test("resolution walks segments, resolving a symlink before collapsing ..", () => {
 		const g = new Fixture();
 		try {
@@ -438,7 +464,7 @@ describe("BH-7: excluded edits", () => {
 				tool_input: { file_path: "alias/../secret.rb" },
 			});
 			expect(denial(r)?.permissionDecisionReason).toBe(
-				excludedReason("alias/../secret.rb"),
+				excludedReason("protected/secret.rb"),
 			);
 		} finally {
 			g.cleanup();

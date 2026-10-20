@@ -4,7 +4,7 @@
 // checking is the caller's to turn into a refusal.
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
-import { excludedBy } from "./paths";
+import { excludedBy, shownPath } from "./paths";
 import { historyWrite, Unclassifiable } from "./shell";
 
 export const HISTORY_REASON =
@@ -62,7 +62,7 @@ export function decide(
 			throw new CannotCheck(`the ${tool} call has no path`);
 		if (excludedBy(m.repo, path, [runDir]))
 			return {
-				deny: excludedReason(path),
+				deny: excludedReason(shownPath(m.repo, path)),
 				tool,
 				target: path,
 				reason: "the run directory",
@@ -70,7 +70,7 @@ export function decide(
 		const hit = excludedBy(m.repo, path, m.excluded);
 		return hit
 			? {
-					deny: excludedReason(path),
+					deny: excludedReason(shownPath(m.repo, path)),
 					tool,
 					target: path,
 					reason: `excluded by ${hit}`,

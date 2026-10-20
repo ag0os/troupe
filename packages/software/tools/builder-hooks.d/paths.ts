@@ -137,6 +137,18 @@ export function excludedBy(
 	return null;
 }
 
+/**
+ * How a denial names `file`: its resolved form relative to the repository's
+ * real path, or the resolved form itself when that falls outside it.
+ */
+export function shownPath(repo: string, file: string): string {
+	const repoReal = resolveDeep(repo);
+	const resolved = resolveOs(isAbsolute(file) ? file : `${repo}/${file}`);
+	return resolved !== repoReal && under(resolved, repoReal)
+		? resolved.slice(repoReal.length + 1)
+		: resolved;
+}
+
 /** A repository-relative path as a checker argument: never an option. */
 export function argPath(rel: string): string {
 	return rel.startsWith("-") ? `./${rel}` : rel;
