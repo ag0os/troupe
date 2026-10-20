@@ -71,34 +71,60 @@ function checkDestination(runDir: string, repo: string, gitDirs: string[]) {
 	}
 }
 
-function hookCommand(
+/**
+ * The fixed wrapper a hook's settings command names: it holds the launcher,
+ * manifest and log paths and answers in the hook's own protocol when the
+ * launcher is gone, so the command the model sees prefixed to every hook
+ * failure is the wrapper's path alone.
+ */
+function wrapper(
 	launcher: string,
 	manifest: string,
 	log: string,
-	mode: string,
+	mode: "guard" | "health" | "stop",
 ): string {
 	const run = `env SHEPHERD_HOOK_MANIFEST=${shq(manifest)} SHEPHERD_HOOK_LOG=${shq(log)} ${shq(launcher)} ${mode}`;
+	const why = `the launcher ${launcher} is missing or not executable`;
+	const logged = (reason: string) =>
+		`printf '%s ${mode} launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>${shq(log)} 2>/dev/null`;
+	const head = `#!/bin/sh\n# builder-hooks ${mode} hook for this run, written by prepare.\n`;
+	if (mode === "guard") {
+		const refused = `Role guard could not run: ${why}. The call is refused until the host repairs the hooks.`;
+		return `${head}[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(refused)} >&2; exit 2; }\nexec ${run}\n`;
+	}
 	if (mode === "health") {
-		const why = `the launcher ${launcher} is missing or not executable`;
 		const context = JSON.stringify({
 			hookSpecificOutput: {
 				hookEventName: "PostToolUse",
 				additionalContext: `health check could not run on the edited file: ${why}`,
 			},
 		});
-		return `[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(context)}; printf '%s health launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${shq(why)} >>${shq(log)} 2>/dev/null; exit 0; }; ${run}`;
+		return `${head}[ -x ${shq(launcher)} ] || {\n\tPATH=$PATH:/usr/bin:/bin\n\tprintf '%s\\n' ${shq(context)}\n\t${logged(shq(why))}\n\texit 0\n}\nexec ${run}\n`;
 	}
-	if (mode !== "guard") return run;
-	const why = `Role guard could not run: the launcher ${launcher} is missing or not executable. The call is refused until the host repairs the hooks.`;
-	return `[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(why)} >&2; exit 2; }; ${run}`;
+	// Stop answers by exit 0 or 2; anything else, or no launcher, ends the
+	// gate without blocking and leaves a line for the host.
+	return `${head}unable() {
+\tPATH=$PATH:/usr/bin:/bin
+\tprintf 'Stop gate could not run: %s. Not blocking; the host will re-check.\\n' "$1" >&2
+\t${logged('"$1"')}
+\texit 0
+}
+[ -x ${shq(launcher)} ] || unable ${shq(why)}
+${run}
+code=$?
+case $code in
+0 | 2) exit "$code" ;;
+esac
+unable "the runtime exited $code"
+`;
 }
 
 type HookEntry = Record<string, unknown>;
 
 /** Write a new private file by temp file and link; never overwrite. */
-function publish(path: string, text: string) {
+function publish(path: string, text: string, mode = 0o600) {
 	const temp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
-	const fd = openSync(temp, "wx", 0o600);
+	const fd = openSync(temp, "wx", mode);
 	try {
 		writeSync(fd, text);
 	} finally {
@@ -189,6 +215,11 @@ export function prepare(
 	const manifestPath = join(real, MANIFEST);
 	const settingsPath = join(real, SETTINGS);
 	const logPath = join(real, LOG);
+	const wrappers = {
+		guard: join(real, "guard.sh"),
+		health: join(real, "health.sh"),
+		stop: join(real, "stop.sh"),
+	};
 
 	// --settings adds these to the project's, local and user hooks (live
 	// check, 2.1.304), so the file holds only the builder's entries; they
@@ -203,7 +234,7 @@ export function prepare(
 		hooks: [
 			{
 				type: "command",
-				command: hookCommand(launcher, manifestPath, logPath, "guard"),
+				command: shq(wrappers.guard),
 				timeout: 2,
 				onFailure: "block",
 			},
@@ -214,7 +245,7 @@ export function prepare(
 		hooks: [
 			{
 				type: "command",
-				command: hookCommand(launcher, manifestPath, logPath, "health"),
+				command: shq(wrappers.health),
 				timeout: 3,
 			},
 		],
@@ -223,13 +254,19 @@ export function prepare(
 		hooks: [
 			{
 				type: "command",
-				command: hookCommand(launcher, manifestPath, logPath, "stop"),
+				command: shq(wrappers.stop),
 				timeout: 125,
 			},
 		],
 	});
 
 	publish(manifestPath, `${JSON.stringify(policy, null, 2)}\n`);
+	for (const mode of ["guard", "health", "stop"] as const)
+		publish(
+			wrappers[mode],
+			wrapper(launcher, manifestPath, logPath, mode),
+			0o700,
+		);
 	if (process.env.BUILDER_HOOKS_TEST_INTERRUPT === "before-settings")
 		process.kill(process.pid, "SIGKILL");
 	publish(

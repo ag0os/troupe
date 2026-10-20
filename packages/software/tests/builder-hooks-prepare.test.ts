@@ -7,6 +7,7 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	statSync,
 	symlinkSync,
 	writeFileSync,
@@ -239,10 +240,19 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 		});
 		expect(statSync(f.runDir).mode & 0o777).toBe(0o700);
 		for (const name of readdirSync(f.runDir))
-			expect(statSync(join(f.runDir, name)).mode & 0o777).toBe(0o600);
+			expect({
+				name,
+				mode: statSync(join(f.runDir, name)).mode & 0o777,
+			}).toEqual({
+				name,
+				mode: name.endsWith(".sh") ? 0o700 : 0o600,
+			});
 		expect(readdirSync(f.runDir).sort()).toEqual([
 			"builder-hooks.settings.json",
 			"builder-manifest.json",
+			"guard.sh",
+			"health.sh",
+			"stop.sh",
 		]);
 	});
 
@@ -415,9 +425,69 @@ describe("BH-4: settings artifacts", () => {
 		expect(stop.matcher).toBeUndefined();
 		expect(stop.hooks[0]).toMatchObject({ type: "command", timeout: 125 });
 		expect(stop.hooks[0].onFailure).toBeUndefined();
-		expect(stop.hooks[0].command).toBe(
-			`env SHEPHERD_HOOK_MANIFEST='${f.manifest}' SHEPHERD_HOOK_LOG='${f.log}' '${tool}' stop`,
+		expect(stop.hooks[0].command).toBe(`'${join(f.runDir, "stop.sh")}'`);
+	});
+
+	test("the settings commands are the three wrapper paths and nothing else", () => {
+		f.prepare(f.input());
+		const s = settingsOf(f);
+		const commands = ["PreToolUse", "PostToolUse", "Stop"].map(
+			(event) => s.hooks[event][0].hooks[0].command,
 		);
+		expect(commands).toEqual(
+			["guard.sh", "health.sh", "stop.sh"].map(
+				(name) => `'${join(f.runDir, name)}'`,
+			),
+		);
+		for (const name of ["guard.sh", "health.sh", "stop.sh"]) {
+			const wrapper = join(f.runDir, name);
+			expect(statSync(wrapper).mode & 0o777).toBe(0o700);
+			const text = readFileSync(wrapper, "utf8");
+			expect(text).toStartWith("#!/bin/sh\n");
+			expect(text).toContain(`'${tool}'`);
+			expect(text).toContain(`SHEPHERD_HOOK_MANIFEST='${f.manifest}'`);
+			expect(text).toContain(`SHEPHERD_HOOK_LOG='${f.log}'`);
+		}
+	});
+
+	test("with the launcher present each wrapper answers as the launcher does", () => {
+		f.prepare(f.input());
+		const events = {
+			guard: {
+				session_id: "s",
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m x" },
+			},
+			health: {
+				session_id: "s",
+				tool_name: "Edit",
+				tool_input: { file_path: join(f.repo, "README.md") },
+			},
+			stop: { session_id: "s", stop_hook_active: false },
+		};
+		for (const [mode, event] of Object.entries(events)) {
+			const wrapped = spawn(
+				["/bin/sh", "-c", `'${join(f.runDir, `${mode}.sh`)}'`],
+				{
+					cwd: f.repo,
+					env: f.env(),
+					input: JSON.stringify(event),
+				},
+			);
+			expect({ mode, r: wrapped }).toEqual({ mode, r: f.hook(mode, event) });
+		}
+		expect(
+			f
+				.logLines()
+				.map((l) => l.split(" ").slice(1, 2).concat(l.split(" ").slice(5, 6))),
+		).toEqual([
+			["guard", "DENY"],
+			["guard", "DENY"],
+			["health", "CLEAN"],
+			["health", "CLEAN"],
+			["stop", "PASS"],
+			["stop", "PASS"],
+		]);
 	});
 
 	test("generated commands run with no shepherd on PATH, from a path with hostile characters", () => {
@@ -452,15 +522,23 @@ describe("BH-4: settings artifacts", () => {
 		}
 	});
 
-	test("the guard command refuses when its launcher is missing or not executable", () => {
+	test("the guard wrapper refuses when its launcher is missing or not executable", () => {
+		const launcher = f.ownPackage();
 		f.prepare(f.input());
 		const guard = settingsOf(f).hooks.PreToolUse[0].hooks[0].command as string;
-		const missing = guard.replaceAll(tool, `${tool}-gone`);
-		const child = spawn(["/bin/sh", "-c", missing], { input: "{}" });
-		expect(child.code).toBe(2);
-		expect(child.stderr).toBe(
-			`Role guard could not run: the launcher ${tool}-gone is missing or not executable. The call is refused until the host repairs the hooks.\n`,
-		);
+		const refused = `Role guard could not run: the launcher ${launcher} is missing or not executable. The call is refused until the host repairs the hooks.\n`;
+		chmodSync(launcher, 0o644);
+		expect(spawn(["/bin/sh", "-c", guard], { input: "{}" })).toEqual({
+			code: 2,
+			stdout: "",
+			stderr: refused,
+		});
+		renameSync(launcher, `${launcher}-gone`);
+		expect(spawn(["/bin/sh", "-c", guard], { input: "{}" })).toEqual({
+			code: 2,
+			stdout: "",
+			stderr: refused,
+		});
 	});
 
 	test("the settings hold only the builder's entries, never the project's", () => {
@@ -474,7 +552,7 @@ describe("BH-4: settings artifacts", () => {
 		f.prepare(f.input());
 		const s = settingsOf(f);
 		expect(s.hooks.Stop).toHaveLength(1);
-		expect(s.hooks.Stop[0].hooks[0].command).toEndWith(" stop");
+		expect(s.hooks.Stop[0].hooks[0].command).toEndWith("/stop.sh'");
 		expect(f.run(["prepare", "--copy-project-hooks"]).code).toBe(2);
 	});
 

@@ -1,9 +1,15 @@
 // builder-hooks health (BH-8 to BH-10): one fake checker on the edited file,
 // silent when clean or unadopted, context when it finds or cannot run.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { Fixture, spawn, tool } from "./builder-hooks-fixture";
+import { Fixture, spawn } from "./builder-hooks-fixture";
 
 // Code points, so this file holds no dash for publish-check to find.
 const DASH = String.fromCodePoint(0x2d);
@@ -271,26 +277,27 @@ describe("BH-9: health inability and budget", () => {
 		);
 	});
 
-	test("a missing launcher in the generated command and a runtime that exits silently answer as context", () => {
+	test("a missing launcher in the generated wrapper and a runtime that exits silently answer as context", () => {
+		const launcher = f.ownPackage();
 		prepare();
 		const settings = JSON.parse(
 			readFileSync(join(f.runDir, "builder-hooks.settings.json"), "utf8"),
 		);
-		const command = (
-			settings.hooks.PostToolUse[0].hooks[0].command as string
-		).replaceAll(tool, `${tool}-gone`);
+		const command = settings.hooks.PostToolUse[0].hooks[0].command as string;
 		const event = JSON.stringify({
 			tool_name: "Edit",
 			tool_input: { file_path: join(f.repo, "app/a.rb") },
 		});
+		renameSync(launcher, `${launcher}-gone`);
 		const moved = spawn(["/bin/sh", "-c", command], {
 			input: event,
 			env: f.env(),
 		});
+		renameSync(`${launcher}-gone`, launcher);
 		expect(moved).toEqual({
 			code: 0,
 			stdout: context(
-				`health check could not run on the edited file: the launcher ${tool}-gone is missing or not executable`,
+				`health check could not run on the edited file: the launcher ${launcher} is missing or not executable`,
 			),
 			stderr: "",
 		});

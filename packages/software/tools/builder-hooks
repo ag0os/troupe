@@ -9,7 +9,7 @@
 #
 # When bun cannot start, the hook modes fail as their protocol needs: the
 # guard refuses (exit 2), health says so as context (exit 0), also when the
-# runtime exits without answering, and stop does not block (exit 1).
+# runtime exits without answering, and stop does not block (exit 0).
 
 mode=$1
 
@@ -32,7 +32,7 @@ fail() {
 		;;
 	stop)
 		printf 'Stop gate could not run: %s. Not blocking; the host will re-check.\n' "$1" >&2
-		code=1
+		code=0
 		;;
 	*)
 		printf 'builder-hooks: %s\n' "$1" >&2

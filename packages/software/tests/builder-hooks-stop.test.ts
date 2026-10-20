@@ -6,11 +6,12 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Fixture, tool } from "./builder-hooks-fixture";
+import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
 const LAST =
 	"This is the last attempt: if it still fails, end with a report that says 'still failing after 3 attempts' and what remains.";
@@ -467,6 +468,53 @@ describe("BH-15: Stop messages and deadline", () => {
 			/^Stop gate: \S+ could not run on the changed scope \(attempt 1 of 3\): the evaluation budget was spent before \S+ started/,
 		);
 		expect(f.logLines().some((l) => l.includes(" PASS "))).toBe(false);
+	});
+
+	test("the Stop wrapper does not block and logs when the launcher is missing or the runtime exits without answering", () => {
+		const launcher = f.ownPackage();
+		prepare();
+		f.write("app/other.rb", "changed\n");
+		f.set("lint", "code", "1");
+		const wrapper = () =>
+			spawn(["/bin/sh", "-c", `'${join(f.runDir, "stop.sh")}'`], {
+				cwd: f.repo,
+				env: f.env(),
+				input: JSON.stringify({ session_id: "s1", stop_hook_active: false }),
+			});
+		const unable = (why: string) => ({
+			code: 0,
+			stdout: "",
+			stderr: `Stop gate could not run: ${why}. Not blocking; the host will re-check.\n`,
+		});
+		renameSync(launcher, `${launcher}-gone`);
+		const moved = wrapper();
+		renameSync(`${launcher}-gone`, launcher);
+		const why = `the launcher ${launcher} is missing or not executable`;
+		expect(moved).toEqual(unable(why));
+		expect(f.logLines().at(-1)).toMatch(
+			new RegExp(
+				`^\\d\\d:\\d\\d:\\d\\d stop launcher - 0 COULD-NOT-RUN ${why}$`,
+			),
+		);
+		writeFileSync(join(f.bin, "bun"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+		expect(wrapper()).toEqual(unable("the runtime exited 7"));
+		expect(f.logLines().at(-1)).toMatch(
+			/^\d\d:\d\d:\d\d stop launcher - 0 COULD-NOT-RUN the runtime exited 7$/,
+		);
+		rmSync(join(f.bin, "bun"));
+		const nobun = spawn(["/bin/sh", "-c", `'${join(f.runDir, "stop.sh")}'`], {
+			cwd: f.repo,
+			env: f.env({ PATH: `${f.bin}:/usr/bin:/bin` }),
+			input: "{}",
+		});
+		expect(nobun).toEqual(
+			unable("bun is not on PATH; this tool requires bun and git"),
+		);
+		expect(f.logLines()).toHaveLength(3);
+		expect(f.logLines().at(-1)).toContain(
+			" stop launcher - 0 COULD-NOT-RUN bun is not on PATH",
+		);
+		expect(existsSync(counter())).toBe(false);
 	});
 
 	test("production budgets are fixed in the tool, not the manifest or settings", () => {

@@ -53,6 +53,7 @@ export class Fixture {
 	bin: string;
 	record: string;
 	control: string;
+	launcher = tool;
 
 	constructor() {
 		this.root = realpathSync(mkdtempSync(join(tmpdir(), "builder-hooks-")));
@@ -71,6 +72,18 @@ export class Fixture {
 
 	cleanup() {
 		rmSync(this.root, { recursive: true, force: true });
+	}
+
+	/**
+	 * Run this fixture through its own copy of the package, so a test can move
+	 * or replace that copy's launcher; returns the copy's launcher path.
+	 */
+	ownPackage(): string {
+		cpSync(join(extracted, "software"), join(this.root, "pkg/software"), {
+			recursive: true,
+		});
+		this.launcher = join(this.root, "pkg/software/tools/builder-hooks");
+		return this.launcher;
 	}
 
 	env(extra: Record<string, string> = {}): Record<string, string> {
@@ -177,7 +190,7 @@ exit "$(cat "$CONTROL/${name}.code" 2>/dev/null || echo 0)"
 		} = {},
 	): Run {
 		mkdirSync(join(this.root, "tmp"), { recursive: true });
-		return spawn([tool, ...args], {
+		return spawn([this.launcher, ...args], {
 			cwd: options.cwd ?? this.root,
 			env: this.env(options.env),
 			input: options.stdin,
