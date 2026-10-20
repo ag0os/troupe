@@ -69,6 +69,20 @@ const NOT_LANDED_LABELLED =
 	/\b(?:not landed|parked|blocked|abandoned|not pushed|no merge commit or pr yet)\b/i;
 const NOT_LANDED_HEAD =
 	/\b(?:not landed|not pushed|no merge commit or pr yet)\b/i;
+/** A landed signal in a status line outranks the stale phrases beside it. */
+const LANDED_LABELLED =
+	/\blanded\b|\bmerged\s+as\s+#\d+|\bmerged[\s:(`]+[0-9a-f]{7,40}\b/i;
+
+/** A status line says not landed when it has a stale phrase and no landed signal. */
+function statusNotLanded(line: string): boolean {
+	const status = line.match(STATUS_LABEL)?.[1] ?? "";
+	if (!NOT_LANDED_LABELLED.test(status)) return false;
+	const stripped = status.replace(
+		new RegExp(NOT_LANDED_LABELLED.source, "gi"),
+		"",
+	);
+	return !LANDED_LABELLED.test(stripped);
+}
 
 function mergeShas(text: string): string[] {
 	return [...text.matchAll(MERGE_SHA)].map(
@@ -237,9 +251,8 @@ export function checkWork(
 		notes.forEach((name, index) => {
 			const { lines, head } = noteHead(texts[index] ?? "");
 			const notLanded =
-				lines.some((line) =>
-					NOT_LANDED_LABELLED.test(line.match(STATUS_LABEL)?.[1] ?? ""),
-				) || head.some((line) => NOT_LANDED_HEAD.test(line));
+				lines.some(statusNotLanded) ||
+				head.some((line) => NOT_LANDED_HEAD.test(line));
 			if (!notLanded) return;
 			const headSha = mergeShas(head.join("\n"))[0];
 			const says = landed

@@ -694,8 +694,14 @@ describe("record rules", () => {
 			"Status: landed.",
 			"Status: unblocked, then merged.",
 			"The parked branch was blocked, then abandoned for a rebuild.",
+			"status: landed (PR #74 merged 2026-10-19 as 88a6e379, deploy checked; was parked for push permission)",
+			"Status: merged as #74; was blocked on review, then parked",
+			"Status: merged 88a6e379 after being parked",
 		])
 			expect(stale(head)).toEqual([]);
+		expect(stale("Status: not landed, parked").map(({ code }) => code)).toEqual(
+			["record-note-stale"],
+		);
 	});
 
 	test("free phrases count only in the head and labels only in the first 40 lines", () => {
