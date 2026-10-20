@@ -119,6 +119,32 @@ describe("BH-5: guard infrastructure", () => {
 		}
 	});
 
+	test("an early failure writes no log into a run directory redirected into the repository", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			const manifest = readFileSync(g.manifest, "utf8");
+			mkdirSync(join(g.repo, "inner"));
+			renameSync(g.runDir, join(g.root, "moved"));
+			writeFileSync(join(g.repo, "inner/builder-manifest.json"), manifest);
+			symlinkSync(join(g.repo, "inner"), g.runDir);
+			expect(g.hook("guard", "not json").code).toBe(2);
+			expect(
+				g.run(["guard"], {
+					stdin: "{}",
+					env: {
+						PATH: "/nonexistent",
+						SHEPHERD_HOOK_LOG: g.log,
+						SHEPHERD_HOOK_MANIFEST: g.manifest,
+					},
+				}).code,
+			).toBe(2);
+			expect(existsSync(join(g.repo, "inner/hooks.log"))).toBe(false);
+		} finally {
+			g.cleanup();
+		}
+	});
+
 	test("a malformed event refuses with exit 2", () => {
 		expect(f.hook("guard", "not json")).toEqual({
 			code: 2,
@@ -276,6 +302,8 @@ describe("BH-6: history classification", () => {
 		`caffeinate ${DASH}i git push`,
 		`find . ${DASH}exec git commit \\;`,
 		`find . ${DASH}execdir git push {} +`,
+		`echo "\${x:-'$(git commit)'}"`,
+		`find . ${DASH}name '${DASH}exec' ${DASH}o ${DASH}exec git commit \\;`,
 	])("denies through wrappers, separators and substitutions: %s", (command) => {
 		expect(denial(bash(command))?.permissionDecision).toBe("deny");
 	});
@@ -291,6 +319,7 @@ describe("BH-6: history classification", () => {
 		"git stash",
 		"git stash push -m wip",
 		"git stash list",
+		`find . ${DASH}name '${DASH}exec' ${DASH}print`,
 		"git gc",
 		"git reflog",
 		`git branch ${DASH}${DASH}list`,
@@ -316,6 +345,10 @@ describe("BH-6: history classification", () => {
 			`an option git takes that it cannot read: ${DASH}${DASH}frobnicate`,
 		],
 		["git $SUB", "an unreadable option to git"],
+		[
+			`find . ${DASH}newerXY x ${DASH}exec git commit \\;`,
+			`a find primary it cannot read: ${DASH}newerXY`,
+		],
 	])("refuses what it cannot classify: %s", (command, why) => {
 		expect(bash(command)).toEqual({
 			code: 2,

@@ -151,8 +151,9 @@ class Lexer {
 	/**
 	 * Skip from an opening bracket to its partner; the content is dynamic.
 	 * A command substitution met inside is lifted out as commands of its own.
+	 * Inside double quotes a single quote is a literal, as Bash reads it.
 	 */
-	skipTo(open: string, closeCh: string, from: number): void {
+	skipTo(open: string, closeCh: string, from: number, quoted = false): void {
 		const s = this.s;
 		let depth = 0;
 		let j = from;
@@ -162,7 +163,7 @@ class Lexer {
 				j += 2;
 				continue;
 			}
-			if (ch === "'") {
+			if (ch === "'" && !quoted) {
 				const end = s.indexOf("'", j + 1);
 				if (end < 0) break;
 				j = end + 1;
@@ -191,11 +192,11 @@ class Lexer {
 	}
 
 	/** One `$`-expansion at this.i; returns its static text and whether it was dynamic. */
-	dollar(): Word {
+	dollar(quoted = false): Word {
 		const s = this.s;
 		const next = s[this.i + 1];
 		if (next === "(" && s[this.i + 2] === "(") {
-			this.skipTo("(", ")", this.i + 1);
+			this.skipTo("(", ")", this.i + 1, quoted);
 			return { text: "", dynamic: true };
 		}
 		if (next === "(") {
@@ -204,7 +205,7 @@ class Lexer {
 			return { text: "", dynamic: true };
 		}
 		if (next === "{") {
-			this.skipTo("{", "}", this.i + 1);
+			this.skipTo("{", "}", this.i + 1, quoted);
 			return { text: "", dynamic: true };
 		}
 		if (next !== undefined && /[A-Za-z_]/.test(next)) {
@@ -288,7 +289,7 @@ class Lexer {
 					this.i++;
 				}
 			} else if (c === "$") {
-				const w = this.dollar();
+				const w = this.dollar(true);
 				text += w.text;
 				dynamic ||= w.dynamic;
 			} else if (c === "`") {
@@ -527,6 +528,65 @@ const HISTORY = new Set([
 ]);
 /** find's actions whose operands, up to `;` or `+`, are a command. */
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+/** find primaries that take one value, read as data. */
+const FIND_VALUED = new Set(
+	`-name -iname -path -ipath -wholename -iwholename -regex -iregex -lname -ilname
+	-newer -anewer -cnewer -user -group -uid -gid -perm -size -type -xtype -mtime
+	-atime -ctime -mmin -amin -cmin -links -inum -samefile -maxdepth -mindepth
+	-fstype -used -printf -fprint -fprint0 -fls -context -regextype -files0-from`.split(
+		/\s+/,
+	),
+);
+/** find primaries and operators that take no value. */
+const FIND_BARE = new Set(
+	`-print -print0 -ls -delete -prune -quit -true -false -empty -readable -writable
+	-executable -depth -xdev -mount -follow -noleaf -ignore_readdir_race
+	-noignore_readdir_race -daystart -nouser -nogroup -not -a -o -and -or
+	( ) ! ,`.split(/\s+/),
+);
+
+/**
+ * The history write a find command's -exec, -execdir, -ok or -okdir runs.
+ * The expression is walked so a value such as -name's is never read as an
+ * action; a primary it does not know is Unclassifiable.
+ */
+function classifyFind(args: Word[]): string | null {
+	let k = 0;
+	while (k < args.length && /^-[HLPEXsxd]+$/.test((args[k] as Word).text)) k++;
+	while (k < args.length) {
+		const w = args[k] as Word;
+		if (!w.dynamic && (w.text.startsWith("-") || FIND_BARE.has(w.text))) break;
+		k++;
+	}
+	for (; k < args.length; k++) {
+		const w = args[k] as Word;
+		if (w.dynamic) throw new Unclassifiable("an unreadable find expression");
+		if (FIND_BARE.has(w.text)) continue;
+		if (FIND_VALUED.has(w.text)) {
+			k++;
+			continue;
+		}
+		if (w.text === "-fprintf") {
+			k += 2;
+			continue;
+		}
+		if (!FIND_EXEC.has(w.text))
+			throw new Unclassifiable(`a find primary it cannot read: ${w.text}`);
+		let end = k + 1;
+		while (
+			end < args.length &&
+			!(
+				!(args[end] as Word).dynamic &&
+				[";", "+"].includes((args[end] as Word).text)
+			)
+		)
+			end++;
+		const found = classify(args.slice(k + 1, end));
+		if (found) return found;
+		k = end;
+	}
+	return null;
+}
 
 function basename(path: string): string {
 	return path.slice(path.lastIndexOf("/") + 1);
@@ -668,24 +728,7 @@ function classify(words: Word[]): string | null {
 			}
 			continue;
 		}
-		if (name === "find") {
-			for (let k = i + 1; k < words.length; k++) {
-				if (!FIND_EXEC.has((words[k] as Word).text)) continue;
-				let end = k + 1;
-				while (
-					end < words.length &&
-					!(
-						!(words[end] as Word).dynamic &&
-						[";", "+"].includes((words[end] as Word).text)
-					)
-				)
-					end++;
-				const found = classify(words.slice(k + 1, end));
-				if (found) return found;
-				k = end;
-			}
-			return null;
-		}
+		if (name === "find") return classifyFind(words.slice(i + 1));
 		const wrapper = WRAPPERS[name];
 		if (wrapper) {
 			i = consume(words, i + 1, wrapper, name) + (wrapper.operands ?? 0);
