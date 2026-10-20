@@ -2,8 +2,9 @@
 // writes in it without running anything. It splits simple commands on
 // `;`, `&&`, `||`, `|`, `&`, newlines and parentheses, reads quotes and
 // escapes, lifts the commands inside `$(...)`, backticks and process
-// substitutions out as commands of their own, and skips heredoc bodies
-// through their terminator. It does not follow aliases, functions, scripts,
+// substitutions (nested in `${...}` and `$((...))` too) out as commands of
+// their own, reads `find -exec` operands as a command, and skips heredoc
+// bodies through their terminator. It does not follow aliases, functions, scripts,
 // `sh -c` strings or heredoc bodies: that is the accepted lexical gap. Syntax
 // it cannot place is Unclassifiable, which the guard refuses.
 
@@ -147,22 +148,44 @@ class Lexer {
 		this.heredocs = [];
 	}
 
-	/** Skip from an opening bracket to its partner; the content is dynamic. */
+	/**
+	 * Skip from an opening bracket to its partner; the content is dynamic.
+	 * A command substitution met inside is lifted out as commands of its own.
+	 */
 	skipTo(open: string, closeCh: string, from: number): void {
 		const s = this.s;
 		let depth = 0;
-		for (let j = from; j < s.length; j++) {
+		let j = from;
+		while (j < s.length) {
 			const ch = s[j];
-			if (ch === "\\") j++;
-			else if (ch === "'") {
+			if (ch === "\\") {
+				j += 2;
+				continue;
+			}
+			if (ch === "'") {
 				const end = s.indexOf("'", j + 1);
 				if (end < 0) break;
-				j = end;
-			} else if (ch === open) depth++;
+				j = end + 1;
+				continue;
+			}
+			if (ch === "$" && s[j + 1] === "(" && s[j + 2] !== "(") {
+				this.i = j + 2;
+				this.list(")");
+				j = this.i;
+				continue;
+			}
+			if (ch === "`") {
+				this.i = j + 1;
+				this.backtick();
+				j = this.i;
+				continue;
+			}
+			if (ch === open) depth++;
 			else if (ch === closeCh && --depth === 0) {
 				this.i = j + 1;
 				return;
 			}
+			j++;
 		}
 		throw new Unclassifiable(`an unclosed ${open}`);
 	}
@@ -344,7 +367,14 @@ export function simpleCommands(source: string): Word[][] {
 	return lexer.commands;
 }
 
-type Options = { flags: string[]; valued: string[] };
+type Options = {
+	flags: string[];
+	valued: string[];
+	/** Options whose value, if any, is attached with `=`. */
+	optional?: string[];
+	/** Operands the wrapper takes before the command. */
+	operands?: number;
+};
 
 const WRAPPERS: Record<string, Options & { assignments?: boolean }> = {
 	env: {
@@ -352,7 +382,12 @@ const WRAPPERS: Record<string, Options & { assignments?: boolean }> = {
 		valued: ["-u", "--unset", "-C", "--chdir"],
 		assignments: true,
 	},
-	command: { flags: ["-p"], valued: [] },
+	timeout: {
+		flags: ["--preserve-status", "--foreground", "-v", "--verbose"],
+		valued: ["-s", "--signal", "-k", "--kill-after"],
+		operands: 1,
+	},
+	caffeinate: { flags: ["-d", "-i", "-m", "-s", "-u"], valued: ["-t", "-w"] },
 	exec: { flags: ["-c", "-l"], valued: ["-a"] },
 	builtin: { flags: [], valued: [] },
 	time: { flags: ["-p"], valued: [] },
@@ -441,7 +476,6 @@ const GIT_GLOBAL: Options = {
 		"--icase-pathspecs",
 		"--no-optional-locks",
 		"--no-advice",
-		"--exec-path",
 		"--html-path",
 		"--man-path",
 		"--info-path",
@@ -461,6 +495,7 @@ const GIT_GLOBAL: Options = {
 		"--attr-source",
 		"--list-cmds",
 	],
+	optional: ["--exec-path"],
 };
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
@@ -487,9 +522,11 @@ const HISTORY = new Set([
 	"update-ref",
 	"am",
 	"clean",
+	"revert",
+	"pull",
 ]);
-/** Words that, after an unreadable command name, could make it a history write. */
-const SUSPECT = new Set([...HISTORY, "stash", "branch", "checkout", "switch"]);
+/** find's actions whose operands, up to `;` or `+`, are a command. */
+const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
 function basename(path: string): string {
 	return path.slice(path.lastIndexOf("/") + 1);
@@ -511,7 +548,7 @@ function consume(words: Word[], i: number, spec: Options, who: string): number {
 		if (t.startsWith("--")) {
 			const name = t.split("=")[0] as string;
 			if (spec.valued.includes(name)) i += t.includes("=") ? 1 : 2;
-			else if (spec.flags.includes(t)) i++;
+			else if (spec.flags.includes(t) || spec.optional?.includes(name)) i++;
 			else
 				throw new Unclassifiable(
 					`an option ${who} takes that it cannot read: ${t}`,
@@ -572,9 +609,22 @@ function classifyGit(args: Word[]): string | null {
 		const op = rest.find((w) => !w.text.startsWith("-") || w.dynamic);
 		if (op?.dynamic)
 			throw new Unclassifiable("an unreadable git stash operation");
-		return op?.text === "drop" ? "git stash drop" : null;
+		return op?.text === "drop" || op?.text === "clear"
+			? `git stash ${op.text}`
+			: null;
 	}
-	if (name === "branch" && shortCluster(rest, "DfmM", ["--force", "--move"]))
+	if (name === "reflog") {
+		const op = rest.find((w) => !w.text.startsWith("-") || w.dynamic);
+		if (op?.dynamic)
+			throw new Unclassifiable("an unreadable git reflog operation");
+		return op?.text === "expire" ? "git reflog expire" : null;
+	}
+	if (name === "gc" && shortCluster(rest, "", ["--prune"]))
+		return "git gc --prune";
+	if (
+		name === "branch" &&
+		shortCluster(rest, "dDfmM", ["--delete", "--force", "--move"])
+	)
 		return "git branch (delete, force or move)";
 	if (name === "checkout" && shortCluster(rest, "B", []))
 		return "git checkout -B";
@@ -596,26 +646,49 @@ function classify(words: Word[]): string | null {
 			i++;
 			continue;
 		}
-		if (w.dynamic) {
-			const rest = words.slice(i);
-			if (
-				/git/.test(w.text) ||
-				rest.some((r) => !r.dynamic && SUSPECT.has(r.text))
-			)
-				throw new Unclassifiable(
-					"a command name it cannot read before a git-like word",
-				);
+		if (w.dynamic) throw new Unclassifiable("a command name it cannot read");
+		const name = basename(w.text);
+		if (name === "command") {
+			// command's own options: -v and -V look a name up, -p runs it.
+			i++;
+			for (; i < words.length; i++) {
+				const t = (words[i] as Word).text;
+				if ((words[i] as Word).dynamic)
+					throw new Unclassifiable("an unreadable option to command");
+				if (t === "--") {
+					i++;
+					break;
+				}
+				if (!/^-[A-Za-z]+$/.test(t)) break;
+				if (/[vV]/.test(t)) return null;
+				if (!/^-p+$/.test(t))
+					throw new Unclassifiable(
+						`an option command takes that it cannot read: ${t}`,
+					);
+			}
+			continue;
+		}
+		if (name === "find") {
+			for (let k = i + 1; k < words.length; k++) {
+				if (!FIND_EXEC.has((words[k] as Word).text)) continue;
+				let end = k + 1;
+				while (
+					end < words.length &&
+					!(
+						!(words[end] as Word).dynamic &&
+						[";", "+"].includes((words[end] as Word).text)
+					)
+				)
+					end++;
+				const found = classify(words.slice(k + 1, end));
+				if (found) return found;
+				k = end;
+			}
 			return null;
 		}
-		const name = basename(w.text);
 		const wrapper = WRAPPERS[name];
 		if (wrapper) {
-			if (
-				name === "command" &&
-				words.slice(i + 1).some((x) => /^-[A-Za-z]*[vV]/.test(x.text))
-			)
-				return null;
-			i = consume(words, i + 1, wrapper, name);
+			i = consume(words, i + 1, wrapper, name) + (wrapper.operands ?? 0);
 			if (wrapper.assignments)
 				while (i < words.length && ASSIGNMENT.test((words[i] as Word).text))
 					i++;

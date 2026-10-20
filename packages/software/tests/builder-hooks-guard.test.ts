@@ -176,6 +176,12 @@ describe("BH-6: history classification", () => {
 		"git update-ref refs/heads/x HEAD",
 		"git am patch.mbox",
 		`git clean ${DASH}fd`,
+		"git revert HEAD",
+		"git pull origin main",
+		"git stash clear",
+		`git branch ${DASH}d old`,
+		"git reflog expire --all",
+		`git gc ${DASH}${DASH}prune=now`,
 	];
 	test.each(denied)("denies %s", (command) => {
 		expect(denial(bash(command))).toEqual({
@@ -216,6 +222,17 @@ describe("BH-6: history classification", () => {
 		`git ${DASH}${DASH}git-dir=.git ${DASH}${DASH}work-tree . commit`,
 		`git ${DASH}p ${DASH}${DASH}no-pager ${DASH}${DASH}namespace n commit`,
 		"git 2>/dev/null commit",
+		`command git commit ${DASH}v`,
+		`command git push ${DASH}v`,
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion
+		"echo ${x:-$(git commit)}",
+		"echo $(( $(git commit) + 1 ))",
+		`git ${DASH}${DASH}exec-path=/tmp commit`,
+		"timeout 5 git commit -m x",
+		`timeout ${DASH}s KILL ${DASH}${DASH}preserve-status 5 git push`,
+		`caffeinate ${DASH}i git push`,
+		`find . ${DASH}exec git commit \\;`,
+		`find . ${DASH}execdir git push {} +`,
 	])("denies through wrappers, separators and substitutions: %s", (command) => {
 		expect(denial(bash(command))?.permissionDecision).toBe("deny");
 	});
@@ -230,6 +247,9 @@ describe("BH-6: history classification", () => {
 		"git add app/x.rb",
 		"git stash",
 		"git stash push -m wip",
+		"git stash list",
+		"git gc",
+		"git reflog",
 		`git branch ${DASH}${DASH}list`,
 		`git checkout ${DASH}b new`,
 		"grep commit file",
@@ -245,7 +265,9 @@ describe("BH-6: history classification", () => {
 		["git commit 'unclosed", "an unclosed single quote"],
 		["echo $(git commit", "an unclosed $( or ("],
 		["cat <<EOF\ngit push\n", "an unterminated heredoc"],
-		["$GIT commit", "a command name it cannot read before a git-like word"],
+		["$GIT commit", "a command name it cannot read"],
+		['RUN="git commit"; $RUN', "a command name it cannot read"],
+		['"$PWD/bin/tool" status', "a command name it cannot read"],
 		[
 			`git ${DASH}${DASH}frobnicate commit`,
 			`an option git takes that it cannot read: ${DASH}${DASH}frobnicate`,
