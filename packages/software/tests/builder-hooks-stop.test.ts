@@ -183,6 +183,16 @@ describe("BH-12: ordered evaluation and gaps", () => {
 		expect(f.recorded()).toEqual(["tests test/models/a_test.rb"]);
 	});
 
+	test("each changed file reaches a gate as one argument", () => {
+		prepare();
+		f.write("app/with space.rb", "x\n");
+		f.write("app/-dash.rb", "x\n");
+		expect(stopHook().code).toBe(0);
+		expect(f.recordedArgv("lint")).toEqual([
+			["app/-dash.rb", "app/with space.rb"],
+		]);
+	});
+
 	test("an empty selection skips its gate", () => {
 		prepare();
 		f.write("notes.txt", "x\n");
@@ -293,6 +303,14 @@ describe("BH-14: bounded state", () => {
 		expect(existsSync(counter())).toBe(false);
 		f.set("lint", "code", "1");
 		expect(stopHook().stderr).toContain("(attempt 1 of 3)");
+	});
+
+	test("a counter above three reads as three", () => {
+		writeFileSync(counter(), "7\n");
+		const r = stopHook();
+		expect(r.code).toBe(0);
+		expect(r.stderr).toStartWith("Stop gate: still failing after 3 attempts:");
+		expect(f.logLines().at(-1)).toContain(" GIVE-UP ");
 	});
 
 	test("stop_hook_active does not change the count", () => {
@@ -474,6 +492,9 @@ describe("BH-16: recheck independence", () => {
 		});
 		const failing = recheck();
 		expect(failing.code).toBe(1);
+		expect(
+			failing.json.result.checks.map((c: { check: string }) => c.check),
+		).toEqual(["lint", "exhale"]);
 		expect(failing.json).toMatchObject({
 			status: "findings",
 			failing: 1,

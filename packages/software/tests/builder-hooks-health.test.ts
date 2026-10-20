@@ -345,6 +345,9 @@ describe("BH-10: checker arguments", () => {
 		f.set("checker", "out", rubocop());
 		expect(edited(name).stdout).toBe("");
 		expect(f.recorded()).toEqual([`checker ${DASH}${DASH}format json ${name}`]);
+		expect(f.recordedArgv("checker")).toEqual([
+			[`${DASH}${DASH}format`, "json", name],
+		]);
 		expect(existsSync(join(f.repo, "pwned"))).toBe(false);
 	});
 

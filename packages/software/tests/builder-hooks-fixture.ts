@@ -126,6 +126,8 @@ export class Fixture {
 			path,
 			`#!/bin/sh
 printf '%s\\n' "${name} $*" >> "$RECORD"
+printf '%s\\0%s\\0' "${name}" "$#" >> "$RECORD.argv"
+for arg in "$@"; do printf '%s\\0' "$arg" >> "$RECORD.argv"; done
 [ -f "$CONTROL/${name}.out" ] && cat "$CONTROL/${name}.out"
 [ -f "$CONTROL/${name}.sleep" ] && sleep "$(cat "$CONTROL/${name}.sleep")"
 exit "$(cat "$CONTROL/${name}.code" 2>/dev/null || echo 0)"
@@ -137,6 +139,25 @@ exit "$(cat "$CONTROL/${name}.code" 2>/dev/null || echo 0)"
 
 	set(name: string, ext: "out" | "code" | "sleep", value: string) {
 		writeFileSync(join(this.control, `${name}.${ext}`), value);
+	}
+
+	/** Each call of the fake `name`, as its exact argument vector. */
+	recordedArgv(name: string): string[][] {
+		let parts: string[];
+		try {
+			parts = readFileSync(`${this.record}.argv`, "utf8").split("\0");
+		} catch {
+			return [];
+		}
+		const calls: string[][] = [];
+		for (let i = 0; i + 1 < parts.length; ) {
+			const who = parts[i] as string;
+			const count = Number(parts[i + 1]);
+			const args = parts.slice(i + 2, i + 2 + count);
+			if (who === name) calls.push(args);
+			i += 2 + count;
+		}
+		return calls;
 	}
 
 	recorded(): string[] {
