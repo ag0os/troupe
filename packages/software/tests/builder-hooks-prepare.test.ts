@@ -163,6 +163,39 @@ describe("BH-2: git filter drivers", () => {
 	});
 });
 
+describe("BH-2: a filter listing that fails", () => {
+	test("is an inability in every mode", () => {
+		f.prepare(f.input());
+		const config = join(f.repo, ".git/config");
+		writeFileSync(config, `${readFileSync(config, "utf8")}[broken\n`);
+		const why = "the git configuration cannot be listed";
+		const guard = f.hook("guard", {
+			tool_name: "Bash",
+			tool_input: { command: "echo ok" },
+		});
+		expect(guard.code).toBe(2);
+		expect(guard.stderr).toContain(why);
+		const health = f.hook("health", {
+			tool_name: "Edit",
+			tool_input: { file_path: join(f.repo, "README.md") },
+		});
+		expect(health.code).toBe(0);
+		expect(
+			JSON.parse(health.stdout).hookSpecificOutput.additionalContext,
+		).toContain(why);
+		const stop = f.hook("stop", { session_id: "s1", stop_hook_active: false });
+		expect(stop.code).toBe(2);
+		expect(stop.stderr).toContain(why);
+		const r = f.run(["recheck", "--manifest", f.manifest, "--json"]);
+		expect(r.code).toBe(2);
+		expect(JSON.stringify(JSON.parse(r.stdout).findings)).toContain(why);
+		f.runDir = join(f.root, "run2");
+		const again = f.prepare(f.input());
+		expect(again.code).toBe(2);
+		expect(again.json.error.message).toContain(why);
+	});
+});
+
 describe("BH-2: a filter whose name cannot be neutralized", () => {
 	test("is an inability in every mode, and never runs", () => {
 		const canary = join(f.root, "filter-canary");

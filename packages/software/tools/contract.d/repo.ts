@@ -36,7 +36,7 @@ export function git(
 	cwd: string,
 	args: string[],
 	env = GIT_ENV,
-): { ok: boolean; stdout: string; stderr: string } {
+): { ok: boolean; code: number | null; stdout: string; stderr: string } {
 	const child = Bun.spawnSync(["git", ...GIT_CONFIG, ...args], {
 		cwd,
 		env,
@@ -46,6 +46,7 @@ export function git(
 	});
 	return {
 		ok: child.exitCode === 0,
+		code: child.exitCode,
 		stdout: child.stdout.toString(),
 		stderr: child.stderr.toString(),
 	};

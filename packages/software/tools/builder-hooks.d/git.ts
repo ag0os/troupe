@@ -26,8 +26,17 @@ const git = (repo: string, args: string[]) => contractGit(repo, args, HOOK_ENV);
 
 const cache = new Map<string, string[]>();
 
+/** Every filter name configured; a listing that fails is an inability. */
 function filterNames(repo: string): string[] {
 	const listed = git(repo, ["config", "-z", "--get-regexp", "^filter\\."]);
+	// Exit 1 with no output is git's "no such key", an empty listing.
+	const none =
+		listed.code === 1 && listed.stdout === "" && listed.stderr === "";
+	if (!listed.ok && !none)
+		throw new ToolError(
+			"filter-list",
+			`the git configuration cannot be listed (${listed.stderr.trim().split("\n")[0] || `git exited ${listed.code}`})`,
+		);
 	const names = new Set<string>();
 	for (const entry of listed.stdout.split("\0")) {
 		const key = entry.split("\n")[0] ?? "";
