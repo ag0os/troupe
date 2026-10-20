@@ -254,6 +254,23 @@ describe("BH-9: health inability and budget", () => {
 		}
 	});
 
+	test("an event holding a NUL byte is an inability, said as context", () => {
+		prepare();
+		const event = `{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"${join(f.repo, "app/a.rb")}\u0000x"}}`;
+		const r = f.run(["health"], {
+			stdin: event,
+			env: { SHEPHERD_HOOK_MANIFEST: f.manifest, SHEPHERD_HOOK_LOG: f.log },
+		});
+		expect(r.code).toBe(0);
+		expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toEndWith(
+			": the event is not valid JSON",
+		);
+		expect(f.recorded()).toEqual([]);
+		expect(f.logLines().at(-1)).toContain(
+			" COULD-NOT-RUN the event is not valid JSON",
+		);
+	});
+
 	test("a missing launcher in the generated command and a runtime that exits silently answer as context", () => {
 		prepare();
 		const settings = JSON.parse(

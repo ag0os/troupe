@@ -44,8 +44,16 @@ fail() {
 		log=$SHEPHERD_HOOK_LOG
 		case $log in
 		/*/hooks.log)
-			if [ -f "${log%/hooks.log}/builder-manifest.json" ]; then
-				printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$1" >>"$log" 2>/dev/null
+			# Only beside a manifest whose repository does not hold the run
+			# directory's real path: a redirected run directory gets no log.
+			rundir=$(cd "${log%/hooks.log}" 2>/dev/null && pwd -P) || rundir=
+			repo=
+			[ -z "$rundir" ] || repo=$(sed -n 's/^  "repo": "\([^"\\]*\)",$/\1/p' "$rundir/builder-manifest.json" 2>/dev/null | head -n 1)
+			if [ -n "$repo" ]; then
+				case "$rundir/" in
+				"$repo"/*) ;;
+				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$1" >>"$rundir/hooks.log" 2>/dev/null ;;
+				esac
 			fi
 			;;
 		esac
@@ -66,8 +74,14 @@ cd "$dir" || fail "cannot enter $dir"
 if [ "$mode" = health ]; then
 	# Health answers only through context: a runtime that exits without
 	# answering is said as context too, so bun runs as a child here.
-	hook_input=$(cat 2>/dev/null)
-	out=$(printf '%s' "$hook_input" | bun --no-install --env-file=/dev/null "$dir/main.ts" "$@")
+	# The event goes through a file: a shell variable would drop a NUL byte
+	# and check a different path from the one in the event.
+	event=$(mktemp "${TMPDIR:-/tmp}/builder-hooks-event.XXXXXX") || fail "the event cannot be held"
+	trap 'rm -f "$event"' EXIT
+	cat >"$event"
+	hook_input=$(tr -d '\000' <"$event")
+	[ "$(tr -cd '\000' <"$event" | wc -c)" -eq 0 ] || fail "the event is not valid JSON"
+	out=$(bun --no-install --env-file=/dev/null "$dir/main.ts" "$@" <"$event")
 	code=$?
 	if [ -n "$out" ]; then
 		printf '%s\n' "$out"
