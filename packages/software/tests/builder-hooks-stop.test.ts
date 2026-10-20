@@ -593,28 +593,50 @@ describe("BH-16: recheck independence", () => {
 		expect(codes).toContain("check-failed");
 	});
 
-	test("after a failure every phase runs: tests, lint, Contract tests, floors, exhale", () => {
+	test("after a failed lint every phase runs: Contract tests, the adopted floor's checker, exhale", () => {
+		const floors = f.fake("floorcheck");
+		f.write(".rubocop_todo.yml", "# floor\n");
+		f.commit("Floor");
+		f.set(
+			"floorcheck",
+			"out",
+			JSON.stringify({
+				summary: { offense_count: 0, inspected_file_count: 1 },
+				files: [{ path: "app/posts/show.rb", offenses: [] }],
+			}),
+		);
 		prepare({
 			health: {
 				stacks: [
 					{
 						extensions: [".rb"],
-						argv: [gates.lint, "{file}"],
+						argv: [floors, "--format", "json", "{file}"],
 						format: "rubocop-json",
-						floor: null,
+						floor: ".rubocop_todo.yml",
 					},
 				],
 				recheck: [[gates.exhale, "--base", "{base}"]],
 			},
 		});
-		f.write("test/models/a_test.rb", "changed\n");
 		f.write("app/posts/show.rb", "changed\n");
-		f.set("tests", "code", "1");
+		f.set("lint", "code", "1");
 		const r = recheck();
 		expect(r.code).toBe(1);
-		expect(r.json.result.checks.map((c: { check: string }) => c.check)).toEqual(
-			["tests", "lint", "contracts", `floors ${gates.lint}`, "exhale"],
-		);
+		expect(
+			r.json.result.checks.map((c: { check: string; status: string }) => [
+				c.check,
+				c.status,
+			]),
+		).toEqual([
+			["lint", "fail"],
+			["contracts", "pass"],
+			[`floors ${floors}`, "pass"],
+			["exhale", "pass"],
+		]);
+		expect(f.recordedArgv("floorcheck")).toEqual([
+			["--format", "json", "app/posts/show.rb"],
+		]);
+		expect(ran("tests")).toEqual([`tests test/contract/writing_test.rb`]);
 	});
 
 	test("finds failures after the cap and an exemption, then succeeds after correction", () => {
