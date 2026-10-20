@@ -2195,6 +2195,45 @@ describe("parse structure gates output (fix round 1, findings 3 to 6 and 9)", ()
 	});
 });
 
+describe("protocol edges and prefix scope (fix round 1, findings 7, 8 and 11)", () => {
+	test("an invalid bracket class in a glob is a located path-invalid finding, not an exception", () => {
+		writing(undefined, { covers: ["app/writing/", "app/[z-a].rb"] });
+		const { code, report } = json(["lint"]);
+		expect(code).toBe(1);
+		expect(report.findings.map((f) => `${f.line} ${f.code}`)).toEqual([
+			"5 path-invalid",
+		]);
+	});
+
+	test("--json after a consumed option still gives one JSON error object", () => {
+		const result = run(["diff", "--head", "--base", "--json"]);
+		expect({ code: result.code, stderr: result.stderr }).toEqual({
+			code: 2,
+			stderr: "",
+		});
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			status: "error",
+			error: { code: "ref-missing", message: "head not found: --base" },
+		});
+	});
+
+	test("a PRODUCT section sharing a file's prefix is no prefix-shared pair; its legacy warning names the file (ruling 4)", () => {
+		writing();
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: writing notes\n\n- **WR-3** drafts autosave.\n",
+		);
+		const { code, report } = json(["lint"]);
+		expect(code).toBe(0);
+		expect(
+			report.findings.map((f) => `${f.file} ${f.code} ${f.severity}`),
+		).toEqual(["PRODUCT.md legacy-format warning"]);
+		expect(report.findings[0]?.message).toContain(
+			"its WR section still holds ids beside docs/contracts/writing.md",
+		);
+	});
+});
+
 /** Every file under the repository, with its content, for a before/after check. */
 function snapshot(dir: string): Record<string, string> {
 	const out: Record<string, string> = {};

@@ -724,7 +724,15 @@ function coverClaims(
 		return [{ path: base.path, directory: base.kind === "dir", pattern }];
 	}
 	const dirOnly = pattern.endsWith("/");
-	const regex = globRegex(pattern.replace(/\/+$/, ""));
+	let regex: RegExp;
+	try {
+		regex = globRegex(pattern.replace(/\/+$/, ""));
+	} catch {
+		return {
+			code: "path-invalid",
+			message: `${pattern} has an invalid bracket class`,
+		};
+	}
 	const matches = [
 		...(dirOnly ? [] : inv.files.map((path) => ({ path, directory: false }))),
 		...inv.dirs.map((path) => ({ path, directory: true })),
@@ -848,16 +856,31 @@ export function analyze(top: string, cwd: string, args: string[]): Analysis {
 	const reports = [...docs].map(([file, doc]) =>
 		checkFile(file, doc, ctx, all),
 	);
-	for (const s of sections)
+	// A section sharing a file's prefix is that component mid-migration, not
+	// a second component: its warning names the file (ruling 4).
+	for (const s of sections) {
+		const beside = [...new Set(s.ids.map(({ id }) => id.replace(/-\d+$/, "")))]
+			.sort()
+			.flatMap((prefix) => {
+				const owners = reports
+					.filter((r) => r.obligations.some((o) => o.prefix === prefix))
+					.map((r) => r.file);
+				return owners.length
+					? [
+							`its ${prefix} section still holds ids beside ${owners.join(" and ")}`,
+						]
+					: [];
+			});
 		all.push(
 			finding(
 				PRODUCT,
 				"legacy-format",
-				`section "${s.name}" is not yet a Contract file; it is read by name and ID only, and its proof coverage is unknown`,
+				`section "${s.name}" is not yet a Contract file; it is read by name and ID only, and its proof coverage is unknown${beside.map((b) => `; ${b}`).join("")}`,
 				s.line,
 			),
 		);
-	all.push(...sharedPrefixes(reports, sections));
+	}
+	all.push(...sharedPrefixes(reports));
 	const conflicts = directoryConflicts(reports);
 	for (const c of conflicts) all.push(...c.findings);
 
@@ -974,10 +997,8 @@ function directoryConflicts(
 	return [...out.values()];
 }
 
-function sharedPrefixes(
-	reports: FileReport[],
-	sections: ProductSection[],
-): Finding[] {
+/** Pairs of Contract files that share an obligation prefix (ruling 1). */
+function sharedPrefixes(reports: FileReport[]): Finding[] {
 	const users = new Map<string, Map<string, boolean>>();
 	const use = (prefix: string, file: string, legacy: boolean) => {
 		const files = users.get(prefix) ?? new Map<string, boolean>();
@@ -987,8 +1008,6 @@ function sharedPrefixes(
 	for (const r of reports)
 		for (const o of r.obligations)
 			use(o.prefix, r.file, r.format !== "canonical");
-	for (const s of sections)
-		for (const { id } of s.ids) use(id.replace(/-\d+$/, ""), PRODUCT, true);
 	const out: Finding[] = [];
 	for (const [prefix, files] of users) {
 		const list = [...files].sort(([a], [b]) => (a < b ? -1 : 1));

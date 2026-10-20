@@ -53,11 +53,23 @@ type Options = {
 const HELP = ["--help", "-h"];
 const VALUED = ["--base", "--head"];
 
+/**
+ * The arguments after the command, each paired with the value it consumes:
+ * --base and --head take the next argument, whatever it looks like. Both
+ * parsing and the error reporter read arguments through this one scanner.
+ */
+function scan(rest: string[]): { arg: string; value?: string }[] {
+	const out: { arg: string; value?: string }[] = [];
+	for (let i = 0; i < rest.length; i++) {
+		const arg = rest[i] as string;
+		out.push(VALUED.includes(arg) ? { arg, value: rest[++i] } : { arg });
+	}
+	return out;
+}
+
 /** Whether --json is given as a flag, not as the value of --base or --head. */
 function wantsJson(argv: string[]): boolean {
-	return argv.some(
-		(arg, i) => arg === "--json" && !VALUED.includes(argv[i - 1] ?? ""),
-	);
+	return scan(argv).some((t) => t.arg === "--json");
 }
 
 function parse(argv: string[]): Options | "help" {
@@ -73,8 +85,7 @@ function parse(argv: string[]): Options | "help" {
 		json: false,
 		line: false,
 	};
-	for (let i = 0; i < rest.length; i++) {
-		const arg = rest[i] as string;
+	for (const { arg, value } of scan(rest)) {
 		const refused = () =>
 			new ToolError("usage", `contract ${command} takes no ${arg}; see --help`);
 		if (HELP.includes(arg)) return "help";
@@ -84,7 +95,6 @@ function parse(argv: string[]): Options | "help" {
 			options.line = true;
 		} else if (arg === "--base" || arg === "--head") {
 			if (command !== "diff") throw refused();
-			const value = rest[++i];
 			if (value === undefined)
 				throw new ToolError("usage", `${arg} needs a value; see --help`);
 			options[arg === "--base" ? "base" : "head"] = value;
