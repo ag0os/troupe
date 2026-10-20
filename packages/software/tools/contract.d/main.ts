@@ -1,6 +1,7 @@
 // contract: the software package's Contract tool. Run by ../contract, which
 // records the caller's directory in CONTRACT_TARGET_CWD. Read only: it reads
 // the worktree and git objects and writes nothing but its report.
+import { diff } from "./diff";
 import { type Analysis, analyze, type Finding } from "./lint";
 import { PRODUCT, repositoryRoot, ToolError } from "./repo";
 
@@ -49,9 +50,19 @@ type Options = {
 	head?: string;
 };
 
+const HELP = ["--help", "-h"];
+const VALUED = ["--base", "--head"];
+
+/** Whether --json is given as a flag, not as the value of --base or --head. */
+function wantsJson(argv: string[]): boolean {
+	return argv.some(
+		(arg, i) => arg === "--json" && !VALUED.includes(argv[i - 1] ?? ""),
+	);
+}
+
 function parse(argv: string[]): Options | "help" {
-	if (argv.includes("--help") || argv.includes("-h")) return "help";
 	const [command, ...rest] = argv;
+	if (HELP.includes(command ?? "")) return "help";
 	if (command === undefined)
 		throw new ToolError("usage", "a command is needed; see --help");
 	if (!(COMMANDS as readonly string[]).includes(command))
@@ -66,6 +77,7 @@ function parse(argv: string[]): Options | "help" {
 		const arg = rest[i] as string;
 		const refused = () =>
 			new ToolError("usage", `contract ${command} takes no ${arg}; see --help`);
+		if (HELP.includes(arg)) return "help";
 		if (arg === "--json") options.json = true;
 		else if (arg === "--line") {
 			if (command !== "coverage") throw refused();
@@ -279,7 +291,7 @@ function report(options: Options, outcome: Outcome): number {
 }
 
 function fail(argv: string[], error: ToolError): number {
-	if (argv.includes("--json")) {
+	if (wantsJson(argv)) {
 		const command = (COMMANDS as readonly string[]).includes(argv[0] ?? "")
 			? argv[0]
 			: null;
@@ -308,6 +320,12 @@ function main(argv: string[]): number {
 		}
 		const cwd = process.env.CONTRACT_TARGET_CWD || process.cwd();
 		const top = repositoryRoot(cwd);
+		if (options.command === "diff")
+			return report(options, {
+				findings: [],
+				...diff(top, options.base, options.head),
+				exit: 0,
+			});
 		const analysis = analyze(top, cwd, options.files);
 		if (options.command === "coverage")
 			return report(options, coverage(analysis, options.line));

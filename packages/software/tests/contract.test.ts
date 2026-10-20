@@ -11,6 +11,7 @@ import {
 } from "bun:test";
 import {
 	cpSync,
+	existsSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
@@ -1622,6 +1623,380 @@ describe("map ownership (CT-8)", () => {
 				"",
 			].join("\n"),
 		);
+	});
+});
+
+type Change = {
+	kind: string;
+	file: string;
+	component?: string;
+	section?: string;
+	obligationId?: string;
+	before: { file: string; line: number } | null;
+	after: { file: string; line: number } | null;
+	fields?: Record<string, { before: unknown; after: unknown }>;
+	obligationKind?: string;
+	rewordedLine?: { present: boolean; new: boolean };
+};
+
+const changes = (args: string[] = []) => {
+	const { code, report } = json(["diff", ...args]);
+	expect(code).toBe(0);
+	return report.result.changes as Change[];
+};
+const brief = (list: Change[]) =>
+	list.map((c) =>
+		[
+			c.kind,
+			c.obligationId ?? c.section ?? c.component ?? c.file,
+			...Object.keys(c.fields ?? {}),
+		].join(" "),
+	);
+
+describe("bounded diff (CT-10)", () => {
+	beforeEach(() => {
+		writing();
+		commit("Writing");
+		git("checkout", "-q", "-b", "feature");
+	});
+
+	test("compares head with its merge base, not the base tip; reports refs and commits", () => {
+		const fork = git("rev-parse", "HEAD");
+		writing(
+			`${obligation("WR-1", { title: "posts render fully" })}\n${obligation("WR-2")}`,
+		);
+		const head = commit("Reword");
+		git("checkout", "-q", "main");
+		writing(
+			`${obligation("WR-1")}\n${obligation("WR-2")}\n${obligation("WR-9")}`,
+		);
+		const tip = commit("Main moves");
+		git("checkout", "-q", "feature");
+		const { code, report } = json(["diff"]);
+		expect(code).toBe(0);
+		expect(report.status).toBe("clean");
+		expect(report.result).toMatchObject({
+			base: { requested: "main", commit: tip },
+			head: { requested: "HEAD", commit: head },
+			mergeBase: fork,
+			complete: true,
+		});
+		expect(brief(report.result.changes as Change[])).toEqual([
+			"obligation-reworded WR-1 title",
+		]);
+		const text = run(["diff"]);
+		expect(text.stdout).toBe(
+			`diff: base main ${tip.slice(0, 12)}, head HEAD ${head.slice(0, 12)}, merge base ${fork.slice(0, 12)}\nobligation-reworded docs/contracts/writing.md WR-1: title\ncontract diff: clean\n`,
+		);
+	});
+
+	test("base defaults to origin/HEAD when it resolves; --head names another commit", () => {
+		const fork = git("rev-parse", "HEAD");
+		writing(`${obligation("WR-1")}`, {}, 1);
+		const first = commit("Drop WR-2");
+		writing(`${obligation("WR-1", { reason: "Changed." })}`, {}, 1);
+		commit("Change WR-1");
+		git("update-ref", "refs/remotes/origin/main", fork);
+		git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+		const { report } = json(["diff", "--head", first]);
+		expect(report.result).toMatchObject({
+			base: { requested: "origin/HEAD", commit: fork },
+			head: { requested: first, commit: first },
+		});
+		expect(brief(report.result.changes as Change[])).toEqual([
+			"coverage-line-changed writing coverage",
+			"obligation-removed WR-2",
+		]);
+		expect(brief(changes())).toEqual([
+			"coverage-line-changed writing coverage",
+			"obligation-changed WR-1 reason",
+			"obligation-removed WR-2",
+		]);
+	});
+
+	test("the worktree, the index and untracked files change nothing; no lint and no patch", () => {
+		writing(`${obligation("WR-1", { reason: null })}\n${obligation("WR-2")}`);
+		commit("Drop a reason");
+		const committed = run(["diff", "--json"]).stdout;
+		writing(`${obligation("WR-7")}`, {}, 1);
+		write(
+			"docs/contracts/staged.md",
+			`${frontMatter("staged")}${coverageLine(0, 0)}`,
+		);
+		git("add", "docs/contracts/staged.md");
+		write(
+			"docs/contracts/untracked.md",
+			`${frontMatter("untracked")}${coverageLine(0, 0)}`,
+		);
+		rmSync(join(repo, WRITING_TEST));
+		expect(run(["diff", "--json"]).stdout).toBe(committed);
+		const report = JSON.parse(committed) as Report;
+		expect(report.findings).toEqual([]);
+		expect(Object.keys(report.result).sort()).toEqual([
+			"base",
+			"changes",
+			"complete",
+			"head",
+			"limits",
+			"mergeBase",
+		]);
+		expect(brief(report.result.changes as Change[])).toEqual([
+			"obligation-changed WR-1 reason",
+		]);
+		expect(run(["diff"]).stdout).not.toContain("@@");
+	});
+
+	test("hostile git display and driver configuration changes nothing and runs nothing", () => {
+		writing(
+			`${obligation("WR-1", { title: "renamed" })}\n${obligation("WR-2")}`,
+		);
+		commit("Rename");
+		const plain = run(["diff", "--json"]).stdout;
+		expect(
+			brief((JSON.parse(plain) as Report).result.changes as Change[]),
+		).toEqual(["obligation-reworded WR-1 title"]);
+		const sentinel = join(root, "driver-ran");
+		const driver = join(root, "driver.sh");
+		writeFileSync(driver, `#!/bin/sh\ntouch "${sentinel}"\ncat "$@"\n`, {
+			mode: 0o755,
+		});
+		for (const [key, value] of [
+			["color.ui", "always"],
+			["core.quotepath", "true"],
+			["diff.noprefix", "true"],
+			["diff.relative", "true"],
+			["log.showSignature", "true"],
+			["diff.external", driver],
+			["diff.hostile.textconv", driver],
+			["core.pager", driver],
+			["core.fsmonitor", driver],
+		] as const)
+			git("config", key, value);
+		writeFileSync(join(repo, ".git/info/attributes"), "*.md diff=hostile\n");
+		expect(run(["diff", "--json"], join(repo, "app"), {}).stdout).toBe(plain);
+		expect(existsSync(sentinel)).toBe(false);
+	});
+
+	test("missing objects, unrelated histories and several merge bases exit 2 with complete false", () => {
+		writing(
+			`${obligation("WR-1", { title: "renamed" })}\n${obligation("WR-2")}`,
+		);
+		commit("Rename");
+		const blob = git("rev-parse", "HEAD:docs/contracts/writing.md");
+		const object = join(repo, ".git/objects", blob.slice(0, 2), blob.slice(2));
+		const saved = readFileSync(object);
+		rmSync(object, { force: true });
+		const missing = json(["diff"]);
+		expect(missing).toMatchObject({
+			code: 2,
+			report: {
+				status: "error",
+				result: { complete: false },
+				error: { code: "object-missing" },
+			},
+		});
+		writeFileSync(object, saved);
+		git("checkout", "-q", "--orphan", "lonely");
+		commit("Lonely");
+		expect(json(["diff"])).toMatchObject({
+			code: 2,
+			report: { error: { code: "unrelated-histories" } },
+		});
+		git("checkout", "-q", "-f", "main");
+		git("checkout", "-q", "-b", "a");
+		write("a.txt", "a\n");
+		const a1 = commit("a1");
+		git("checkout", "-q", "main");
+		git("checkout", "-q", "-b", "b");
+		write("b.txt", "b\n");
+		const b1 = commit("b1");
+		git("merge", "-q", "--no-edit", a1);
+		git("checkout", "-q", "a");
+		git("merge", "-q", "--no-edit", b1);
+		const result = json(["diff", "--base", "b"]);
+		expect(result).toMatchObject({
+			code: 2,
+			report: { error: { code: "multiple-merge-bases" } },
+		});
+		expect(result.report.error?.message).toContain(a1.slice(0, 12));
+	});
+
+	test("refs starting with a dash are refs, never options, and nothing is written", () => {
+		for (const args of [
+			["--base", "--output=written"],
+			["--head", "-h"],
+			["--base", "--json"],
+		]) {
+			const result = run(["diff", ...args]);
+			expect({ args, code: result.code, stdout: result.stdout }).toEqual({
+				args,
+				code: 2,
+				stdout: "",
+			});
+			expect(result.stderr).toMatch(/^contract: (base|head) not found: -/);
+		}
+		expect(existsSync(join(repo, "written"))).toBe(false);
+		expect(json(["diff", "--base", "nosuch"])).toMatchObject({
+			code: 2,
+			report: { error: { code: "ref-missing" } },
+		});
+	});
+
+	test("an identity ambiguity in a snapshot is a located error, not an empty report", () => {
+		writing(`${obligation("WR-1")}\n${obligation("WR-01")}`);
+		commit("Duplicate");
+		const result = run(["diff"]);
+		expect(result.code).toBe(2);
+		expect(result.stderr).toBe(
+			"contract: docs/contracts/writing.md:23 at head: WR-01 has the identity of WR-1 at line 15\n",
+		);
+	});
+
+	test("PRODUCT sections compare by name and ID; a move into a file is a removal and an addition", () => {
+		git("checkout", "-q", "main");
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\n- **HP-1** lists posts.\n\n## Contract: reading\n\n- **RD-1** reads.\n- **RD-2** pages.\n",
+		);
+		commit("Product");
+		git("checkout", "-q", "-B", "feature");
+		write(
+			"PRODUCT.md",
+			"# Product\n\n## Contract: home page\n\n- **HP-1** lists posts.\n- **HP-2** has a title.\n\n## Contract: reading\n\nMoved to `docs/contracts/reading.md` (RD-1 to RD-2).\n",
+		);
+		write(
+			"docs/contracts/reading.md",
+			`${frontMatter("reading", { tests: [WRITING_TEST] })}${coverageLine(2, 2)}\n${obligation("RD-1")}\n${obligation("RD-2")}`,
+		);
+		commit("Move reading");
+		expect(brief(changes())).toEqual([
+			"product-id-added HP-2",
+			"product-section-removed reading",
+			"component-added reading",
+			"obligation-added RD-1",
+			"obligation-added RD-2",
+		]);
+		expect(
+			changes().find((c) => c.kind === "product-section-removed"),
+		).toMatchObject({
+			file: "PRODUCT.md",
+			before: { file: "PRODUCT.md", line: 7 },
+			after: null,
+		});
+		expect(run(["--help"]).stdout).toContain(
+			"a section moved to a file shows as a removal",
+		);
+	});
+});
+
+describe("retirement and identity in diff (CT-9)", () => {
+	test("a deleted ID and a retired ID made active again are reported, exit 0", () => {
+		writing(
+			`${obligation("WR-1")}\n${obligation("WR-2")}\n### WR-3 old\n\nRetired 2026-10-01, folded.\n`,
+			{},
+			2,
+		);
+		commit("Base");
+		git("checkout", "-q", "-b", "feature");
+		writing(`${obligation("WR-1")}\n${obligation("WR-3")}`, {}, 2);
+		commit("Delete and resurrect");
+		expect(brief(changes())).toEqual([
+			"obligation-removed WR-2",
+			"obligation-reactivated WR-3 title statement reason kind proof retired",
+		]);
+		writing(
+			`${obligation("WR-1")}\n${obligation("WR-2")}\n### WR-3 old\n\nRetired 2026-10-01, folded.\n### WR-4 next\n\nRetired 2026-10-02, never shipped.\n`,
+			{},
+			2,
+		);
+		commit("Retire");
+		git("checkout", "-q", "-b", "later");
+		writing(
+			`${obligation("WR-1")}\n### WR-2 the WR-2 promise\n\nRetired 2026-10-03, superseded.\n\n### WR-3 old\n\nRetired 2026-10-01, folded.\n`,
+			{},
+			2,
+		);
+		commit("Retire WR-2");
+		expect(brief(changes(["--base", "feature"]))).toEqual([
+			"obligation-retired WR-2 statement reason kind proof retired",
+			"obligation-removed WR-4",
+		]);
+	});
+});
+
+describe("amendment boundaries in diff (CT-20)", () => {
+	test("title and statement are rewordings; reason, kind and proof alone are not; Reworded lines are facts", () => {
+		write("test/contract/other_test.rb", "#\n");
+		const body = (
+			o: Record<string, Parameters<typeof obligation>[1]>,
+			extra: Record<string, string> = {},
+		) =>
+			["WR-1", "WR-2", "WR-3", "WR-4", "WR-5", "WR-6"]
+				.map((id) => `${obligation(id, o[id])}${extra[id] ?? ""}`)
+				.join("\n");
+		writing(
+			body({}, { "WR-6": "\nReworded 2026-10-01, by the restyle PR.\n" }),
+		);
+		commit("Base");
+		git("checkout", "-q", "-b", "feature");
+		writing(
+			body(
+				{
+					"WR-1": { title: "posts render fully" },
+					"WR-2": { statement: "WR-2 holds, always." },
+					"WR-3": { reason: "Readers rely on it daily." },
+					"WR-4": {
+						proof: `Kind: non-functional. Proof: test, WR-4 in \`${WRITING_TEST}\`.`,
+					},
+					"WR-5": {
+						proof:
+							"Kind: functional. Proof: test, WR-5 in `test/contract/other_test.rb`.",
+					},
+					"WR-6": { title: "renamed again" },
+				},
+				{
+					"WR-2": "\nReworded 2026-10-19, a typo.\n",
+					"WR-6": "\nReworded 2026-10-01, by the restyle PR.\n",
+				},
+			),
+		);
+		write(
+			"docs/contracts/extra.md",
+			`${frontMatter("extra", { tests: [WRITING_TEST] })}${coverageLine(1, 1)}\n${obligation("EX-1", { proof: `Kind: non-functional. Proof: test, EX-1 in \`${WRITING_TEST}\`.` })}`,
+		);
+		commit("Edit");
+		const list = changes();
+		expect(brief(list)).toEqual([
+			"component-added extra",
+			"obligation-added EX-1",
+			"obligation-reworded WR-1 title",
+			"obligation-reworded WR-2 statement",
+			"obligation-changed WR-3 reason",
+			"obligation-changed WR-4 kind",
+			"obligation-changed WR-5 proof",
+			"obligation-reworded WR-6 title",
+		]);
+		const by = (id: string) =>
+			list.find((c) => c.obligationId === id) as Change;
+		expect(by("EX-1").obligationKind).toBe("non-functional");
+		expect(by("WR-1")).toMatchObject({
+			obligationKind: "functional",
+			rewordedLine: { present: false, new: false },
+		});
+		expect(by("WR-2")).toMatchObject({
+			rewordedLine: { present: true, new: true },
+		});
+		expect(by("WR-6")).toMatchObject({
+			rewordedLine: { present: true, new: false },
+		});
+		expect(by("WR-1").fields).toEqual({
+			title: { before: "the WR-1 promise", after: "posts render fully" },
+		});
+		expect(by("WR-3")).not.toHaveProperty("rewordedLine");
+		expect(by("WR-1")).toMatchObject({
+			before: { file: "docs/contracts/writing.md", line: 15 },
+			after: { file: "docs/contracts/writing.md", line: 15 },
+		});
 	});
 });
 
