@@ -3,8 +3,9 @@
 // BUILDER_HOOKS_TARGET_CWD. `prepare` and `recheck` speak contract 1; the
 // hook modes speak Claude's hook protocol and read their policy only from
 // the manifest SHEPHERD_HOOK_MANIFEST names.
-import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { neutralizers } from "./git";
 import { answer, CannotCheck, decide } from "./guard";
 import { health } from "./health";
 import { logLine } from "./log";
@@ -92,14 +93,16 @@ function budget(mode: keyof typeof BUDGET_MS): number {
 const started = performance.now();
 const elapsed = () => performance.now() - started;
 
-let unsafeLog = false;
-
-/** The launcher-given log, when it is a hooks.log beside a manifest. */
+/**
+ * The log an early failure may write: only a validated manifest's, so a run
+ * directory redirected into the repository never gets one.
+ */
 function fallbackLog(): string | null {
-	if (unsafeLog) return null;
-	const log = process.env.SHEPHERD_HOOK_LOG;
-	if (!log || !isAbsolute(log) || basename(log) !== "hooks.log") return null;
-	return existsSync(join(dirname(log), "builder-manifest.json")) ? log : null;
+	try {
+		return loadManifest(process.env.SHEPHERD_HOOK_MANIFEST).manifest.log;
+	} catch {
+		return null;
+	}
 }
 
 function tryLog(log: string | null, hook: string, reason: string) {
@@ -133,9 +136,6 @@ function load(): { manifest: Manifest; runDir: string } {
 	try {
 		return loadManifest(process.env.SHEPHERD_HOOK_MANIFEST);
 	} catch (error) {
-		// A run directory inside the repository gets no log line there.
-		if (error instanceof ToolError && error.code === "run-dir-inside")
-			unsafeLog = true;
 		throw new CannotCheck((error as Error).message);
 	}
 }
@@ -160,6 +160,11 @@ async function guardMode(args: string[]): Promise<number> {
 		if (args.length) return refuse(`the guard takes no arguments (${args[0]})`);
 		const event = await readEvent();
 		const { manifest, runDir } = load();
+		try {
+			neutralizers(manifest.repo);
+		} catch (error) {
+			throw new CannotCheck((error as Error).message);
+		}
 		const decision = decide(manifest, runDir, event);
 		if (elapsed() > budget("guard"))
 			return refuse(`the guard did not finish within ${budget("guard")} ms`);
@@ -220,6 +225,7 @@ async function healthMode(args: string[]): Promise<number> {
 			return unable((error as Error).message);
 		}
 		try {
+			neutralizers(loaded.manifest.repo);
 			const text = await health(
 				loaded.manifest,
 				file,

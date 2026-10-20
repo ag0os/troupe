@@ -74,7 +74,43 @@ export async function recheck(
 	text: string;
 }> {
 	const started = performance.now();
-	const before = snapshot(m.repo);
+	let before: string;
+	try {
+		before = snapshot(m.repo);
+	} catch (error) {
+		// Git cannot be run safely here: nothing is checked, and no checker ran.
+		const why = (error as Error).message;
+		logLine(
+			m.log,
+			"recheck",
+			"evaluator",
+			"-",
+			performance.now() - started,
+			"COULD-NOT-RUN",
+			why,
+		);
+		return {
+			exit: 2,
+			findings: [
+				{
+					code: "check-could-not-run",
+					severity: "warning",
+					file: m.repo,
+					message: `scope: ${why}`,
+				},
+			],
+			result: {
+				complete: false,
+				base: m.base,
+				scope: [],
+				excluded: [],
+				systemTests: [],
+				checks: [],
+				gaps: [],
+			},
+			text: `recheck: could not run: ${why}\n`,
+		};
+	}
 	let e: Evaluation;
 	try {
 		e = await evaluate(m, {

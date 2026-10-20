@@ -162,6 +162,52 @@ describe("BH-2: git filter drivers", () => {
 	});
 });
 
+describe("BH-2: a filter whose name cannot be neutralized", () => {
+	test("is an inability in every mode, and never runs", () => {
+		const canary = join(f.root, "filter-canary");
+		const script = join(f.root, "filter.sh");
+		writeFileSync(script, `#!/bin/sh\ntouch '${canary}'\ncat\n`, {
+			mode: 0o755,
+		});
+		f.write(".gitattributes", "*.txt filter=a=b\n");
+		f.write("tracked.txt", "one\n");
+		f.commit("Filtered file");
+		f.git("config", "filter.a=b.clean", script);
+		f.write("tracked.txt", "two\n");
+		expect(f.prepare(f.input()).code).toBe(2);
+		f.git("config", "--unset", "filter.a=b.clean");
+		expect(f.prepare(f.input()).code).toBe(0);
+		f.git("config", "filter.a=b.clean", script);
+		const why = 'the git filter "a=b" cannot be neutralized';
+		const stop = f.hook("stop", { session_id: "s1", stop_hook_active: false });
+		expect(stop.code).toBe(2);
+		expect(stop.stderr).toContain(why);
+		const guard = f.hook("guard", {
+			tool_name: "Bash",
+			tool_input: { command: "ls" },
+		});
+		expect(guard.code).toBe(2);
+		expect(guard.stderr).toContain(why);
+		const health = f.hook("health", {
+			tool_name: "Edit",
+			tool_input: { file_path: join(f.repo, "tracked.txt") },
+		});
+		expect(health.code).toBe(0);
+		expect(
+			JSON.parse(health.stdout).hookSpecificOutput.additionalContext,
+		).toContain(why);
+		const r = f.run(["recheck", "--manifest", f.manifest, "--json"]);
+		expect(r.code).toBe(2);
+		expect(JSON.parse(r.stdout).findings).toContainEqual(
+			expect.objectContaining({
+				code: "check-could-not-run",
+				message: `scope: ${why}`,
+			}),
+		);
+		expect(existsSync(canary)).toBe(false);
+	});
+});
+
 describe("BH-3: preparation boundaries and shared policy", () => {
 	test("publishes private files, settings path on stdout, resolved base and exact exclusions", () => {
 		const first = f.git("rev-parse", "HEAD");
