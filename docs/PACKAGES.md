@@ -327,21 +327,24 @@ PostToolUse `health` (`Edit|Write|MultiEdit`, 3 s) and a `stop` (125 s) to the s
   expire, gc `--prune`, am, clean) unless `history_writes` is true, and an edit under an `excluded` path or under the
   run directory itself, which is a fixed rule. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
-  `find -exec`, substitutions (nested in parameter and arithmetic expansion too), git's global options; heredoc
+  `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
+  (nested in parameter and arithmetic expansion too, quotes read by the enclosing quote state), git's global options; heredoc
   bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
   Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
   Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
   syntax, its 200 ms deadline, its log) refuses the call with exit 2.
 - `health` runs the stack's checker on the edited file within 2 s: silent when clean, unadopted or without a stack,
   `additionalContext` for a finding or for any reason it could not run (a missing launcher or runtime included),
-  always exit 0. A rubocop result must have its shape and an exit that agrees with its offense count.
+  always exit 0. A rubocop result must have its shape and an exit that agrees with its offense count; an event holding
+  a NUL byte is an inability.
 - `stop` runs, against the base and including untracked files: changed ordinary tests, lint, the Contract tests the
   scope selects (base and worktree `covers`, plus fallbacks), adopted floors, under one 120 s budget, stopping at the
   first failure. A failure or a check that could not run blocks (exit 2) at most three times between passes,
   counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
   the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
   `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
-  A counter or log it cannot write ends the gate without blocking. Git filter drivers never run in any hook.
+  A counter or log it cannot write ends the gate without blocking. Git filter drivers never run in any hook; a filter
+  whose name cannot be switched off by `-c` is an inability in every mode.
 
 `recheck` runs the same evaluator with no counter and no exemption, every phase, plus exhale, and fails when a checker
 changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed). A
