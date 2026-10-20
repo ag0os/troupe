@@ -185,8 +185,8 @@ export function checkModules(
 	workspace: Workspace,
 	tree: WorkspaceTree,
 	config: Config,
+	catalog: ModuleCatalog = moduleCatalog(workspace.dir, undefined, true),
 ): Finding[] {
-	const catalog = moduleCatalog(workspace.dir, undefined, true);
 	const findings = moduleFindings(catalog, workspace.state);
 	findings.push(...charterFindings(catalog, workspace.state));
 	const locals = catalog.candidates.filter((m) => m.layer === "local");

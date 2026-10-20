@@ -238,6 +238,8 @@ The workspace lock serializes every writer: `tool journal`, `tool checkpoint --a
 
 `tool check` also reports the packages the workspace can see, with absolute paths: `package-contract`, `package-tool-missing`, `package-tool-not-executable`, `package-guide-missing`, `package-name-reserved` and `package-duplicate` are errors, `package-requires-missing` a warning, `package-tool-undeclared` information. [PACKAGES.md](PACKAGES.md) has the table.
 
+In a workspace whose charter loads the software module, `tool check` also warns on the method's records for work items that name a pull request or a merge (`#<n>` after PR, pull request or as, or a SHA after merged, merge commit or main at): `record-note-missing`, a done item with no `measurements.md` or `t<N>-measurements.md` in its directory; `record-logs-missing`, a done item with a note but no raw log beside it (a `*.log` or `*.jsonl` file, or any file under a `logs/` or `runs/` directory); `record-note-stale`, a done or in-progress item's note that says not landed in its first 40 lines while STATUS is done and its `## Outcome` says merged, or while the note's own head names a merge SHA. The check reads files only and calls no gh.
+
 `check --status` prints each drift as a `DRIFT` line and counts entries as `query items` does: only `## Items` entries in core's shape.
 
 For a fresh machine, follow [SETUP.md](SETUP.md).
