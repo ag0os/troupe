@@ -13,20 +13,51 @@
 
 mode=$1
 
-# A log reason: control characters and % percent-encoded, as log.ts does.
-encode() {
-	rest=$1
-	out=
-	while [ -n "$rest" ]; do
-		c=${rest%"${rest#?}"}
-		rest=${rest#?}
-		case $c in
-		%) out="$out%25" ;;
-		[[:cntrl:]]) out="$out$(printf '%%%02X' "'$c")" ;;
-		*) out="$out$c" ;;
-		esac
-	done
-	printf '%s' "$out"
+# Escape text byte by byte, whatever the locale: `log` percent-encodes
+# control characters, C1 code points (UTF-8 C2 80 to C2 9F) and %, as
+# log.ts writes them (%0A, %85, %25); `json` makes JSON string content,
+# control characters as \n, \t, \r or \u00XX. The script builds a printf
+# format, so other bytes pass as octal escapes.
+escape() {
+	fmt=$(printf '%s' "$2" | LC_ALL=C od -An -tu1 -v | LC_ALL=C awk -v mode="$1" '
+		{ for (i = 1; i <= NF; i++) b[n++] = $i }
+		END {
+			for (i = 0; i < n; i++) {
+				c = b[i]
+				if (mode == "log") {
+					if (c == 194 && i + 1 < n && b[i + 1] >= 128 && b[i + 1] < 160) {
+						printf "%%%%%02X", b[++i]
+						continue
+					}
+					if (c < 32 || c == 127 || c == 37) {
+						printf "%%%%%02X", c
+						continue
+					}
+				} else if (c == 34 || c == 92) {
+					printf "\\\\\\%03o", c
+					continue
+				} else if (c == 10) {
+					printf "\\\\n"
+					continue
+				} else if (c == 9) {
+					printf "\\\\t"
+					continue
+				} else if (c == 13) {
+					printf "\\\\r"
+					continue
+				} else if (c < 32) {
+					printf "\\\\u%04X", c
+					continue
+				} else if (c == 37) {
+					printf "%%%%"
+					continue
+				}
+				printf "\\%03o", c
+			}
+		}')
+	# The format is built above from bytes alone.
+	# shellcheck disable=SC2059
+	printf "$fmt"
 }
 
 fail() {
@@ -42,7 +73,7 @@ fail() {
 		[ -n "${hook_input+set}" ] || hook_input=$(cat 2>/dev/null)
 		file=$(printf '%s' "$hook_input" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
 		[ -n "$file" ] || file='the edited file'
-		text=$(printf 'health check could not run on %s: %s' "$file" "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+		text=$(escape json "health check could not run on $file: $1")
 		printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$text"
 		code=0
 		;;
@@ -74,7 +105,7 @@ fail() {
 			if [ -n "$real" ]; then
 				case "$rundir/" in
 				"$repo"/* | "$real"/*) ;;
-				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(encode "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
+				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(escape log "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
 				esac
 			fi
 			;;

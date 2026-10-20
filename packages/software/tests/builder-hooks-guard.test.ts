@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { encode } from "../tools/builder-hooks.d/log";
 import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
 const HISTORY =
@@ -352,6 +353,61 @@ describe("BH-5: fallback log destinations", () => {
 			asContext(wrapper(g, "health", edited(g)));
 			expect(g.logLines()).toHaveLength(1);
 			expect(g.logLines()[0]).toContain(" health launcher - 0 COULD-NOT-RUN ");
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	// The launcher's own fallback, as it runs: executable, its builder-hooks.d
+	// moved, so its reason holds the launcher path. Its record must match
+	// log.ts's encoding of the same reason in any locale.
+	test.each([
+		["pk%\n\tg", "C"],
+		["pk%\n\tg", "en_US.UTF-8"],
+		["pk\u0085g", "C"],
+		["pk\u0085g", "en_US.UTF-8"],
+	])(
+		"the launcher's own fallback for %j under %s is one record encoded as log.ts encodes",
+		(dir, locale) => {
+			const g = new Fixture();
+			try {
+				const launcher = g.ownPackage(dir);
+				g.prepare(g.input());
+				renameSync(`${launcher}.d`, `${launcher}.d-gone`);
+				const env = { LC_ALL: locale };
+				closed(wrapper(g, "guard", commit, env));
+				const health = wrapper(g, "health", edited(g), env);
+				expect(health.code).toBe(0);
+				const why = `cannot find builder-hooks.d beside ${launcher}`;
+				expect(JSON.parse(health.stdout)).toEqual({
+					hookSpecificOutput: {
+						hookEventName: "PostToolUse",
+						additionalContext: `health check could not run on ${join(g.repo, "README.md")}: ${why}`,
+					},
+				});
+				const lines = readFileSync(g.log, "utf8").split("\n").filter(Boolean);
+				expect(lines.map((l) => l.replace(/^\d\d:\d\d:\d\d /, ""))).toEqual(
+					["guard", "health"].map(
+						(mode) =>
+							`${mode} launcher - 0 COULD-NOT-RUN ${encode(why, false)}`,
+					),
+				);
+			} finally {
+				g.cleanup();
+			}
+		},
+	);
+
+	test("the launcher keeps a trailing newline in the run directory it resolves", () => {
+		const g = new Fixture();
+		try {
+			g.runDir = join(g.root, "run\n");
+			g.prepare(g.input());
+			asContext(wrapper(g, "health", edited(g), noBun));
+			expect(g.logLines()).toHaveLength(1);
+			expect(g.logLines()[0]).toContain(
+				" health launcher - 0 COULD-NOT-RUN bun is not on PATH",
+			);
 		} finally {
 			g.cleanup();
 		}
