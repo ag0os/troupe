@@ -303,12 +303,17 @@ shepherd tool software builder-hooks recheck --manifest <file> [--json]
 shepherd tool software builder-hooks guard | health | stop
 ```
 
+Like every package tool it needs a Shepherd workspace (see [Which workspace authorizes a run](#which-workspace-authorizes-a-run)):
+`SHEPHERD_WORKSPACE`, which a Shepherd session sets, or a `.shepherd/` above the working directory. A delegate
+running it from a repository outside any workspace gets `no workspace for package "software"`. The hooks the
+settings name call the package's launcher directly and need no workspace.
+
 `prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `excluded`,
 `gates`, `contract_tests`, `health`; any other field is refused, budgets included), resolves the repository through
 its real path and the base to a commit once, and writes `builder-manifest.json`, then `builder-hooks.settings.json`,
 private, into a new or empty run directory that is outside the repository, its git directory and any harness
-configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, commands and
-warnings, for the brief to copy rather than restate. `gates.test` and `gates.lint` are argv templates with one
+configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, gates and health argv
+and warnings, for the brief to copy rather than restate. `gates.test` and `gates.lint` are argv templates with one
 `{files}` element and the globs they select (`gates.test.system` names system tests, which the hooks never run);
 `health.stacks` maps file extensions to a rubocop-JSON checker with one `{file}` element and the committed todo
 `floor` that adopts it (null: not adopted); `health.recheck` holds exhale's argv templates, with `{base}` and
@@ -319,13 +324,15 @@ refused. `--help` shows an example input.
 
 The settings add a PreToolUse `guard` (`Edit|Write|MultiEdit|NotebookEdit|Bash`, 2 s, `onFailure: block`), a
 PostToolUse `health` (`Edit|Write|MultiEdit`, 3 s) and a `stop` (125 s) to the session's own hooks, and set
-`disableAllHooks: false`; each command names the manifest, the log and the launcher by absolute path, so no
-`shepherd` is needed on PATH. They fire for subagent tool calls too. The hooks speak Claude's hook protocol:
+`disableAllHooks: false`. Each command is the quoted absolute path of a fixed wrapper `prepare` writes into the run
+directory (`guard.sh`, `health.sh`, `stop.sh`, mode 0700), which names the manifest, the log and the launcher by
+absolute path, so no `shepherd` is needed on PATH, and answers in its hook's protocol when the launcher is missing.
+Claude prefixes the command to every hook failure the model sees, so the model reads only a path and the reason. They fire for subagent tool calls too. The hooks speak Claude's hook protocol:
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
   expire, gc `--prune`, am, clean) unless `history_writes` is true, and an edit under an `excluded` path or under the
-  run directory itself, which is a fixed rule. It reads the command lexically: separators, quotes, assignments, the
+  run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
   (nested in parameter and arithmetic expansion too, quotes read by the enclosing quote state), git's global options; heredoc
@@ -343,14 +350,19 @@ PostToolUse `health` (`Edit|Write|MultiEdit`, 3 s) and a `stop` (125 s) to the s
   counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
   the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
   `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
-  A counter or log it cannot write ends the gate without blocking. Git filter drivers never run in any hook; a filter
-  whose name cannot be switched off by `-c` is an inability in every mode.
+  A counter or log it cannot write ends the gate without blocking, and so do a missing launcher and a runtime that
+  exits without answering, each logged `COULD-NOT-RUN` by the wrapper. A Stop the harness kills at its 125 s outer
+  timeout leaves no log line. Git filter drivers never run in any hook; a filter whose name cannot be switched off by
+  `-c` is an inability in every mode. The hooks' git calls ignore GIT_* repository variables from the environment.
 
 `recheck` runs the same evaluator with no counter and no exemption, every phase, plus exhale, and fails when a checker
 changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed). A
 changed excluded path is an `excluded-path-changed` warning, one per path.
 Every hook appends one line per outcome to the run's `hooks.log`:
 `HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
+The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`). A
+guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
+block.
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, a changed excluded
 path or a changed system test.
 
@@ -363,7 +375,9 @@ The builder runbook, for a Shepherd starting a Claude Code builder with these ho
    `Reserved decision stop: <decision>. <why the ruling is needed>`, and that a third Stop block means ending with a
    report that says "still failing after 3 attempts" and what remains.
 3. Launch with `--settings <path>`; a one-shot builder runs `claude -p` with a finite `--max-turns`. An interactive
-   builder has the counter and Claude's own cap of consecutive blocks, which this tool does not rely on.
+   builder has the counter and Claude's own cap of consecutive blocks, which this tool does not rely on. A builder
+   whose Agent subagent runs in the background (the default in print mode on Claude Code 2.1.304) emits more than one
+   `result` event and may pass Stop before the subagent ends: read the last `result`; step 5's recheck covers the rest.
 4. After the first guarded tool call, confirm an `ALLOW` or `DENY` line in `hooks.log`. None means the run is
    unguarded: stop it and repair the launch.
 5. Always run `recheck` when the session ends, however it ended: a run cut by `--max-turns` ends with no Stop event.

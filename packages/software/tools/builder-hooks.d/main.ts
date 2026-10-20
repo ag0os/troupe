@@ -40,6 +40,12 @@ recheck   the Stop evaluator after a session, with no counter or exemption,
 Hook modes read one JSON event on stdin and the manifest named by
 SHEPHERD_HOOK_MANIFEST, take no arguments and speak Claude's hook protocol.
 
+Run as shepherd tool software builder-hooks, the tool needs a Shepherd
+workspace: SHEPHERD_WORKSPACE, which a Shepherd session sets, or a
+.shepherd/ above the working directory; outside any workspace it fails
+with no workspace for package "software". prepare --json reports the
+resolved base, exclusions, gates and health argv and warnings.
+
 An input file, for a Rails repository:
 
   {
