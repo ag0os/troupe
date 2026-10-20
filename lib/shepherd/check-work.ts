@@ -56,7 +56,7 @@ const NOTE_NAME = /^(?:[tT]\d+-)?measurements\.md$/;
 const PR_TOKEN = /\b(?:PR|pull\s+request|as)\s*#(\d+)\b/gi;
 const MERGE_SHA =
 	/\b(?:merged|merge\s+commit|main\s+at)(?:\s+(?:as|at|in))?[\s:(`]+([0-9a-f]{7,40})\b/gi;
-const SHA = /\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i;
+const SHA = /\b[0-9a-f]{7,40}\b/i;
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/;
 const DASHES = String.fromCodePoint(0x2013, 0x2014);
 const STATUS_LABEL = new RegExp(`\\bstatus\\b[\\s*_]*[:${DASHES}](.*)`, "i");
@@ -66,9 +66,9 @@ const NOT_LANDED_HEAD =
 	/\b(?:not landed|not pushed|no merge commit or pr yet)\b/i;
 
 function mergeShas(text: string): string[] {
-	return [...text.matchAll(MERGE_SHA)]
-		.map((match) => match[1]?.toLowerCase() ?? "")
-		.filter((sha) => /\d/.test(sha));
+	return [...text.matchAll(MERGE_SHA)].map(
+		(match) => match[1]?.toLowerCase() ?? "",
+	);
 }
 
 /** A note's first 40 lines, and its head: those before the first `##` heading. */

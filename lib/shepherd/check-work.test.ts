@@ -639,7 +639,7 @@ describe("record rules", () => {
 			),
 		).toEqual({
 			prs: [3, 4, 5, 6, 7, 8],
-			shas: ["1a2b3c4d", "88a6e379", "b300d88"],
+			shas: ["1a2b3c4d", "88a6e379", "b300d88", "deadbee"],
 			repo: "insurance_app",
 			done: true,
 			outcome: "Merged as #6 on 2026-10-14.",
@@ -780,5 +780,34 @@ describe("record rules", () => {
 					"# Note\nNo merge commit or PR yet.\n\n## 1. Task\nstatus: parked\n",
 			}),
 		).toEqual([]);
+	});
+
+	test("SHAs of letters only count in scope, in a note's head and as live evidence", () => {
+		expect(
+			records({ [`${item}/STATUS.md`]: done("Merged abcdefa.") }),
+		).toMatchObject([
+			{
+				code: "record-note-missing",
+				message:
+					"done item consulting names merge abcdefa and has no measurements.md",
+			},
+		]);
+		expect(
+			records({
+				[`${live}/STATUS.md`]:
+					"---\nstate: in-progress\n---\n# Item\nPR #23 open.",
+				[`${live}/measurements.md`]:
+					"# Note\nMerge commit abcdefa.\n\n## 1. Task\nStatus: parked\n",
+			}).map(({ message }) => message),
+		).toEqual([
+			"consulting/measurements.md says not landed; its head names merge abcdefa",
+		]);
+		expect(
+			stale("Status: parked", "Live at abcdefa; PR #23.").map(
+				({ message }) => message,
+			),
+		).toEqual([
+			"consulting/measurements.md says not landed; STATUS says merged as #23",
+		]);
 	});
 });
