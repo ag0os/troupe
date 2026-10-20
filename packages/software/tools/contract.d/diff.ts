@@ -30,7 +30,7 @@ type Snapshot = {
 	sections: ProductSection[];
 };
 
-export const LIMITS =
+const LIMITS =
 	"PRODUCT.md sections are compared by name and ID only; a section moved to a Contract file shows as a removal and an addition";
 
 function resolve(top: string, which: "base" | "head", ref: string): string {

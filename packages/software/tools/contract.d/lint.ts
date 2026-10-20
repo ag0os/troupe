@@ -56,7 +56,7 @@ const LEGACY_GAPS = new Set([
 	"decision-target-missing",
 ]);
 
-export const SLUG = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+const SLUG = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const FIELDS = ["component", "covers", "depends_on", "tests"] as const;
 
 export type Category =
@@ -129,7 +129,7 @@ function count(obligations: CheckedObligation[]): Counts {
 const TARGET =
 	/Suite runs against (this implementation|any implementation behind \S.*?)\.\s*$/;
 
-export function sentence(c: Counts, target: string): string {
+function sentence(c: Counts, target: string): string {
 	return `Coverage: ${c.obligations} obligations; ${c.test} proved by test, ${c.prEvidence} by PR evidence, ${c.mixed} mixed, ${c.unproved} unproved. Suite runs against ${target}.`;
 }
 
@@ -224,7 +224,7 @@ type PathCheck =
 	| { ok: false; code: "path-invalid" | "path-symlink"; message: string };
 
 /** A root-relative path, checked without following symlinks or entering submodules. */
-export function checkPath(
+function checkPath(
 	top: string,
 	raw: string,
 	boundaries: string[] = [],
@@ -310,7 +310,7 @@ function refusedPattern(pattern: string): string | null {
 	return null;
 }
 
-export function finding(
+function finding(
 	file: string,
 	code: string,
 	message: string,
@@ -455,10 +455,10 @@ function checkObligations(
 		if (o.retiredProblem || o.retired) {
 			if (o.retiredProblem)
 				one("retired-invalid", `${o.id}: ${o.retiredProblem}`, o.line);
-			else if (o.proof || o.kind)
+			else if (o.proof)
 				one(
 					"retired-invalid",
-					`${o.id} is retired and carries no Kind or Proof`,
+					`${o.id} is retired and carries no Proof`,
 					o.line,
 				);
 			continue;

@@ -39,7 +39,6 @@ export type Claimed = {
 	test: number;
 	prEvidence: number;
 	mixed: number;
-	mixedWritten: boolean;
 	unproved: number;
 	target: string;
 };
@@ -95,7 +94,7 @@ export type ProductSection = {
 };
 
 /** Lines inside fenced code, indented code and HTML comments. */
-export function ignoredLines(lines: string[]): boolean[] {
+function ignoredLines(lines: string[]): boolean[] {
 	const ignored = lines.map(() => false);
 	let fence: string | null = null;
 	let comment = false;
@@ -140,7 +139,7 @@ export function ignoredLines(lines: string[]): boolean[] {
 const COVERAGE =
 	/^Coverage: (\d+) obligations?; (\d+) proved by test, (\d+) by PR evidence, (?:(\d+) mixed, )?(\d+) unproved\. Suite runs against (this implementation|any implementation behind (\S.*?))\.$/;
 
-export function parseCoverage(text: string): Claimed | null {
+function parseCoverage(text: string): Claimed | null {
 	const m = COVERAGE.exec(text.trim());
 	if (!m) return null;
 	return {
@@ -148,7 +147,6 @@ export function parseCoverage(text: string): Claimed | null {
 		test: Number(m[2]),
 		prEvidence: Number(m[3]),
 		mixed: Number(m[4] ?? 0),
-		mixedWritten: m[4] !== undefined,
 		unproved: Number(m[5]),
 		target: m[6] as string,
 	};
@@ -182,7 +180,7 @@ function paragraphs(
 }
 
 /** Split proof text into clauses at semicolons outside backticks and quotes. */
-export function clauses(text: string): ProofClause[] {
+function clauses(text: string): ProofClause[] {
 	const parts: string[] = [];
 	let part = "";
 	let quote: string | null = null;
@@ -212,7 +210,7 @@ export function clauses(text: string): ProofClause[] {
 }
 
 /** Backtick paths and names, quoted names, obligation IDs and PR numbers. */
-export function references(text: string): Omit<ProofClause, "type" | "text"> {
+function references(text: string): Omit<ProofClause, "type" | "text"> {
 	const spans = [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1] as string);
 	const outside = text.replace(/`[^`]*`/g, " ");
 	return {
@@ -234,7 +232,7 @@ const KIND = /^Kind:\s*([^\s.]+)\.?\s*(.*)$/;
 const PROOF = /^(\*\*Proof[.:]\*\*|Proof:)\s*(.*)$/;
 const TEST = /^(?:\*\*Test[.:]\*\*|Test:)\s*(.*)$/;
 
-export function validDate(date: string): boolean {
+function validDate(date: string): boolean {
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
 	if (!m) return false;
 	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));

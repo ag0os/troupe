@@ -58,9 +58,6 @@ export function repositoryRoot(cwd: string): string {
 	return top.stdout.trim();
 }
 
-/** A Contract source: a file under docs/contracts/ or the root PRODUCT.md. */
-export type Source = { file: string; text: string };
-
 export const CONTRACTS_DIR = "docs/contracts";
 export const PRODUCT = "PRODUCT.md";
 export const README = "docs/contracts/README.md";

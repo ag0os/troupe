@@ -772,7 +772,7 @@ describe("retirement, static (CT-9)", () => {
 			[
 				obligation("WR-1"),
 				"### WR-3 an old promise\n\nRetired 2026-10-01, replaced by WR-7.\n",
-				"### WR-4 another\n\nRetired 2026-10-02, no longer wanted\n",
+				"### WR-4 another\n\nRetired 2026-10-02, no longer wanted\n\nKind: functional.\n",
 				obligation("WR-7"),
 			].join("\n"),
 			{},
