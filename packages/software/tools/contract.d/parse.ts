@@ -284,6 +284,9 @@ function obligation(
 		const first = p.text.split("\n")[0] as string;
 		if (KIND.test(first) || PROOF.test(first) || TEST.test(first)) {
 			let proof: { text: string; line: number; bold: boolean } | null = null;
+			// Kind, Proof and Test lines are read independently; a line that is
+			// none of them continues the Proof or Test above it.
+			let last: "proof" | "test" | null = null;
 			for (const l of p.lines) {
 				const text = l.text.trim();
 				const test = TEST.exec(text);
@@ -296,14 +299,17 @@ function obligation(
 				const proofLine = PROOF.exec(rest);
 				if (test) {
 					o.test = { text: test[1] as string, line: l.line, clauses: [] };
-					proof = null;
+					last = "test";
 				} else if (proofLine) {
 					proof = {
 						text: proofLine[2] as string,
 						line: l.line,
 						bold: proofLine[1] !== "Proof:",
 					};
-				} else if (proof && !kind) proof.text += ` ${text}`;
+					last = "proof";
+				} else if (kind) last = null;
+				else if (last === "proof" && proof) proof.text += ` ${text}`;
+				else if (last === "test" && o.test) o.test.text += ` ${text}`;
 			}
 			if (proof) o.proof = { ...proof, clauses: clauses(proof.text) };
 			continue;

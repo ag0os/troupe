@@ -2084,6 +2084,117 @@ describe("discovery boundary and unreadable inputs (fix round 1, findings 1 and 
 	});
 });
 
+describe("parse structure gates output (fix round 1, findings 3 to 6 and 9)", () => {
+	const lower = () =>
+		writing(
+			`${obligation("WR-1").replace("### WR-1 ", "### wr-1 ")}\n${obligation("WR-2")}`,
+			{},
+			1,
+		);
+
+	test("a heading that fails to parse leaves coverage incomplete: no computed line, exit 1", () => {
+		lower();
+		const { code, report } = json(["coverage", "--line"]);
+		expect(code).toBe(1);
+		expect(report.result).toMatchObject({
+			computedLine: null,
+			complete: false,
+			components: [{ complete: false }],
+		});
+		expect(run(["coverage", "--line"]).stdout).toBe("");
+	});
+
+	test("diff refuses a snapshot whose obligation heading fails to parse, located, exit 2", () => {
+		writing();
+		commit("Base");
+		git("checkout", "-q", "-b", "feature");
+		lower();
+		commit("Lowercase");
+		const { code, report } = json(["diff", "--base", "main"]);
+		expect({ code, error: report.error?.code }).toEqual({
+			code: 2,
+			error: "ambiguous",
+		});
+		expect(report.error?.message).toMatch(
+			/^docs\/contracts\/writing\.md:15 at head: /,
+		);
+		expect(report.result).toEqual({ complete: false });
+	});
+
+	test("diff refuses a nested Contract file rather than omit it", () => {
+		write(
+			"docs/contracts/group/writing.md",
+			`${frontMatter("writing")}${coverageLine(0, 0)}`,
+		);
+		commit("Nested");
+		git("checkout", "-q", "-b", "feature");
+		write(
+			"docs/contracts/group/writing.md",
+			`${frontMatter("writing")}${coverageLine(1, 0, 0, 0, 1)}`,
+		);
+		commit("Change nested");
+		const { code, report } = json(["diff", "--base", "main"]);
+		expect({ code, error: report.error?.code }).toEqual({
+			code: 2,
+			error: "unsupported",
+		});
+		expect(report.error?.message).toContain("docs/contracts/group/writing.md");
+	});
+
+	test("a change to a separate Test reference is a proof change, not a rewording", () => {
+		write("test/a.rb", "#\n");
+		write("test/b.rb", "#\n");
+		const proof = (file: string) =>
+			`Test: \`${file}\` ("WR-1 renders").\nKind: functional. Proof: test.`;
+		writing(obligation("WR-1", { proof: proof("test/a.rb") }), {}, 1);
+		commit("Base");
+		git("checkout", "-q", "-b", "feature");
+		writing(obligation("WR-1", { proof: proof("test/b.rb") }), {}, 1);
+		commit("Move the test");
+		const list = changes(["--base", "main"]);
+		expect(brief(list)).toEqual(["obligation-changed WR-1 proof"]);
+		expect(JSON.stringify(list[0]?.fields?.proof)).toContain("test/a.rb");
+		expect(JSON.stringify(list[0]?.fields?.proof)).toContain("test/b.rb");
+	});
+
+	test("Kind, Proof and Test are read in any order, with or without blank lines", () => {
+		const ref = `Test: \`${WRITING_TEST}\` ("WR-1 renders").`;
+		for (const proof of [
+			`Kind: functional.\nProof: test.\n${ref}`,
+			`Kind: functional.\n\nProof: test.\n\n${ref}`,
+			`${ref}\n\nKind: functional. Proof: test.`,
+			`Proof: test.\n${ref}\nKind: functional.`,
+		]) {
+			writing(obligation("WR-1", { proof }), {}, 1);
+			expect({ proof, found: on("docs/contracts/writing.md") }).toEqual({
+				proof,
+				found: [],
+			});
+		}
+	});
+
+	test("an empty Reason label is reason-missing, an error in a canonical file and a warning in a legacy one", () => {
+		writing(`${obligation("WR-1", { reason: "" })}\n${obligation("WR-2")}`);
+		expect(
+			json(["lint"]).report.findings.map((f) => `${f.code} ${f.severity}`),
+		).toEqual(["reason-missing error"]);
+		legacy(
+			"admin_vitor",
+			`# Contract: admin\n\n### AV-1 ${EM} opens\n\nIt opens.\n\n**Reason.**\n`,
+		);
+		expect(
+			on("docs/contracts/admin_vitor.md").map((f) => f.split(" ")[1]),
+		).toContain("reason-missing");
+		expect(
+			json(["lint"]).report.findings.find(
+				(f) =>
+					f.file === "docs/contracts/admin_vitor.md" &&
+					f.code === "reason-missing",
+			)?.severity,
+		).toBe("warning");
+	});
+});
+
 /** Every file under the repository, with its content, for a before/after check. */
 function snapshot(dir: string): Record<string, string> {
 	const out: Record<string, string> = {};

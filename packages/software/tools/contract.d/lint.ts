@@ -466,7 +466,7 @@ function checkObligations(
 		}
 		if (!o.statement)
 			one("statement-missing", `${o.id} has no statement`, o.line);
-		if (o.reason === null)
+		if (!o.reason?.trim())
 			one("reason-missing", `${o.id} has no reason`, o.line);
 		const standardized = o.proof?.clauses.some((c) => c.type) ?? false;
 		if (
@@ -608,7 +608,11 @@ function checkFile(
 	for (const p of doc.problems) add(p.code, p.message, p.line, p.obligationId);
 	report.obligations = checkObligations(doc, legacy, ctx, add);
 	checkDecisions(doc, ctx, add);
-	report.complete = !legacy && report.metadata !== null;
+	// A heading that fails to parse hides an obligation, so the counts are unknown.
+	report.complete =
+		!legacy &&
+		report.metadata !== null &&
+		!doc.problems.some((p) => p.code === "obligation-heading");
 	report.computed = count(report.obligations);
 	checkCoverage(report, add);
 	return report;

@@ -68,13 +68,20 @@ function snapshot(top: string, commit: string, label: string): Snapshot {
 		if (!entry) continue;
 		const [meta = "", path = ""] = entry.split("\t");
 		const [mode, type, oid = ""] = meta.split(" ");
-		const contract =
+		const candidate =
 			path.startsWith(`${CONTRACTS_DIR}/`) &&
-			path.split("/").length === 3 &&
 			path.endsWith(".md") &&
 			path !== README;
-		if (type !== "blob" || mode === "120000" || !(contract || path === PRODUCT))
-			continue;
+		if (!candidate && path !== PRODUCT) continue;
+		if (
+			type !== "blob" ||
+			mode === "120000" ||
+			(candidate && path.split("/").length !== 3)
+		)
+			throw new ToolError(
+				"unsupported",
+				`${path} at ${label}: a Contract file is a regular file directly in ${CONTRACTS_DIR}/, so it cannot be compared`,
+			);
 		const blob = git(top, ["cat-file", "blob", oid]);
 		if (!blob.ok)
 			throw new ToolError(
@@ -103,6 +110,8 @@ function ambiguous(doc: ContractDoc): { line: number; message: string } | null {
 			line: doc.yamlError.line,
 			message: `unsupported front matter: ${doc.yamlError.message}`,
 		};
+	const heading = doc.problems.find((p) => p.code === "obligation-heading");
+	if (heading) return { line: heading.line, message: heading.message };
 	const seen = new Map<string, Obligation>();
 	for (const o of doc.obligations) {
 		const key = `${o.prefix}-${o.number}`;
@@ -127,7 +136,12 @@ function fieldsOf(o: Obligation) {
 		statement: normalize(o.statement),
 		reason: normalize(o.reason),
 		kind: o.kind,
-		proof: normalize(o.proof?.text ?? null),
+		// A separate Test line is part of the proof it supports.
+		proof: normalize(
+			o.test
+				? `${o.proof?.text ?? ""}\nTest: ${o.test.text}`
+				: (o.proof?.text ?? null),
+		),
 		retired: o.retired,
 	};
 }
