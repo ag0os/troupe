@@ -279,6 +279,8 @@ describe("BH-10: checker arguments", () => {
 			["bin/rubocop", "*.rb", "{file}"],
 			["bash", "-c", "rubocop {file}"],
 			["bin/rubocop", "{files}"],
+			["{file}"],
+			["bin/rubocop", `${DASH}aD`, "{file}"],
 		]) {
 			const g = new Fixture();
 			try {

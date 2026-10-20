@@ -255,6 +255,7 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 				"repairs, formats or installs (install)",
 			],
 			[{ base: "no-such-ref" }, "is not a commit"],
+			[{ excluded: ["/etc/hosts"] }, "is not repository-relative"],
 		];
 		for (const [extra, message] of cases) {
 			const g = new Fixture();

@@ -1,7 +1,14 @@
 // builder-hooks guard (BH-5 to BH-7): fails closed, classifies history
 // writes lexically, and denies edits to excluded paths and the run directory.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Fixture, tool } from "./builder-hooks-fixture";
 
@@ -74,6 +81,42 @@ describe("BH-5: guard infrastructure", () => {
 			stdout: "",
 			stderr: cannot("SHEPHERD_HOOK_MANIFEST is not set"),
 		});
+	});
+
+	test("a manifest whose repository is missing, or whose run directory resolves inside it, refuses", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			const manifest = JSON.parse(readFileSync(g.manifest, "utf8"));
+			const event = { tool_name: "Bash", tool_input: { command: "ls" } };
+			writeFileSync(
+				g.manifest,
+				JSON.stringify({ ...manifest, repo: join(g.root, "gone") }),
+			);
+			const missing = g.hook("guard", event);
+			expect(missing.code).toBe(2);
+			expect(missing.stderr).toBe(
+				cannot(
+					`the manifest's repo ${join(g.root, "gone")} is not a directory`,
+				),
+			);
+			writeFileSync(g.manifest, JSON.stringify(manifest));
+			mkdirSync(join(g.repo, "inner"));
+			renameSync(g.runDir, join(g.root, "moved"));
+			writeFileSync(
+				join(g.repo, "inner/builder-manifest.json"),
+				JSON.stringify(manifest),
+			);
+			symlinkSync(join(g.repo, "inner"), g.runDir);
+			const inside = g.hook("guard", event);
+			expect(inside.code).toBe(2);
+			expect(inside.stderr).toBe(
+				cannot(`the run directory ${g.runDir} resolves inside the repository`),
+			);
+			expect(existsSync(join(g.repo, "inner/hooks.log"))).toBe(false);
+		} finally {
+			g.cleanup();
+		}
 	});
 
 	test("a malformed event refuses with exit 2", () => {

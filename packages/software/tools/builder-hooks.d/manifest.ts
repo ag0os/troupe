@@ -2,7 +2,7 @@
 // and the manifest `prepare` writes from it, which every hook reads back
 // through the same checks. Unknown fields are refused, so no budget, role or
 // command can be configured by a field this file does not name.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, normalize } from "node:path";
 
 export class ToolError extends Error {
@@ -119,12 +119,11 @@ function relativePath(path: string, where: string): string {
 }
 
 /** A positive glob or literal, relative to the repository. */
-function pattern(value: string, where: string, absolute = false): string {
+function pattern(value: string, where: string): string {
 	if (value === "" || /[\0\n\r]/.test(value)) bad(`${where} has an empty path`);
 	if (value.startsWith("!")) bad(`${where}: ${value} is a negation`);
 	if (/[{}]/.test(value)) bad(`${where}: ${value} uses brace expansion`);
-	if (!absolute && isAbsolute(value))
-		bad(`${where}: ${value} is not repository-relative`);
+	if (isAbsolute(value)) bad(`${where}: ${value} is not repository-relative`);
 	return value;
 }
 
@@ -141,6 +140,8 @@ function template(
 	const argv = strings(value, where);
 	if (argv.length === 0) bad(`${where} is empty`);
 	const program = argv[0] as string;
+	if (/^\{[a-z]+\}$/.test(program))
+		bad(`${where} runs a placeholder; the program is fixed`);
 	const name = program.slice(program.lastIndexOf("/") + 1);
 	if (SHELLS.has(name))
 		bad(`${where} runs ${name}; templates take no shell or wrapper`);
@@ -150,7 +151,10 @@ function template(
 			bad(`${where} has an unknown placeholder ${arg}`);
 		if (SHELLISH.test(arg))
 			bad(`${where} has shell syntax in ${JSON.stringify(arg)}`);
-		if (REPAIR.has(arg.split("=")[0] as string))
+		if (
+			REPAIR.has(arg.split("=")[0] as string) ||
+			/^-[A-Za-z]*[aAx][A-Za-z]*$/.test(arg)
+		)
 			bad(`${where} repairs, formats or installs (${arg})`);
 	}
 	for (const slot of required)
@@ -261,7 +265,7 @@ export function checkInput(value: unknown, manifest = false): Input {
 		base: o.base,
 		history_writes: o.history_writes === true,
 		excluded: strings(o.excluded ?? [], "excluded").map((p) =>
-			pattern(p, "excluded", true),
+			pattern(p, "excluded"),
 		),
 		gates: gates(o.gates ?? {}),
 		contract_tests: contract,
@@ -293,6 +297,26 @@ export function loadManifest(path: string | undefined): {
 	if (typeof log !== "string" || log !== `${runDir}/hooks.log`)
 		bad("the manifest's log is not hooks.log beside it");
 	if (!isAbsolute(input.repo)) bad("the manifest's repo is not absolute");
+	let real: string;
+	try {
+		if (!statSync(input.repo).isDirectory()) throw new Error();
+		real = realpathSync(input.repo);
+	} catch {
+		bad(`the manifest's repo ${input.repo} is not a directory`);
+	}
+	if (real !== input.repo)
+		bad(`the manifest's repo ${input.repo} has moved to ${real}`);
+	let runReal: string;
+	try {
+		runReal = realpathSync(runDir);
+	} catch {
+		bad(`the run directory ${runDir} cannot be resolved`);
+	}
+	if (runReal === real || runReal.startsWith(`${real}/`))
+		throw new ToolError(
+			"run-dir-inside",
+			`the run directory ${runDir} resolves inside the repository`,
+		);
 	if (!/^[0-9a-f]{40,64}$/.test(input.base))
 		bad("the manifest's base is not a commit id");
 	return { manifest: { ...input, log }, runDir };

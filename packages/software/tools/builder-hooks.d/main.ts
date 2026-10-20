@@ -51,8 +51,11 @@ function budget(mode: keyof typeof BUDGET_MS): number {
 const started = performance.now();
 const elapsed = () => performance.now() - started;
 
+let unsafeLog = false;
+
 /** The launcher-given log, when it is a hooks.log beside a manifest. */
 function fallbackLog(): string | null {
+	if (unsafeLog) return null;
 	const log = process.env.SHEPHERD_HOOK_LOG;
 	if (!log || !isAbsolute(log) || basename(log) !== "hooks.log") return null;
 	return existsSync(join(dirname(log), "builder-manifest.json")) ? log : null;
@@ -89,6 +92,9 @@ function load(): { manifest: Manifest; runDir: string } {
 	try {
 		return loadManifest(process.env.SHEPHERD_HOOK_MANIFEST);
 	} catch (error) {
+		// A run directory inside the repository gets no log line there.
+		if (error instanceof ToolError && error.code === "run-dir-inside")
+			unsafeLog = true;
 		throw new CannotCheck((error as Error).message);
 	}
 }
