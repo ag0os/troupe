@@ -84,7 +84,10 @@ The runbook:
   5. Always run recheck when the session ends; read excluded first.
 
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a
-check that could not run, a changed excluded path or a changed system test.
+check that could not run, or, when no check failed, a changed excluded
+path or a changed system test; a failed check takes exit 1 with every
+finding reported. A fallback log line, when the runtime or launcher cannot
+start, is written only where a safe destination exists.
 A recheck that exits 2 without an error reports status "warnings" and
 result.complete false.
 `;
@@ -101,7 +104,8 @@ const elapsed = () => performance.now() - started;
 
 /**
  * The log an early failure may write: only a validated manifest's, so a run
- * directory redirected into the repository never gets one.
+ * directory redirected into the repository never gets one, and an absent
+ * or unreadable manifest gets no line at all.
  */
 function fallbackLog(): string | null {
 	try {

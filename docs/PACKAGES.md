@@ -335,7 +335,7 @@ Claude prefixes the command to every hook failure the model sees, so the model r
   run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
-  (nested in parameter and arithmetic expansion too, quotes read by the enclosing quote state), git's global options; heredoc
+  (nested in parameter and arithmetic expansion too, quote state tracked through the expansion, transitions included), git's global options; heredoc
   bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
   Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
   Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
@@ -350,21 +350,27 @@ Claude prefixes the command to every hook failure the model sees, so the model r
   counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
   the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
   `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
-  A counter or log it cannot write ends the gate without blocking, and so do a missing launcher and a runtime that
+  No PASS is written after the budget, whatever the scope: a spent budget is a counted inability even for an empty
+  scope or a reserved stop. A counter or log it cannot write ends the gate without blocking, and so do a missing launcher and a runtime that
   exits without answering, each logged `COULD-NOT-RUN` by the wrapper. A Stop the harness kills at its 125 s outer
   timeout leaves no log line. Git filter drivers never run in any hook; a filter whose name cannot be switched off by
-  `-c` is an inability in every mode. The hooks' git calls ignore GIT_* repository variables from the environment.
+  `-c` is an inability in every mode, and so is a filter listing that fails (a broken git configuration). The hooks' git calls ignore GIT_* repository variables from the environment.
 
 `recheck` runs the same evaluator with no counter and no exemption, every phase, plus exhale, and fails when a checker
 changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed). A
 changed excluded path is an `excluded-path-changed` warning, one per path.
-Every hook appends one line per outcome to the run's `hooks.log`:
+Every hook appends one line per outcome to the run's `hooks.log`, except a fallback line, written when the runtime or
+launcher cannot start, which exists only where a safe destination does: the run directory still at the real path
+`prepare` made, outside the repository's real path resolved now, beside the manifest `prepare` wrote. A missing or
+altered manifest, a redirected run directory or a moved repository gets no line while the hook still refuses or
+answers as context. The first-call check in step 4 needs `ALLOW` or `DENY`, never `COULD-NOT-RUN`, so this weakens
+nothing:
 `HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
 The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`). A
 guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
 block.
-Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, a changed excluded
-path or a changed system test.
+Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, or, when no check
+failed, a changed excluded path or a changed system test; a failed check takes exit 1 with every finding reported.
 
 The builder runbook, for a Shepherd starting a Claude Code builder with these hooks:
 

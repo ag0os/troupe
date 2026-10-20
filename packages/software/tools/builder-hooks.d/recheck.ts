@@ -188,6 +188,8 @@ export async function recheck(
 	];
 	const failing = findings.some((f) => f.severity === "error");
 	const unable = findings.some((f) => f.severity === "warning");
+	// A failed check takes exit 1; warnings such as a changed excluded path
+	// take exit 2 only when no check failed. Every finding is reported.
 	const exit = failing ? 1 : unable ? 2 : 0;
 	const status = failing ? "FINDING" : unable ? "COULD-NOT-RUN" : "CLEAN";
 	logLine(
