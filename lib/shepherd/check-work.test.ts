@@ -737,6 +737,8 @@ describe("record rules", () => {
 			["Fast-forwarded to main; PR #23.", "merged as #23"],
 			["Live at b300d88 since PR #23.", "merged as #23"],
 			["Review is not done yet. Merged as #23.", "merged as #23"],
+			["Review is not done\n\nMerged as #23.", "merged as #23"],
+			["- Review not done\n- Merged as #23", "merged as #23"],
 		])
 			expect(
 				stale("Status: parked", outcome).map(({ message }) => message),
@@ -755,6 +757,8 @@ describe("record rules", () => {
 			"Issue #99 opened on 2026-10-14; PR #23 remains open.",
 			"Not merged as #23; it was reverted.",
 			"Not yet merged 88a6e379 into main.",
+			"PR #23 is not\nmerged as #23.",
+			"PR #23 is yet to be\nmerged 88a6e379.",
 		])
 			expect(stale("Status: parked", outcome)).toEqual([]);
 		expect(

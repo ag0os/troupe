@@ -132,16 +132,20 @@ export function itemRecord(
 export function landedInFiles(record: ItemRecord): Landed | undefined {
 	if (!record.done || record.outcome === undefined) return undefined;
 	const outcome = record.outcome;
-	const found = outcome.split(/(?<=[.!?])\s+|\n/).flatMap((sentence) =>
-		LANDED.flatMap((form) => {
-			const match = sentence.match(form);
-			if (!match) return [];
-			const negated =
-				/^merged/i.test(match[0]) &&
-				/\b(?:not|yet)\b/i.test(sentence.slice(0, match.index));
-			return negated ? [] : [match];
-		}),
-	);
+	// A sentence ends at . ! or ? and a space, a blank line, or a list item; a
+	// soft line break inside a paragraph does not end it.
+	const found = outcome
+		.split(/(?<=[.!?])\s+|\n[ \t]*\n\s*|\n(?=[ \t]*(?:[-*+]|\d+[.)])[ \t])/)
+		.flatMap((sentence) =>
+			LANDED.flatMap((form) => {
+				const match = sentence.match(form);
+				if (!match) return [];
+				const negated =
+					/^merged/i.test(match[0]) &&
+					/\b(?:not|yet)\b/i.test(sentence.slice(0, match.index));
+				return negated ? [] : [match];
+			}),
+		);
 	if (!found.length) return undefined;
 	const pr =
 		found.find((match) => match[0].includes("#"))?.[1] ?? record.prs[0];
