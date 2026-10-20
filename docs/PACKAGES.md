@@ -314,36 +314,42 @@ warnings, for the brief to copy rather than restate. `gates.test` and `gates.lin
 `floor` that adopts it (null: not adopted); `health.recheck` holds exhale's argv templates, with `{base}` and
 `{cache}`. Templates take no shell, no wrapper, no shell syntax and nothing that repairs, formats or installs; a path
 starting with a dash is passed as `./<path>`. `contract_tests` is the discovery sentinel or a list of fallback test
-paths, each present at the base.
+paths, each present at the base. `excluded` entries are repository-relative globs or paths; an absolute entry is
+refused. `--help` shows an example input.
 
 The settings add a PreToolUse `guard` (`Edit|Write|MultiEdit|NotebookEdit|Bash`, 2 s, `onFailure: block`), a
 PostToolUse `health` (`Edit|Write|MultiEdit`, 3 s) and a `stop` (125 s) to the session's own hooks, and set
 `disableAllHooks: false`; each command names the manifest, the log and the launcher by absolute path, so no
 `shepherd` is needed on PATH. They fire for subagent tool calls too. The hooks speak Claude's hook protocol:
 
-- `guard` denies a git history write in a Bash command (commit, push, merge, rebase, tag, reset, cherry-pick, stash
-  drop, branch `-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, am, clean) unless `history_writes` is true,
-  and an edit under an `excluded` path or under the run directory itself, which is a fixed rule. It reads the command
-  lexically: separators, quotes, assignments, the wrappers `env`, `command`, `exec`, `builtin`, `time`, `nohup`,
-  `nice`, `sudo` and `xargs`, substitutions, git's global options; heredoc bodies, aliases, scripts and `sh -c`
-  strings are not read. Paths compare lexically and through symlinks, case folded. Whatever it cannot check or read
-  (manifest, event, syntax, its 200 ms deadline, its log) refuses the call with exit 2.
+- `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
+  cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
+  expire, gc `--prune`, am, clean) unless `history_writes` is true, and an edit under an `excluded` path or under the
+  run directory itself, which is a fixed rule. It reads the command lexically: separators, quotes, assignments, the
+  wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
+  `find -exec`, substitutions (nested in parameter and arithmetic expansion too), git's global options; heredoc
+  bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
+  Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
+  Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
+  syntax, its 200 ms deadline, its log) refuses the call with exit 2.
 - `health` runs the stack's checker on the edited file within 2 s: silent when clean, unadopted or without a stack,
-  `additionalContext` for a finding or for any reason it could not run, always exit 0.
+  `additionalContext` for a finding or for any reason it could not run (a missing launcher or runtime included),
+  always exit 0. A rubocop result must have its shape and an exit that agrees with its offense count.
 - `stop` runs, against the base and including untracked files: changed ordinary tests, lint, the Contract tests the
   scope selects (base and worktree `covers`, plus fallbacks), adopted floors, under one 120 s budget, stopping at the
   first failure. A failure or a check that could not run blocks (exit 2) at most three times between passes,
   counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
   the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
   `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
-  A counter or log it cannot write ends the gate without blocking.
+  A counter or log it cannot write ends the gate without blocking. Git filter drivers never run in any hook.
 
 `recheck` runs the same evaluator with no counter and no exemption, every phase, plus exhale, and fails when a checker
-changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed).
+changed tracked content, the index, refs or nonignored files (ignored artifacts such as `log/test.log` are allowed). A
+changed excluded path is an `excluded-path-changed` warning, one per path.
 Every hook appends one line per outcome to the run's `hooks.log`:
 `HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
-Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run or a changed system
-test.
+Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, a changed excluded
+path or a changed system test.
 
 The builder runbook, for a Shepherd starting a Claude Code builder with these hooks:
 
@@ -358,5 +364,6 @@ The builder runbook, for a Shepherd starting a Claude Code builder with these ho
 4. After the first guarded tool call, confirm an `ALLOW` or `DENY` line in `hooks.log`. None means the run is
    unguarded: stop it and repair the launch.
 5. Always run `recheck` when the session ends, however it ended: a run cut by `--max-turns` ends with no Stop event.
-   Record its findings as "post-run re-check" and the gate's as "stop gate", then run step 6's full gates; a
+   Read `excluded` in its report before anything else: any entry takes the PR out of the grant. A resumed session
+   inherits its counter; remove `runs/<run>/stop-<session_id>` to grant three more blocks. Record its findings as "post-run re-check" and the gate's as "stop gate", then run step 6's full gates; a
    successful Claude result is not acceptance, and changed system tests run there.
