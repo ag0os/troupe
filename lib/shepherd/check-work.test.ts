@@ -843,4 +843,34 @@ describe("record rules", () => {
 			checkWork(workspace, config(), TODAY, catalog).map(({ code }) => code),
 		).toContain("record-note-missing");
 	});
+
+	test("symlinked logs are not followed and todo items are out", () => {
+		for (const link of ["gate.log", "logs"])
+			expect(
+				checkWork(
+					fixture(
+						{
+							...software,
+							[`${item}/STATUS.md`]: done("Merged as #23."),
+							[`${item}/measurements.md`]: "# Measurements",
+							"outside/gate.log": "ok",
+							"outside/logs/output.txt": "ok",
+						},
+						{ symlinks: { [`${item}/${link}`]: `outside/${link}` } },
+					).workspace,
+					config(),
+					TODAY,
+				)
+					.filter(({ code }) => code.startsWith("record-"))
+					.map(({ code }) => code),
+			).toEqual(["record-logs-missing"]);
+		expect(
+			codes({
+				"root/.shepherd/work/todo/consulting/STATUS.md":
+					"---\nstate: todo\n---\n# Item\nPR #23 planned.",
+				"root/.shepherd/work/todo/consulting/measurements.md":
+					"# Note\nMerged 88a6e379 into main.\n\n## 1. Task\nStatus: parked\n",
+			}),
+		).toEqual([]);
+	});
 });
