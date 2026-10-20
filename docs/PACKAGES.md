@@ -350,6 +350,9 @@ Claude prefixes the command to every hook failure the model sees, so the model r
   counted per `session_id`; the third block tells the builder to report "still failing after 3 attempts"; after it
   the gate ends the session with a host diagnostic. A pass, an empty scope, or a final message beginning
   `Reserved decision stop: <decision>.` prints nothing. Changed system tests are named, never run and never block.
+  A diff that changes no test file and touches nothing a Contract covers or a named contract test selects passes with
+  nothing run (the log shows PASS on zero checks): in a repository without Contracts the brief names the contract
+  tests, and step 6's full gates run after the session either way.
   No PASS is written after the budget, whatever the scope: a spent budget is a counted inability even for an empty
   scope or a reserved stop. A counter or log it cannot write ends the gate without blocking, and so do a missing launcher and a runtime that
   exits without answering, each logged `COULD-NOT-RUN` by the wrapper. A Stop the harness kills at its 125 s outer
