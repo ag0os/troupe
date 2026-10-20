@@ -529,6 +529,27 @@ describe("BH-15: Stop messages and deadline", () => {
 	});
 });
 
+describe("BH-2: repository variables", () => {
+	test("a Stop run with GIT_DIR pointing at another repository still scopes the manifest's repository", () => {
+		prepare();
+		const other = new Fixture();
+		try {
+			f.write("app/other.rb", "changed\n");
+			f.set("lint", "code", "1");
+			const env = { GIT_DIR: join(other.repo, ".git") };
+			const r = stopHook({}, env);
+			expect(r.code).toBe(2);
+			expect(r.stderr).toStartWith(
+				"Stop gate: lint fails on the changed scope (attempt 1 of 3).",
+			);
+			expect(r.stderr).toContain("Scope: 1 changed paths.");
+			expect(recheck(env).json.result.scope).toEqual(["app/other.rb"]);
+		} finally {
+			other.cleanup();
+		}
+	});
+});
+
 describe("BH-16: recheck independence", () => {
 	test("finds failures after the cap and an exemption, then succeeds after correction", () => {
 		prepare();

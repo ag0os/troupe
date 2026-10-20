@@ -2,9 +2,27 @@
 // filter driver named in the effective configuration (system, global, local)
 // neutralized by name, since git diff and git status run a clean filter on a
 // dirty file. External diff and textconv drivers are off by flag where diff
-// runs.
-import { git } from "../contract.d/repo";
+// runs. The calls ignore GIT_* repository variables from the environment.
+import { git as contractGit, GIT_ENV } from "../contract.d/repo";
 import { ToolError } from "./manifest";
+
+// Kept: the contract runner's fixed settings, and the variables that only
+// choose which configuration files form the effective configuration, whose
+// filters are neutralized by name like any other.
+const KEPT = new Set([
+	"GIT_NO_LAZY_FETCH",
+	"GIT_OPTIONAL_LOCKS",
+	"GIT_TERMINAL_PROMPT",
+	"GIT_PAGER",
+	"GIT_CONFIG_GLOBAL",
+	"GIT_CONFIG_SYSTEM",
+	"GIT_CONFIG_NOSYSTEM",
+]);
+const HOOK_ENV = Object.fromEntries(
+	Object.entries(GIT_ENV).filter(([k]) => !k.startsWith("GIT_") || KEPT.has(k)),
+);
+
+const git = (repo: string, args: string[]) => contractGit(repo, args, HOOK_ENV);
 
 const cache = new Map<string, string[]>();
 

@@ -24,7 +24,7 @@ const GIT_CONFIG = [
 	"core.untrackedCache=false",
 ];
 
-const GIT_ENV = {
+export const GIT_ENV: Record<string, string | undefined> = {
 	...process.env,
 	GIT_NO_LAZY_FETCH: "1",
 	GIT_OPTIONAL_LOCKS: "0",
@@ -35,10 +35,11 @@ const GIT_ENV = {
 export function git(
 	cwd: string,
 	args: string[],
+	env = GIT_ENV,
 ): { ok: boolean; stdout: string; stderr: string } {
 	const child = Bun.spawnSync(["git", ...GIT_CONFIG, ...args], {
 		cwd,
-		env: GIT_ENV,
+		env,
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
