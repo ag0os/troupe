@@ -263,7 +263,7 @@ export function checkInput(value: unknown, manifest = false): Input {
 		role: "builder",
 		repo: o.repo,
 		base: o.base,
-		history_writes: o.history_writes === true,
+		history_writes: o.history_writes !== false,
 		excluded: strings(o.excluded ?? [], "excluded").map((p) =>
 			pattern(p, "excluded"),
 		),

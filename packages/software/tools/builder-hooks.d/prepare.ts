@@ -204,9 +204,9 @@ export function prepare(
 		for (const p of input.contract_tests)
 			if (!hookGit(repo, ["cat-file", "-e", `${sha}:${p}`]).ok)
 				usage(`contract_tests names ${p}, which is absent at the base`);
-	if (input.history_writes)
+	if (!input.history_writes)
 		warnings.push(
-			"history_writes is true: the brief must carry the grant that allows it",
+			'history_writes is false: the brief must say "leave the change uncommitted; the host commits after recheck"',
 		);
 
 	if (runDirArg === "") usage("--run-dir is empty");

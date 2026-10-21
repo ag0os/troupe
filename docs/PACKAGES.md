@@ -312,7 +312,7 @@ running it from a repository outside any workspace gets `no workspace for packag
 settings name call the package's launcher directly and need no workspace.
 
 `prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `excluded`,
-`gates`, `contract_tests`, `health`; any other field is refused, budgets included), resolves the repository through
+`gates`, `contract_tests`, `health`; any other field is refused, budgets included; `history_writes` defaults to true, and false, set when an implementation coordinator holds the commit, draws a warning that the brief must say "leave the change uncommitted; the host commits after recheck"), resolves the repository through
 its real path and the base to a commit once, and writes `builder-manifest.json`, then `builder-hooks.settings.json`,
 private, into a new or empty run directory that is outside the repository, its git directory and any harness
 configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, gates and health argv
@@ -334,7 +334,7 @@ Claude prefixes the command to every hook failure the model sees, so the model r
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
-  expire, gc `--prune`, am, clean) unless `history_writes` is true, and an edit under an `excluded` path or under the
+  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them, and an edit under an `excluded` path or under the
   run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions

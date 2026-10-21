@@ -853,7 +853,7 @@ describe("BH-17: mutation and evidence", () => {
 		expect(lines).toHaveLength(12);
 		for (const l of lines)
 			expect(l).toMatch(
-				/ guard Bash bash \d+ms ALLOW no history write session=s1$/,
+				/ guard Bash bash \d+ms ALLOW history authority session=s1$/,
 			);
 	});
 });

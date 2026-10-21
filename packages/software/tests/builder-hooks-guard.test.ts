@@ -15,7 +15,7 @@ import { encode } from "../tools/builder-hooks.d/log";
 import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
 const HISTORY =
-	"Role guard: commits, pushes and pull requests belong to the host, not the builder. Leave your change in the worktree.";
+	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
 const excludedReason = (p: string) =>
 	`Role guard: ${p} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
 const cannot = (why: string) =>
@@ -36,6 +36,7 @@ beforeAll(() => {
 	expect(
 		f.prepare(
 			f.input({
+				history_writes: false,
 				excluded: [
 					"config/deploy.yml",
 					"lib/admin/",
@@ -569,10 +570,13 @@ describe("BH-6: history classification", () => {
 		});
 	});
 
-	test("explicit history authority allows history writes", () => {
+	test.each([
+		["explicit", { history_writes: true }],
+		["default", {}],
+	])("%s history authority allows history writes", (_, extra) => {
 		const g = new Fixture();
 		try {
-			g.prepare(g.input({ history_writes: true }));
+			g.prepare(g.input(extra));
 			const r = g.hook("guard", {
 				tool_name: "Bash",
 				tool_input: { command: "git commit -m x" },

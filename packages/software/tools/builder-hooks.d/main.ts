@@ -52,7 +52,7 @@ An input file, for a Rails repository:
     "role": "builder",
     "repo": "/path/to/worktree",
     "base": "origin/main",
-    "history_writes": false,
+    "history_writes": true,
     "excluded": ["bin/ci", "config/ci.rb", "app/controllers/admin/base_controller.rb"],
     "gates": {
       "test": { "argv": ["bin/rails", "test", "{files}"],
@@ -75,8 +75,11 @@ The runbook:
   1. Prepare through the installed binary into the item's runs/<run>/
      directory; do not reinstall while the builder runs.
   2. Copy the resolved base and exclusions from prepare --json into the
-     brief, with history authority, attribution, the reserved-stop line and
-     the third-block reporting instruction.
+     brief, with attribution, the reserved-stop line and the third-block
+     reporting instruction. History writes are on unless an implementation
+     coordinator holds the commit; then history_writes is false and the
+     brief says "leave the change uncommitted; the host commits after
+     recheck".
   3. Launch with --settings <path>; a one-shot builder runs claude -p with a
      finite --max-turns.
   4. After the first guarded tool call, confirm an ALLOW or DENY line in

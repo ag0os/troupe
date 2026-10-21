@@ -8,7 +8,7 @@ import { excludedBy, shownPath } from "./paths";
 import { historyWrite, Unclassifiable } from "./shell";
 
 export const HISTORY_REASON =
-	"Role guard: commits, pushes and pull requests belong to the host, not the builder. Leave your change in the worktree.";
+	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
 
 export function excludedReason(path: string): string {
 	return `Role guard: ${path} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
