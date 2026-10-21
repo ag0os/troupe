@@ -737,8 +737,8 @@ describe("BH-7: excluded edits", () => {
 			);
 	});
 
-	test("the lexical gap: a Bash write to an excluded path passes the guard and shows in the excluded diff", () => {
-		expect(bash("printf x > config/deploy.yml")).toEqual({
+	test("the lexical gap: a nested shell's write to an excluded path passes the guard and shows in the excluded diff", () => {
+		expect(bash("sh -c 'printf x > config/deploy.yml'")).toEqual({
 			code: 0,
 			stdout: "",
 			stderr: "",
@@ -769,6 +769,175 @@ describe("BH-7: excluded edits", () => {
 		bash("git commit -m x");
 		expect(f.logLines().at(-1)).toMatch(
 			/ guard Bash bash \d+ms DENY history write git commit session=s1$/,
+		);
+	});
+});
+
+describe("BH-18: shell writes to excluded paths", () => {
+	test.each([
+		["cat > config/deploy.yml", "config/deploy.yml"],
+		["printf x >> config/deploy.yml", "config/deploy.yml"],
+		["echo x >| config/deploy.yml", "config/deploy.yml"],
+		["echo x &> config/deploy.yml", "config/deploy.yml"],
+		["echo x &>> config/deploy.yml", "config/deploy.yml"],
+		["echo x 2>config/deploy.yml", "config/deploy.yml"],
+		["echo x >& config/deploy.yml", "config/deploy.yml"],
+		["cat <> config/deploy.yml", "config/deploy.yml"],
+		["echo x | tee config/deploy.yml", "config/deploy.yml"],
+		["echo x | tee -a /dev/null config/deploy.yml", "config/deploy.yml"],
+		["sed -i '' s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		["sed -i.bak s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		["sed --in-place -e s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		["cp /tmp/x config/deploy.yml", "config/deploy.yml"],
+		["cp -t lib/admin /tmp/x", "lib/admin"],
+		["cp --target-directory=lib/admin /tmp/x", "lib/admin"],
+		["mv config/deploy.yml /tmp/x", "config/deploy.yml"],
+		["mv /tmp/x lib/admin/base.rb", "lib/admin/base.rb"],
+		["rm -f config/deploy.yml", "config/deploy.yml"],
+		["rm -rf lib/admin", "lib/admin"],
+		["rmdir lib/admin", "lib/admin"],
+		["install -m 644 /tmp/x db/schema.rb", "db/schema.rb"],
+		["ln -sf /tmp/x config/deploy.yml", "config/deploy.yml"],
+		["touch lib/admin/new.rb", "lib/admin/new.rb"],
+		["truncate -s 0 db/schema.rb", "db/schema.rb"],
+		["touch app/models/secret_key.rb", "app/models/secret_key.rb"],
+		["env A=1 timeout 5 tee config/deploy.yml", "config/deploy.yml"],
+		["echo $(cat /tmp/x > config/deploy.yml)", "config/deploy.yml"],
+		["(cd /tmp; echo x) > config/deploy.yml", "config/deploy.yml"],
+		["echo x > ./CONFIG/Deploy.yml", "config/deploy.yml"],
+		["echo x > 'config/deploy.yml'", "config/deploy.yml"],
+	])("denies %s", (command, path) => {
+		expect(denial(bash(command))).toEqual({
+			hookEventName: "PreToolUse",
+			permissionDecision: "deny",
+			permissionDecisionReason: excludedReason(path),
+		});
+	});
+
+	test("an absolute target and the run directory are denied", () => {
+		expect(
+			denial(bash(`echo x > ${f.repo}/config/deploy.yml`))
+				?.permissionDecisionReason,
+		).toBe(excludedReason("config/deploy.yml"));
+		const counter = join(f.runDir, "stop-s1");
+		expect(denial(bash(`rm -f '${counter}'`))?.permissionDecisionReason).toBe(
+			excludedReason(counter),
+		);
+	});
+
+	test("a target resolves a symlink before collapsing ..", () => {
+		const g = new Fixture();
+		try {
+			g.write("a/b/keep", "x\n");
+			g.write("a/config/deploy.yml", "x\n");
+			symlinkSync(join(g.repo, "a/b"), join(g.repo, "link"));
+			g.prepare(g.input({ excluded: ["a/config/deploy.yml"] }));
+			const r = g.hook("guard", {
+				session_id: "s1",
+				tool_name: "Bash",
+				tool_input: { command: "echo x > link/../config/deploy.yml" },
+			});
+			expect(denial(r)?.permissionDecisionReason).toBe(
+				excludedReason("a/config/deploy.yml"),
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("a relative target resolves against the event's cwd", () => {
+		const r = f.hook("guard", {
+			session_id: "s1",
+			cwd: join(f.repo, "config"),
+			tool_name: "Bash",
+			tool_input: { command: "echo x > deploy.yml" },
+		});
+		expect(denial(r)?.permissionDecisionReason).toBe(
+			excludedReason("config/deploy.yml"),
+		);
+	});
+
+	test.each([
+		"cat config/deploy.yml > /tmp/x",
+		"cp config/deploy.yml /tmp/copy",
+		"sed -n p config/deploy.yml",
+		"cat < config/deploy.yml",
+		"echo x > app/models/user.rb",
+		"echo x 2>&1",
+		"echo x >&2",
+		"echo x > /dev/null",
+		'echo x > "$TMPDIR/config/deploy.yml"',
+		"echo x > ~/config/deploy.yml",
+		"echo rm config/deploy.yml",
+	])("allows %s", (command) => {
+		expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+	});
+
+	test("history authority does not lift the exclusions; an unreadable command is refused", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(
+				g.input({ history_writes: true, excluded: ["config/deploy.yml"] }),
+			);
+			const run = (command: string) =>
+				g.hook("guard", {
+					session_id: "s1",
+					tool_name: "Bash",
+					tool_input: { command },
+				});
+			expect(denial(run("git commit -m x && cat > config/deploy.yml"))).toEqual(
+				{
+					hookEventName: "PreToolUse",
+					permissionDecision: "deny",
+					permissionDecisionReason: excludedReason("config/deploy.yml"),
+				},
+			);
+			expect(run("git commit -m x")).toEqual({
+				code: 0,
+				stdout: "",
+				stderr: "",
+			});
+			expect(run("$GIT commit")).toEqual({
+				code: 2,
+				stdout: "",
+				stderr: cannot("the command holds a command name it cannot read"),
+			});
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("with history authority and no exclusions an unreadable command passes unread, as before", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			expect(
+				g.hook("guard", {
+					session_id: "s1",
+					tool_name: "Bash",
+					tool_input: { command: "$GIT commit" },
+				}),
+			).toEqual({ code: 0, stdout: "", stderr: "" });
+			expect(g.logLines().at(-1)).toMatch(
+				/ guard Bash bash \d+ms ALLOW history authority; command not read session=s1$/,
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("the log names a shell write's rule, and an allowed write is not health-checked", () => {
+		bash("cat > config/deploy.yml");
+		expect(f.logLines().at(-1)).toMatch(
+			/ guard Bash bash \d+ms DENY shell write config\/deploy.yml excluded by config\/deploy.yml session=s1$/,
+		);
+		bash("echo x > app/models/user.rb");
+		expect(f.logLines().at(-1)).toMatch(
+			/ guard Bash bash \d+ms ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
+		bash("ls");
+		expect(f.logLines().at(-1)).toMatch(
+			/ guard Bash bash \d+ms ALLOW no history write session=s1$/,
 		);
 	});
 });

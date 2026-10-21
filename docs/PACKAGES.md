@@ -340,10 +340,18 @@ Claude prefixes the command to every hook failure the model sees, so the model r
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
   (nested in parameter and arithmetic expansion too, quote state tracked per expansion level, transitions included), git's global options; heredoc
   bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
+  It denies a shell write under an excluded path or the run directory as it denies an edit, whatever `history_writes`
+  says: output redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `<>`, `>&` to a file), `tee`, `sed -i` and `--in-place`,
+  the target of `cp`, `ln` and `install` (`-t` included), and every operand of `mv`, `rm`, `rmdir`, `touch` and
+  `truncate`, relative to the event's `cwd`. Not read: a target holding an expansion or a leading `~`, a `cd` before
+  the write, `find -exec` and `-delete`, and other programs that write (`dd`, `git checkout -- <path>`, editors,
+  interpreters); recheck's `excluded` covers them after the run. With `history_writes` true and no exclusions, a
+  command it cannot read passes unread; otherwise it is refused.
   Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
   Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
   syntax, its 200 ms deadline, its log) refuses the call with exit 2.
-- `health` runs the stack's checker on the edited file within 2 s: silent when clean, unadopted or without a stack,
+- `health` runs the stack's checker on a file edited through Edit, Write or MultiEdit within 2 s (edits through the
+  shell are not health-checked, and the guard's ALLOW line for a shell write says so): silent when clean, unadopted or without a stack,
   `additionalContext` for a finding or for any reason it could not run (a missing launcher or runtime included),
   always exit 0. A rubocop result must have its shape and an exit that agrees with its offense count; an event holding
   a NUL byte is an inability.
@@ -375,7 +383,7 @@ one record. The first-call check in step 4 needs `ALLOW` or `DENY`, never `COULD
 nothing:
 `HH:MM:SS <hook> <tool or check> <file or scope> <n>ms <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`,
 the latency in milliseconds with its unit (`8ms`). The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`).
-A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`. A
+A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`, `shell write <path> excluded by <entry>`. A
 guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
 block.
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, or, when no check

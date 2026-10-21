@@ -1,11 +1,13 @@
 // The guard: denies a Bash history write when the run has no history
-// authority, and an edit to an excluded path or to the run's own directory.
+// authority, and an edit or a shell write to an excluded path or to the
+// run's own directory.
 // Every other call passes with no explicit grant. Whatever stops it from
 // checking is the caller's to turn into a refusal.
+import { isAbsolute } from "node:path";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
 import { excludedBy, shownPath } from "./paths";
-import { historyWrite, Unclassifiable } from "./shell";
+import { historyWrite, shellWrites, Unclassifiable } from "./shell";
 
 export const HISTORY_REASON =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
@@ -41,24 +43,72 @@ export function decide(
 		const command = fields.command;
 		if (typeof command !== "string")
 			throw new CannotCheck("the Bash call has no command");
-		if (m.history_writes)
-			return { deny: null, tool, target: "bash", reason: "history authority" };
-		let found: string | null;
-		try {
-			found = historyWrite(command);
-		} catch (error) {
+		const unreadable = (error: unknown): never => {
 			if (error instanceof Unclassifiable)
 				throw new CannotCheck(`the command holds ${error.message}`);
 			throw error;
-		}
-		return found
-			? {
+		};
+		const history = m.history_writes ? "history authority" : "no history write";
+		if (!m.history_writes) {
+			let found: string | null = null;
+			try {
+				found = historyWrite(command);
+			} catch (error) {
+				unreadable(error);
+			}
+			if (found)
+				return {
 					deny: HISTORY_REASON,
 					tool,
 					target: "bash",
 					reason: `history write ${found}`,
-				}
-			: { deny: null, tool, target: "bash", reason: "no history write" };
+				};
+		}
+		// With history authority and nothing excluded only the run directory
+		// is at stake, and an unreadable command passes unread as it did.
+		let writes: string[];
+		try {
+			writes = shellWrites(command);
+		} catch (error) {
+			if (
+				error instanceof Unclassifiable &&
+				m.history_writes &&
+				m.excluded.length === 0
+			)
+				return {
+					deny: null,
+					tool,
+					target: "bash",
+					reason: `${history}; command not read`,
+				};
+			writes = unreadable(error);
+		}
+		const cwd =
+			typeof event.cwd === "string" && isAbsolute(event.cwd)
+				? event.cwd
+				: m.repo;
+		for (const write of writes) {
+			// Unnormalized, so the path check resolves symlinks before `..`.
+			const path = isAbsolute(write) ? write : `${cwd}/${write}`;
+			const hit = excludedBy(m.repo, path, [runDir])
+				? "the run directory"
+				: excludedBy(m.repo, path, m.excluded);
+			if (hit)
+				return {
+					deny: excludedReason(shownPath(m.repo, path)),
+					tool,
+					target: "bash",
+					reason: `shell write ${shownPath(m.repo, path)} ${hit === "the run directory" ? "in" : "excluded by"} ${hit}`,
+				};
+		}
+		return {
+			deny: null,
+			tool,
+			target: "bash",
+			reason: writes.length
+				? `${history}; shell writes not excluded, not health-checked`
+				: history,
+		};
 	}
 	if (EDITS.has(tool)) {
 		const path =

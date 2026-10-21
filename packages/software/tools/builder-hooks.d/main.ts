@@ -28,8 +28,8 @@ prepare   check the Shepherd's policy file, resolve the repository and base,
           into a new or empty run directory outside the repository; prints
           the settings path to pass to claude --settings, which adds
           these hooks to the project's own
-guard     PreToolUse hook: deny history writes and excluded edits;
-          refuse what it cannot check
+guard     PreToolUse hook: deny history writes, and edits and shell
+          writes to excluded paths; refuse what it cannot check
 health    PostToolUse hook: one checker on the edited file; anything it
           cannot do is said as context
 stop      Stop hook: the changed scope's gates, at most three blocks

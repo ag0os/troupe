@@ -1,22 +1,27 @@
 // A lexical reading of a Bash command line, enough to find the git history
-// writes in it without running anything. It splits simple commands on
+// writes and the file write targets in it without running anything. It splits simple commands on
 // `;`, `&&`, `||`, `|`, `&`, newlines and parentheses, reads quotes and
 // escapes, lifts the commands inside `$(...)`, backticks and process
 // substitutions (nested in `${...}` and `$((...))` too) out as commands of
 // their own, reads `find -exec` operands as a command, and skips heredoc
 // bodies through their terminator. It does not follow aliases, functions, scripts,
 // `sh -c` strings or heredoc bodies: that is the accepted lexical gap. Syntax
-// it cannot place is Unclassifiable, which the guard refuses.
+// it cannot place is Unclassifiable, which the guard refuses. A write target
+// holding an expansion or a leading `~` is not read either.
 
 export class Unclassifiable extends Error {}
 
 export type Word = { text: string; dynamic: boolean };
 
+/** Redirection operators that open their target for writing. */
+const WRITES = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&"]);
 const META = new Set([" ", "\t", "\n", ";", "&", "|", "<", ">", "(", ")"]);
 
 class Lexer {
 	i = 0;
 	commands: Word[][] = [];
+	/** Output redirection targets, in every nested list. */
+	redirects: Word[] = [];
 	heredocs: { delim: string; strip: boolean }[] = [];
 	backticks = 0;
 
@@ -26,7 +31,8 @@ class Lexer {
 	list(close: ")" | "`" | null): void {
 		const s = this.s;
 		let words: Word[] = [];
-		let target: "redirect" | "heredoc" | "heredoc-strip" | null = null;
+		let target: "redirect" | "write" | "heredoc" | "heredoc-strip" | null =
+			null;
 		let depth = 0;
 		const flush = () => {
 			if (target) throw new Unclassifiable("a redirection with no target");
@@ -103,12 +109,21 @@ class Lexer {
 				)?.[0] as string;
 				this.i += op.length;
 				target =
-					op === "<<" ? "heredoc" : op === "<<-" ? "heredoc-strip" : "redirect";
+					op === "<<"
+						? "heredoc"
+						: op === "<<-"
+							? "heredoc-strip"
+							: WRITES.has(op)
+								? "write"
+								: "redirect";
 				continue;
 			}
 			const word = this.word();
 			if (target) {
-				if (target !== "redirect")
+				// `>&2` duplicates a descriptor and `>&-` closes one.
+				if (target === "write" && !/^(\d+|-)$/.test(word.text))
+					this.redirects.push(word);
+				if (target === "heredoc" || target === "heredoc-strip")
 					this.heredocs.push({
 						delim: word.text,
 						strip: target === "heredoc-strip",
@@ -377,9 +392,13 @@ class Lexer {
 
 /** Every simple command in `source`, nested substitutions included. */
 export function simpleCommands(source: string): Word[][] {
+	return lex(source).commands;
+}
+
+function lex(source: string): Lexer {
 	const lexer = new Lexer(source);
 	lexer.list(null);
-	return lexer.commands;
+	return lexer;
 }
 
 type Options = {
@@ -707,8 +726,11 @@ function classifyGit(args: Word[]): string | null {
 	return null;
 }
 
-/** The history write one simple command makes, if any. */
-function classify(words: Word[]): string | null {
+/**
+ * The index of the program one simple command runs, past keywords,
+ * assignments and wrappers, or null when `command -v` only looks it up.
+ */
+function program(words: Word[]): number | null {
 	let i = 0;
 	while (i < words.length) {
 		const w = words[i] as Word;
@@ -742,7 +764,6 @@ function classify(words: Word[]): string | null {
 			}
 			continue;
 		}
-		if (name === "find") return classifyFind(words.slice(i + 1));
 		const wrapper = WRAPPERS[name];
 		if (wrapper) {
 			i = consume(words, i + 1, wrapper, name) + (wrapper.operands ?? 0);
@@ -751,10 +772,87 @@ function classify(words: Word[]): string | null {
 					i++;
 			continue;
 		}
-		if (name === "git") return classifyGit(words.slice(i + 1));
-		return null;
+		return i;
 	}
 	return null;
+}
+
+/** The history write one simple command makes, if any. */
+function classify(words: Word[]): string | null {
+	const i = program(words);
+	if (i === null) return null;
+	const name = basename((words[i] as Word).text);
+	if (name === "find") return classifyFind(words.slice(i + 1));
+	if (name === "git") return classifyGit(words.slice(i + 1));
+	return null;
+}
+
+/**
+ * The file writers read for their targets, with the short options that take
+ * a separate value; `-t` names a target directory.
+ */
+const WRITERS: Record<string, { valued: string; target: "all" | "last" }> = {
+	tee: { valued: "", target: "all" },
+	rm: { valued: "", target: "all" },
+	rmdir: { valued: "", target: "all" },
+	touch: { valued: "tdrA", target: "all" },
+	truncate: { valued: "sr", target: "all" },
+	mv: { valued: "tS", target: "all" },
+	cp: { valued: "tS", target: "last" },
+	ln: { valued: "tS", target: "last" },
+	install: { valued: "tSmogBf", target: "last" },
+	sed: { valued: "eflE", target: "all" },
+};
+
+/** The paths one simple command writes through a known writer. */
+function writeTargets(words: Word[]): Word[] {
+	const i = program(words);
+	if (i === null) return [];
+	const name = basename((words[i] as Word).text);
+	const spec = WRITERS[name];
+	if (!spec) return [];
+	const operands: Word[] = [];
+	const targets: Word[] = [];
+	let inPlace = false;
+	let all = spec.target === "all";
+	const args = words.slice(i + 1);
+	for (let k = 0; k < args.length; k++) {
+		const w = args[k] as Word;
+		const t = w.text;
+		if (t === "--" && !w.dynamic) {
+			operands.push(...args.slice(k + 1));
+			break;
+		}
+		if (w.dynamic || !t.startsWith("-") || t === "-") {
+			operands.push(w);
+			continue;
+		}
+		if (t.startsWith("--")) {
+			const [opt, value] = t.split(/=(.*)/s) as [string, string | undefined];
+			if (opt === "--in-place") inPlace = true;
+			if (opt === "--target-directory") {
+				if (value !== undefined) targets.push({ text: value, dynamic: false });
+				else if (args[k + 1]) targets.push(args[++k] as Word);
+			}
+			if (opt === "--directory" && name === "install") all = true;
+			continue;
+		}
+		// sed's -i takes its suffix attached; letters before it are flags.
+		if (name === "sed" && /^-[A-Za-z]*[iI]/.test(t)) {
+			inPlace = true;
+			continue;
+		}
+		if (name === "install" && /^-[A-Za-z]*d/.test(t)) all = true;
+		const last = t.at(-1) as string;
+		if (/^-[A-Za-z]+$/.test(t) && spec.valued.includes(last)) {
+			const value = args[++k];
+			if (last === "t" && value) targets.push(value);
+		}
+	}
+	if (name === "sed" && !inPlace) return [];
+	if (all) return [...targets, ...operands];
+	const lastOperand = operands.at(-1);
+	return targets.length || !lastOperand ? targets : [lastOperand];
 }
 
 /** The first history write in a Bash command line, or null; throws Unclassifiable. */
@@ -764,4 +862,16 @@ export function historyWrite(source: string): string | null {
 		if (found) return found;
 	}
 	return null;
+}
+
+/**
+ * The paths a Bash command line writes by redirection or a known writer,
+ * each as written; a target holding an expansion or a leading `~` is left
+ * out. Throws Unclassifiable.
+ */
+export function shellWrites(source: string): string[] {
+	const lexer = lex(source);
+	return [...lexer.redirects, ...lexer.commands.flatMap(writeTargets)]
+		.filter((w) => !w.dynamic && w.text !== "" && !w.text.startsWith("~"))
+		.map((w) => w.text);
 }
