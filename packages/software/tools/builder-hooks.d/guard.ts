@@ -52,7 +52,12 @@ export function decide(
 			throw error;
 		}
 		return found
-			? { deny: HISTORY_REASON, tool, target: "bash", reason: found }
+			? {
+					deny: HISTORY_REASON,
+					tool,
+					target: "bash",
+					reason: `history write ${found}`,
+				}
 			: { deny: null, tool, target: "bash", reason: "no history write" };
 	}
 	if (EDITS.has(tool)) {

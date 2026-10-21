@@ -373,8 +373,9 @@ missing or altered manifest, a redirected run directory or a moved repository ge
 refuses or answers as context. A fallback reason is percent-encoded like any other, so a path holding a newline stays
 one record. The first-call check in step 4 needs `ALLOW` or `DENY`, never `COULD-NOT-RUN`, so this weakens
 nothing:
-`HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
-The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`). A
+`HH:MM:SS <hook> <tool or check> <file or scope> <n>ms <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`,
+the latency in milliseconds with its unit (`8ms`). The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`).
+A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`. A
 guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
 block.
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, or, when no check

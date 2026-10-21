@@ -183,7 +183,7 @@ describe("BH-5: guard infrastructure", () => {
 			cannot("bun is not on PATH; this tool requires bun and git"),
 		);
 		expect(f.logLines().at(-1)).toMatch(
-			/ guard launcher - 0 COULD-NOT-RUN bun is not on PATH/,
+			/ guard launcher - 0ms COULD-NOT-RUN bun is not on PATH/,
 		);
 	});
 
@@ -334,7 +334,7 @@ describe("BH-5: fallback log destinations", () => {
 			expect(lines).toHaveLength(2);
 			for (const line of lines) {
 				expect(line).toMatch(
-					/^\d\d:\d\d:\d\d (health|stop) launcher - 0 COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
+					/^\d\d:\d\d:\d\d (health|stop) launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
 				);
 				expect(line).toContain("pk%0Ag%25/software");
 			}
@@ -352,7 +352,9 @@ describe("BH-5: fallback log destinations", () => {
 			renameSync(launcher, `${launcher}-gone`);
 			asContext(wrapper(g, "health", edited(g)));
 			expect(g.logLines()).toHaveLength(1);
-			expect(g.logLines()[0]).toContain(" health launcher - 0 COULD-NOT-RUN ");
+			expect(g.logLines()[0]).toContain(
+				" health launcher - 0ms COULD-NOT-RUN ",
+			);
 		} finally {
 			g.cleanup();
 		}
@@ -389,7 +391,7 @@ describe("BH-5: fallback log destinations", () => {
 				expect(lines.map((l) => l.replace(/^\d\d:\d\d:\d\d /, ""))).toEqual(
 					["guard", "health"].map(
 						(mode) =>
-							`${mode} launcher - 0 COULD-NOT-RUN ${encode(why, false)}`,
+							`${mode} launcher - 0ms COULD-NOT-RUN ${encode(why, false)}`,
 					),
 				);
 			} finally {
@@ -406,7 +408,7 @@ describe("BH-5: fallback log destinations", () => {
 			asContext(wrapper(g, "health", edited(g), noBun));
 			expect(g.logLines()).toHaveLength(1);
 			expect(g.logLines()[0]).toContain(
-				" health launcher - 0 COULD-NOT-RUN bun is not on PATH",
+				" health launcher - 0ms COULD-NOT-RUN bun is not on PATH",
 			);
 		} finally {
 			g.cleanup();
@@ -747,15 +749,22 @@ describe("BH-7: excluded edits", () => {
 		const lines = f.logLines();
 		expect(
 			lines.some((l) =>
-				/ guard Write config\/deploy.yml \d+ DENY excluded by config\/deploy.yml session=s1$/.test(
+				/ guard Write config\/deploy.yml \d+ms DENY excluded by config\/deploy.yml session=s1$/.test(
 					l,
 				),
 			),
 		).toBe(true);
 		expect(
 			lines.some((l) =>
-				/ guard Bash bash \d+ ALLOW no history write session=s1$/.test(l),
+				/ guard Bash bash \d+ms ALLOW no history write session=s1$/.test(l),
 			),
 		).toBe(true);
+	});
+
+	test("a DENY line names its rule and match", () => {
+		bash("git commit -m x");
+		expect(f.logLines().at(-1)).toMatch(
+			/ guard Bash bash \d+ms DENY history write git commit session=s1$/,
+		);
 	});
 });

@@ -158,7 +158,7 @@ describe("BH-11: diff and Contract selection", () => {
 		expect(stopHook()).toEqual({ code: 0, stdout: "", stderr: "" });
 		expect(f.recorded()).toEqual([]);
 		expect(f.logLines().at(-1)).toMatch(
-			/ stop gate 0%20paths \d+ PASS empty-scope session=s1 active=false$/,
+			/ stop gate 0%20paths \d+ms PASS empty-scope session=s1 active=false$/,
 		);
 	});
 });
@@ -225,7 +225,7 @@ describe("BH-12: ordered evaluation and gaps", () => {
 			f
 				.logLines()
 				.some((l) =>
-					/ stop exhale scope \d+ COULD-NOT-RUN exhale deferred to step 6 session=s1/.test(
+					/ stop exhale scope \d+ms COULD-NOT-RUN exhale deferred to step 6 session=s1/.test(
 						l,
 					),
 				),
@@ -494,13 +494,13 @@ describe("BH-15: Stop messages and deadline", () => {
 		expect(moved).toEqual(unable(why));
 		expect(f.logLines().at(-1)).toMatch(
 			new RegExp(
-				`^\\d\\d:\\d\\d:\\d\\d stop launcher - 0 COULD-NOT-RUN ${why}$`,
+				`^\\d\\d:\\d\\d:\\d\\d stop launcher - 0ms COULD-NOT-RUN ${why}$`,
 			),
 		);
 		writeFileSync(join(f.bin, "bun"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
 		expect(wrapper()).toEqual(unable("the runtime exited 7"));
 		expect(f.logLines().at(-1)).toMatch(
-			/^\d\d:\d\d:\d\d stop launcher - 0 COULD-NOT-RUN the runtime exited 7$/,
+			/^\d\d:\d\d:\d\d stop launcher - 0ms COULD-NOT-RUN the runtime exited 7$/,
 		);
 		rmSync(join(f.bin, "bun"));
 		const nobun = spawn(["/bin/sh", "-c", `'${join(f.runDir, "stop.sh")}'`], {
@@ -513,7 +513,7 @@ describe("BH-15: Stop messages and deadline", () => {
 		);
 		expect(f.logLines()).toHaveLength(3);
 		expect(f.logLines().at(-1)).toContain(
-			" stop launcher - 0 COULD-NOT-RUN bun is not on PATH",
+			" stop launcher - 0ms COULD-NOT-RUN bun is not on PATH",
 		);
 		expect(existsSync(counter())).toBe(false);
 	});
@@ -814,7 +814,7 @@ describe("BH-17: mutation and evidence", () => {
 		const lines = f.logLines();
 		for (const line of lines)
 			expect(line).toMatch(
-				/^\d\d:\d\d:\d\d \S+ \S+ \S+ \d+ (ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN) \S/,
+				/^\d\d:\d\d:\d\d \S+ \S+ \S+ \d+ms (ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN) \S/,
 			);
 		expect(lines.some((l) => l.includes("app/new%0Aline.rb"))).toBe(true);
 		for (const status of ["BLOCK", "GIVE-UP", "PASS"])
@@ -853,7 +853,7 @@ describe("BH-17: mutation and evidence", () => {
 		expect(lines).toHaveLength(12);
 		for (const l of lines)
 			expect(l).toMatch(
-				/ guard Bash bash \d+ ALLOW no history write session=s1$/,
+				/ guard Bash bash \d+ms ALLOW no history write session=s1$/,
 			);
 	});
 });

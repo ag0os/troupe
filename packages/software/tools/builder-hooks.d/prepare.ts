@@ -92,7 +92,7 @@ function wrapper(
 ): string {
 	const why = `the launcher ${launcher} is missing or not executable`;
 	const logged = (reason: string) =>
-		`[ -z "$log" ] || printf '%s ${mode} launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>"$log" 2>/dev/null`;
+		`[ -z "$log" ] || printf '%s ${mode} launcher - 0ms COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>"$log" 2>/dev/null`;
 	const head = `#!/bin/sh
 # builder-hooks ${mode} hook for this run, written by prepare.
 PATH=$PATH:/usr/bin:/bin

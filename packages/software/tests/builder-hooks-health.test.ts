@@ -93,7 +93,7 @@ describe("BH-8: health findings and silence", () => {
 			`checker ${DASH}${DASH}format json app/a.rb`,
 		]);
 		expect(f.logLines().at(-1)).toMatch(
-			/ health \S+\/bin\/checker \S+\/repo\/app\/a\.rb \d+ FINDING 1 findings session=s1$/,
+			/ health \S+\/bin\/checker \S+\/repo\/app\/a\.rb \d+ms FINDING 1 findings session=s1$/,
 		);
 	});
 
@@ -327,7 +327,7 @@ describe("BH-9: health inability and budget", () => {
 			stderr: "",
 		});
 		expect(f.logLines().at(-1)).toContain(
-			" health launcher - 0 COULD-NOT-RUN the launcher",
+			" health launcher - 0ms COULD-NOT-RUN the launcher",
 		);
 		writeFileSync(join(f.bin, "bun"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
 		const silent = f.hook("health", JSON.parse(event), CHECKED);
@@ -339,7 +339,7 @@ describe("BH-9: health inability and budget", () => {
 			stderr: "",
 		});
 		expect(f.logLines().at(-1)).toContain(
-			" health launcher - 0 COULD-NOT-RUN the runtime exited 7",
+			" health launcher - 0ms COULD-NOT-RUN the runtime exited 7",
 		);
 	});
 
@@ -378,7 +378,7 @@ describe("BH-9: health inability and budget", () => {
 			stderr: "",
 		});
 		expect(readFileSync(f.log, "utf8")).toContain(
-			" health launcher - 0 COULD-NOT-RUN bun is not on PATH",
+			" health launcher - 0ms COULD-NOT-RUN bun is not on PATH",
 		);
 	});
 });
