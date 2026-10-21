@@ -334,19 +334,28 @@ Claude prefixes the command to every hook failure the model sees, so the model r
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
-  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies `git push` unless `push_writes` is true, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
+  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies a push (`git push`, `send-pack`, `subtree push`, a dashed `git-push`, an alias the line defines with `-c alias.<name>=`; a `!` shell alias is refused) unless `push_writes` is true, which draws a prepare warning that the brief must carry the grant, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
   run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
   (nested in parameter and arithmetic expansion too, quote state tracked per expansion level, transitions included), git's global options; heredoc
   bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
   It denies a shell write under an excluded path or the run directory as it denies an edit, whatever `history_writes`
-  says: output redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `<>`, `>&` to a file), `tee`, `sed -i` and `--in-place`,
-  the target of `cp`, `ln` and `install` (`-t` included), and every operand of `mv`, `rm`, `rmdir`, `touch` and
-  `truncate`, relative to the event's `cwd`. Not read: a target holding an expansion or a leading `~`, a `cd` before
-  the write, `find -exec` and `-delete`, and other programs that write (`dd`, `git checkout -- <path>`, editors,
-  interpreters); recheck's `excluded` covers them after the run. With `history_writes` true and no exclusions, a
-  command it cannot read passes unread; otherwise it is refused.
+  says: output redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `<>`, and `>&` to a word that is not a descriptor), `tee`,
+  `touch`, `truncate`, `unlink`, `sed -i`/`-I`/`--in-place` with its backup suffix, the destination of `cp`, `mv`,
+  `ln` and `install` (`-t`, attached or not, and `--target-directory` included) and, when it is a directory, the
+  source's name inside it, each with a `-S`/`--suffix`/`-b` backup, and the commands `find -exec` runs. An operand of
+  `rm`, `rmdir`, a `mv` source, a recursive `cp`'s destination or `ln`'s that holds an exclusion or the run directory
+  is denied too; a glob exclusion is held once the operand's segments match its leading ones (always below a `**`).
+  Relative targets resolve against the event's `cwd`, or the directory `env -C`/`--chdir` or `sudo -D`/`--chdir`
+  gives. Not read: a target holding an expansion, a glob or a leading `~`, a write after `cd` or `pushd`, `find`'s
+  `{}` and `-delete`, and other programs that write (`dd`, `git checkout -- <path>`, editors, interpreters); the
+  guard's ALLOW line then says `shell writes not read, not health-checked`, and recheck's `excluded` covers them after
+  the run. With `history_writes` and `push_writes` true and no exclusions, a command it cannot read passes unread;
+  otherwise it is refused with `Role guard could not read this command: <what> holds an expansion. Spell the command
+  name and git options literally and run it again; this is not a hooks failure.` (or `it holds <syntax>` for syntax it
+  cannot place). Both the push denial and the shell-write denial are lexical and bind a cooperative builder: `sh -c`,
+  `eval`, a script and `gh pr create` (which pushes an unpushed branch) pass; the host's credentials are the boundary.
   Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
   Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
   syntax, its 200 ms deadline, its log) refuses the call with exit 2.
