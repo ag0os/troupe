@@ -1,0 +1,11 @@
+# Guide: the builder hooks runbook
+
+The builder runbook, for a Shepherd starting a Claude Code builder with these hooks:
+
+1. Prepare through the installed binary, into the item's `runs/<run>/` directory; do not reinstall Troupe while the builder runs, since the settings name the installed package by path.
+2. Copy the resolved base and exclusions from `prepare --json` into the brief; the brief also states whether history writes are authorized, the attribution lines, that a reserved stop opens the final message's first line with `Reserved decision stop: <decision>. <why the ruling is needed>`, and that a third Stop block means ending with a report that says "still failing after 3 attempts" and what remains.
+3. Launch with `--settings <path>`; a one-shot builder runs `claude -p` with a finite `--max-turns`. An interactive builder has the counter and Claude's own cap of consecutive blocks, which this tool does not rely on. A builder whose Agent subagent runs in the background (the default in print mode on Claude Code 2.1.304) emits more than one `result` event and may pass Stop before the subagent ends: read the last `result`; step 5's recheck covers the rest.
+4. After the first guarded tool call, confirm an `ALLOW` or `DENY` line in `hooks.log`. None means the run is unguarded: stop it and repair the launch.
+5. Always run `recheck` when the session ends, however it ended: a run cut by `--max-turns` ends with no Stop event. Read `excluded` in its report before anything else: any entry takes the PR out of the grant. A resumed session inherits its counter; remove `runs/<run>/stop-<session_id>` to grant three more blocks. Record its findings as "post-run re-check" and the gate's as "stop gate", then run step 6's full gates; a successful Claude result is not acceptance, and changed system tests run there.
+
+A diff that changes no test file and touches nothing a Contract covers or a named contract test selects passes with nothing run (the log shows PASS on zero checks): in a repository without Contracts the brief names the contract tests, and step 6's full gates run after the session either way.

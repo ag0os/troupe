@@ -4,38 +4,10 @@ import { join } from "node:path";
 import { packageLocations, packageModules } from "./package-resolution";
 
 const POINTER =
-	"The rest of steps 3 to 8 is in guides, read when the plan reaches the step and before any brief for it: `shepherd tool guide software build` holds the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; `software check` steps 6 and 7; `software ship` step 8, the grants' journal, and a task that waits on the user, read also when a task parks or resumes.";
+	"The rest of steps 3 to 8 is in guides, read when the plan reaches the step and before any brief for it: `shepherd tool guide software build` holds the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; `software check` steps 6 and 7; `software ship` step 8, the grants' journal, and a task that waits on the user, read also when a task parks or resumes; `software hooks` the builder hooks runbook, read before launching a Claude Code builder.";
 const SHAPES_POINTER =
 	"The table's Contract timing and Checks rows are in `shepherd tool guide software build`, read before briefing a builder.";
-const KEEPS =
-	"The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself.";
 const TABLE_HEAD = ["| | Bug | Feature | Chore |", "|---|---|---|---|"];
-
-/** Every word the placement adds to the draft: the pointers, the repeated table head, then each guide's title, pointer paragraph and headings. */
-const NEW_TEXT = [
-	POINTER,
-	SHAPES_POINTER,
-	...TABLE_HEAD,
-	"# Guide: the software cycle, steps 3 to 5",
-	KEEPS,
-	"This guide holds the shape table's Contract timing and Checks rows, then the rest of steps 3 to 5, in order, and the rest of the skills rule.",
-	"## Shapes: the Contract and the checks",
-	"## 3. The Contract",
-	"## 4. Inhale: the delegate's brief and backbrief",
-	"## 5. Exhale, same PR",
-	"## Skills are the delegate's craft",
-	"# Guide: the software cycle, steps 6 and 7",
-	KEEPS,
-	"This guide holds the rest of steps 6 and 7, in order. Which checks each shape runs is the shape table's Checks row, in `shepherd tool guide software build`.",
-	"## 6. Checks before done",
-	"## 7. Review by blast radius",
-	"# Guide: the software cycle, step 8",
-	KEEPS,
-	"This guide holds the rest of step 8, then the grants' journal and the task that waits on the user.",
-	"## 8. The pull request",
-	"## Widening or narrowing the grants",
-	"## A task that waits on the user",
-];
 
 const STEPS = [
 	"Story straight.",
@@ -111,19 +83,6 @@ const guide = (name: string) => guides[guideNames.indexOf(name)] ?? "";
 const step = (n: number) =>
 	remainder.split("\n").find((line) => line.startsWith(`${n}. **`)) ?? "";
 
-function counts(texts: string[]): Map<string, number> {
-	const tally = new Map<string, number>();
-	for (const word of texts.join(" ").split(/\s+/).filter(Boolean))
-		tally.set(word, (tally.get(word) ?? 0) + 1);
-	return tally;
-}
-
-function missing(from: Map<string, number>, in_: Map<string, number>) {
-	return [...from].flatMap(([word, n]) =>
-		Array(Math.max(0, n - (in_.get(word) ?? 0))).fill(word),
-	);
-}
-
 function inNoGuide(literal: string) {
 	for (const [index, text] of guides.entries())
 		expect({
@@ -134,9 +93,9 @@ function inNoGuide(literal: string) {
 }
 
 describe("software's guide split keeps steps whole and safety rules loaded (O4)", () => {
-	test("software declares exactly the build, check and ship guides", () => {
+	test("software declares exactly the build, check, ship and hooks guides", () => {
 		expect(software?.problems).toEqual([]);
-		expect(guideNames).toEqual(["build", "check", "ship"]);
+		expect(guideNames).toEqual(["build", "check", "ship", "hooks"]);
 	});
 
 	test("the pointer sits between the core preamble and step 1 and names the guide for steps 3, 6 and 8, step 9 whole in the module (K2)", () => {
@@ -149,6 +108,7 @@ describe("software's guide split keeps steps whole and safety rules loaded (O4)"
 			"steps 3 to 5",
 			"`software check` steps 6 and 7",
 			"`software ship` step 8",
+			"`software hooks` the builder hooks runbook",
 		])
 			expect(POINTER).toContain(pointer);
 	});
@@ -209,6 +169,7 @@ describe("software's guide split keeps steps whole and safety rules loaded (O4)"
 			"## Widening or narrowing the grants",
 			"## A task that waits on the user",
 		]);
+		expect(headings(guide("hooks"))).toEqual([]);
 	});
 });
 
@@ -262,152 +223,5 @@ describe("software's shapes keep what acts before a guide in the module (K1 to K
 		expect(rows(guide("check"))).toEqual([]);
 		expect(rows(guide("ship"))).toEqual([]);
 		expect(remainder).toContain(`|\n\n${SHAPES_POINTER} Review depth`);
-	});
-});
-
-/** Where in the draft each guide section's words come from: a step's item, or the draft from a marker to its next heading. */
-const SOURCES: Record<string, string> = {
-	"Shapes: the Contract and the checks": "## Shapes\n",
-	"Skills are the delegate's craft": "- **Skills are the delegate's craft.**",
-	"Widening or narrowing the grants": "Journal what bears on",
-	"A task that waits on the user": "Each step ends at its completion criterion",
-};
-
-/**
- * The only departures from the draft, each on the user's rulings, and the line
- * each lands in. Of 2026-10-17, which postdate the draft's Checks row: mutation
- * runs on every subject where that runs in reasonable time, so the row defers
- * to step 6; a pull request's health gate compares its tip with its merge base,
- * not with floors. Of 2026-10-19, on the pull request's questions: a grant
- * covers large blast radius only where its text names it, and a check the
- * project lacks puts a pull request outside a grant unless the grant accepts
- * the lack. And three minor ones: the Feature cell's pass of its own also
- * allows foundational depth, as step 3 does; a small build is an S build, by
- * the size axis; the axes drop the eval's budgets, which guide no action.
- */
-const RULINGS: Array<{ draft: string; now: string; at: string }> = [
-	{
-		draft: "| gates; mutation scoped to the fixed code,",
-		now: "| gates; mutation as step 6,",
-		at: "| Checks |",
-	},
-	{
-		draft: "| gates; mutation scoped to the change;",
-		now: "| gates; mutation as step 6;",
-		at: "| Checks |",
-	},
-	{
-		draft: "health against floors | gates; health against floors |",
-		now: "health against the merge base | gates; health against the merge base |",
-		at: "| Checks |",
-	},
-	{
-		draft:
-			"it ends when the user withdraws it, and when its own text says a lapse condition has been met.",
-		now: "it ends when the user withdraws it, and when its own text says a lapse condition has been met. A grant covers small blast radius only, unless its text names the large kinds it covers.",
-		at: "9. **",
-	},
-	{
-		draft:
-			"or with an open choice, a departure from the agreed design, or a check that could not run, is presented",
-		now: "or with an open choice, a departure from the agreed design, a check that could not run, or a check the project lacks that the grant's text does not name as accepted, is presented",
-		at: "9. **",
-	},
-	{
-		draft: "a pass of its own only when the user reserved the obligations",
-		now: "a pass of its own when the user reserved the obligations, or for foundational depth (step 7)",
-		at: "| Contract timing |",
-	},
-	{
-		draft: "A small build restates done in one line",
-		now: "An S build restates done in one line",
-		at: "Its brief names the base revision",
-	},
-	{
-		draft:
-			"sets the backbrief (M and L) and the budgets the method eval records.",
-		now: "sets the backbrief (M and L).",
-		at: "Judge both before the work is spent",
-	},
-];
-
-// Lifetime: the tests in this block and __fixtures__/software-body-shapes-draft.md
-// hold the module and its guides to the words of the shapes draft
-// (codename-impatient's module-shapes.md, section 1), less the RULINGS above.
-// Delete the block and the fixture in the next change that edits the software
-// text on purpose; the tests above stay.
-describe("software's shapes carry the draft's words without rewriting them (O3)", () => {
-	const draft = readFileSync(
-		join(import.meta.dir, "__fixtures__/software-body-shapes-draft.md"),
-		"utf8",
-	);
-	const before = RULINGS.reduce(
-		(text, { draft, now }) => text.replace(draft, now),
-		draft,
-	);
-
-	test("each ruling replaces one passage of the draft and lands in its line", () => {
-		const lines = [remainder, ...guides].join("\n").split("\n");
-		for (const ruling of RULINGS) {
-			expect({ ruling, inDraft: draft.split(ruling.draft).length - 1 }).toEqual(
-				{ ruling, inDraft: 1 },
-			);
-			const at = lines.filter((line) => line.startsWith(ruling.at));
-			expect({ ruling, lines: at.length }).toEqual({ ruling, lines: 1 });
-			expect(at[0]).toContain(ruling.now);
-			if (!ruling.now.includes(ruling.draft))
-				expect(at[0]).not.toContain(ruling.draft);
-		}
-	});
-
-	function source(heading: string): string {
-		const number = heading.match(/^(\d)\. /)?.[1];
-		if (number) {
-			const items = before
-				.split("\n")
-				.filter((line) => line.startsWith(`${number}. **`));
-			expect({ heading, sources: items.length }).toEqual({
-				heading,
-				sources: 1,
-			});
-			return items[0] ?? "";
-		}
-		const marker = SOURCES[heading] ?? "";
-		const start = before.indexOf(marker);
-		expect({ heading, found: marker !== "" && start >= 0 }).toEqual({
-			heading,
-			found: true,
-		});
-		const end = before.indexOf("\n## ", start + 1);
-		return before.slice(start, end < 0 ? undefined : end);
-	}
-
-	test("the draft plus the new text equals the module plus the guides, word for word", () => {
-		const words = counts([before, ...NEW_TEXT]);
-		const after = counts([remainder, ...guides]);
-		expect({
-			lost: missing(words, after),
-			invented: missing(after, words),
-		}).toEqual({ lost: [], invented: [] });
-	});
-
-	test("each guide sentence comes, in order, from its own part of the draft", () => {
-		for (const [index, text] of guides.entries())
-			for (const section of text.split("\n## ").slice(1)) {
-				const [heading = "", ...rest] = section.split("\n");
-				const from = source(heading);
-				let at = 0;
-				for (const sentence of rest
-					.filter((line) => line.trim())
-					.flatMap((line) => line.trim().split(/(?<=[.:])\s+(?=[A-Z`*(])/))) {
-					const found = from.indexOf(sentence, at);
-					expect({
-						guide: guideNames[index],
-						sentence,
-						found: found >= 0,
-					}).toEqual({ guide: guideNames[index], sentence, found: true });
-					at = found + sentence.length;
-				}
-			}
 	});
 });

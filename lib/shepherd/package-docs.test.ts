@@ -61,9 +61,14 @@ test("the docs describe software's guides and what a brief must still carry (O10
 		"`software build`: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder",
 		"`software check`: steps 6 and 7",
 		"`software ship`: step 8, the grants' journal and a parked task",
+		"`software hooks`: the builder hooks runbook: prepare into the item's run directory, copy base and exclusions into the brief, launch with --settings, confirm the first guarded call in the log, always recheck; read before launching a Claude Code builder",
 	])
 		expect(packages).toContain(bullet);
 	expect(packages).not.toContain("the software coordination module, unchanged");
+	expect(packages).toContain(
+		"The builder runbook, for a Shepherd starting a Claude Code builder with these hooks, is in `shepherd tool guide software hooks`.",
+	);
+	expect(packages).not.toContain("Prepare through the installed binary");
 	expect(packages).toContain(
 		"still states the module's stop rule (step 4) and the attribution rule",
 	);
@@ -71,6 +76,6 @@ test("the docs describe software's guides and what a brief must still carry (O10
 		"A plain (unquoted) `description` that holds `: ` is a `module-schema` error; quote it. A semicolon needs no quoting.",
 	);
 	expect(doc("SHEPHERD.md")).toContain(
-		"carries the `publish-check`, `contract` and `builder-hooks` tools and three guides",
+		"carries the `publish-check`, `contract` and `builder-hooks` tools and four guides",
 	);
 });
