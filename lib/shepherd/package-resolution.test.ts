@@ -481,10 +481,14 @@ describe("software is a base package (O8, O2)", () => {
 			ship: {
 				description: "step 8, the grants' journal and a parked task",
 			},
+			hooks: {
+				description:
+					"the builder hooks runbook: prepare into the item's run directory, copy base and exclusions into the brief, launch with --settings, confirm the first guarded call in the log, always recheck; read before launching a Claude Code builder",
+			},
 		});
 	});
 
-	test("a software workspace's header lists the three guides (O6)", () => {
+	test("a software workspace's header lists the four guides (O6)", () => {
 		const root = tree({ "w/.shepherd/charter.md": "Modules: software\n" });
 		const lines = header(
 			compose(root, "w", packageLocations(undefined)).fragments,
@@ -492,7 +496,7 @@ describe("software is a base package (O8, O2)", () => {
 		const gated = lines.indexOf("- Gated modules loaded: software");
 		expect(gated).toBeGreaterThan(0);
 		expect(lines[gated + 2]).toBe(
-			"- Package guides: software build (the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder), software check (steps 6 and 7), software ship (step 8, the grants' journal and a parked task); read with shepherd tool guide <package> <guide>",
+			"- Package guides: software build (the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder), software check (steps 6 and 7), software ship (step 8, the grants' journal and a parked task), software hooks (the builder hooks runbook: prepare into the item's run directory, copy base and exclusions into the brief, launch with --settings, confirm the first guarded call in the log, always recheck; read before launching a Claude Code builder); read with shepherd tool guide <package> <guide>",
 		);
 	});
 });

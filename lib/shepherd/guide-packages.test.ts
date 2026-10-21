@@ -116,7 +116,7 @@ describe("software's guides are declared, listed and readable (O5)", () => {
 		});
 	}
 	const LISTED =
-		"software build: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder\nsoftware check: steps 6 and 7\nsoftware ship: step 8, the grants' journal and a parked task\n";
+		"software build: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder\nsoftware check: steps 6 and 7\nsoftware ship: step 8, the grants' journal and a parked task\nsoftware hooks: the builder hooks runbook: prepare into the item's run directory, copy base and exclusions into the brief, launch with --settings, confirm the first guarded call in the log, always recheck; read before launching a Claude Code builder\n";
 	const build = () => {
 		const software = packageModules(packageLocations(undefined)).find(
 			(m) => m.package?.name === "software",
@@ -127,7 +127,7 @@ describe("software's guides are declared, listed and readable (O5)", () => {
 		);
 	};
 
-	test("the list ends with build, check and ship", async () => {
+	test("the list ends with build, check, ship and hooks", async () => {
 		const env = softwareWorkspace();
 		expect((await guide([], env)).text).toEndWith(LISTED);
 		expect(await guide(["software"], env)).toEqual({
@@ -135,6 +135,17 @@ describe("software's guides are declared, listed and readable (O5)", () => {
 			code: 0,
 			stream: "stdout",
 		});
+	});
+
+	test("the hooks guide prints the builder runbook from step 1", async () => {
+		const { text, code } = await guide(
+			["software", "hooks"],
+			softwareWorkspace(),
+		);
+		expect(code).toBe(0);
+		expect(text).toContain(
+			"\n1. Prepare through the installed binary, into the item's `runs/<run>/` directory; do not reinstall Troupe while the builder runs, since the settings name the installed package by path.\n",
+		);
 	});
 
 	test("a guide prints whole, also from outside the workspace", async () => {
