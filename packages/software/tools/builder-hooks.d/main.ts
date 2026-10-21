@@ -6,7 +6,7 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { neutralizers } from "./git";
-import { answer, CannotCheck, decide } from "./guard";
+import { answer, CannotCheck, decide, Unreadable } from "./guard";
 import { health } from "./health";
 import { logLine } from "./log";
 import { loadManifest, type Manifest, ToolError } from "./manifest";
@@ -157,10 +157,10 @@ function load(): { manifest: Manifest; runDir: string } {
 }
 
 async function guardMode(args: string[]): Promise<number> {
-	const refuse = (why: string): number => {
+	const refuse = (why: string, text?: string): number => {
 		tryLog(fallbackLog(), "guard", why);
 		process.stderr.write(
-			`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`,
+			`${text ?? `Role guard could not run: ${why}. The call is refused until the host repairs the hooks.`}\n`,
 		);
 		return 2;
 	};
@@ -199,6 +199,7 @@ async function guardMode(args: string[]): Promise<number> {
 			error instanceof CannotCheck
 				? error.message
 				: `an internal error (${(error as Error).message})`,
+			error instanceof Unreadable ? error.text : undefined,
 		);
 	} finally {
 		clearTimeout(timer);

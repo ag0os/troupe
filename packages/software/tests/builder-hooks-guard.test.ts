@@ -10,7 +10,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { encode } from "../tools/builder-hooks.d/log";
 import { Fixture, spawn, tool } from "./builder-hooks-fixture";
 
@@ -22,6 +22,12 @@ const cannot = (why: string) =>
 	`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`;
 // The mark a wrapper sets on a log it checked; the launcher run directly
 // writes a fallback line only with it.
+// The refusal for a command the guard cannot read: an expansion where it
+// needs a literal, or syntax it cannot place.
+const expansion = (what: string) =>
+	`Role guard could not read this command: ${what} holds an expansion. Spell the command name and git options literally and run it again; this is not a hooks failure.\n`;
+const unplain = (why: string) =>
+	`Role guard could not read this command: it holds ${why}. Write it plainly and run it again; this is not a hooks failure.\n`;
 const CHECKED = { BUILDER_HOOKS_LOG_CHECKED: "1" };
 // Code points, so this file holds no dash for publish-check to find.
 const DASH = String.fromCodePoint(0x2d);
@@ -32,6 +38,8 @@ beforeAll(() => {
 	f.write("config/deploy.yml", "x\n");
 	f.write("app/models/user.rb", "x\n");
 	f.write("lib/admin/base.rb", "x\n");
+	f.write("src/deploy.yml", "x\n");
+	f.write("protected/x", "x\n");
 	f.commit("Files");
 	expect(
 		f.prepare(
@@ -42,6 +50,10 @@ beforeAll(() => {
 					"lib/admin/",
 					"app/**/secret_*.rb",
 					"db/schema.rb",
+					"protected/",
+					"123",
+					"notes.bak",
+					"a%b.yml",
 				],
 			}),
 		).code,
@@ -344,6 +356,21 @@ describe("BH-5: fallback log destinations", () => {
 		}
 	});
 
+	test("the guard wrapper logs when the launcher is gone (B13)", () => {
+		const g = new Fixture();
+		try {
+			const launcher = g.ownPackage();
+			g.prepare(g.input());
+			renameSync(launcher, `${launcher}-gone`);
+			closed(wrapper(g, "guard", commit));
+			expect(g.logLines().at(-1)).toMatch(
+				/^\d\d:\d\d:\d\d guard launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
 	test("a run directory whose name ends in a newline still gets its fallback line", () => {
 		const g = new Fixture();
 		try {
@@ -546,28 +573,43 @@ describe("BH-6: history classification", () => {
 		expect(r).toEqual({ code: 0, stdout: "", stderr: "" });
 	});
 
-	test.each([
-		["git commit 'unclosed", "an unclosed single quote"],
-		["echo $(git commit", "an unclosed $( or ("],
-		["cat <<EOF\ngit push\n", "an unterminated heredoc"],
-		["$GIT commit", "a command name it cannot read"],
-		['RUN="git commit"; $RUN', "a command name it cannot read"],
-		['"$PWD/bin/tool" status', "a command name it cannot read"],
+	test.each<[string, string, string]>([
+		["git commit 'unclosed", "an unclosed single quote", ""],
+		["echo $(git commit", "an unclosed $( or (", ""],
+		["cat <<EOF\ngit push\n", "an unterminated heredoc", ""],
+		["$GIT commit", "a command name it cannot read", "the command name"],
+		[
+			'RUN="git commit"; $RUN',
+			"a command name it cannot read",
+			"the command name",
+		],
+		[
+			'"$PWD/bin/tool" status',
+			"a command name it cannot read",
+			"the command name",
+		],
 		[
 			`git ${DASH}${DASH}frobnicate commit`,
 			`an option git takes that it cannot read: ${DASH}${DASH}frobnicate`,
+
+			"",
 		],
-		["git $SUB", "an unreadable option to git"],
+		["git $SUB", "an unreadable option to git", "an option to git"],
 		[
 			`find . ${DASH}newerXY x ${DASH}exec git commit \\;`,
 			`a find primary it cannot read: ${DASH}newerXY`,
+
+			"",
 		],
-	])("refuses what it cannot classify: %s", (command, why) => {
+	])("refuses what it cannot classify: %s", (command, why, what) => {
 		expect(bash(command)).toEqual({
 			code: 2,
 			stdout: "",
-			stderr: cannot(`the command holds ${why}`),
+			stderr: what ? expansion(what) : unplain(why),
 		});
+		expect(f.logLines().at(-1)).toEndWith(
+			` COULD-NOT-RUN the command holds ${encode(why, false)}`,
+		);
 	});
 
 	test.each([
@@ -900,7 +942,7 @@ describe("BH-18: shell writes to excluded paths", () => {
 			expect(run("$GIT commit")).toEqual({
 				code: 2,
 				stdout: "",
-				stderr: cannot("the command holds a command name it cannot read"),
+				stderr: expansion("the command name"),
 			});
 		} finally {
 			g.cleanup();
@@ -981,7 +1023,7 @@ describe("BH-19: pushes stay with the host", () => {
 			expect(run(g, "$GIT push")).toEqual({
 				code: 2,
 				stdout: "",
-				stderr: cannot("the command holds a command name it cannot read"),
+				stderr: expansion("the command name"),
 			});
 		} finally {
 			g.cleanup();
@@ -1003,5 +1045,218 @@ describe("BH-19: pushes stay with the host", () => {
 		expect(denial(bash("git push origin main"))?.permissionDecisionReason).toBe(
 			HISTORY,
 		);
+	});
+});
+
+describe("BH-18: shell writes, fix round 1", () => {
+	const reason = (command: string) =>
+		denial(bash(command))?.permissionDecisionReason;
+
+	test.each([
+		// B1: a destination directory takes the source's basename.
+		["cp src/deploy.yml config/", "config/deploy.yml"],
+		["cp src/deploy.yml config", "config/deploy.yml"],
+		["mv src/deploy.yml config/", "config/deploy.yml"],
+		["install src/deploy.yml config/", "config/deploy.yml"],
+		["ln -sf src/deploy.yml config/", "config/deploy.yml"],
+		["cp -t config src/deploy.yml", "config/deploy.yml"],
+		["cp --target-directory=config src/deploy.yml", "config/deploy.yml"],
+		["cp --target-directory config src/deploy.yml", "config/deploy.yml"],
+		// B1: an operand holding an exclusion.
+		["rm -rf config", "config/deploy.yml"],
+		["rm -r ./config/", "config/deploy.yml"],
+		["mv config /tmp/x", "config/deploy.yml"],
+		["cp -r src/. config/", "config/deploy.yml"],
+		["rmdir lib", "lib/admin"],
+		// B2: sed -E is a flag.
+		["sed -E -i '' s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		["sed -E -i.bak s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		["sed -nEi s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		// B5: a wrapper's directory applies to relative targets.
+		["env -C protected touch x", "protected/x"],
+		["env --chdir=protected touch x", "protected/x"],
+		["env --chdir protected touch x", "protected/x"],
+		["sudo -D protected touch x", "protected/x"],
+		["env -C src mv deploy.yml ../config/", "config/deploy.yml"],
+		// B6: attached option values.
+		["cp -tprotected file", "protected"],
+		["mv -tprotected file", "protected"],
+		["install -tprotected file", "protected"],
+		["ln -stprotected src", "protected"],
+		["command timeout 5 cp -rtprotected src", "protected"],
+		// B10: a number is a file except after >& or <&.
+		["echo x > 123", "123"],
+		["echo x >> 123", "123"],
+		// B11: backup suffixes are writes.
+		["sed -i.bak s/a/b/ notes", "notes.bak"],
+		["sed --in-place=.bak s/a/b/ notes", "notes.bak"],
+		["sed -i .bak s/a/b/ notes", "notes.bak"],
+		["mv -S .bak /tmp/x notes", "notes.bak"],
+		["cp --suffix=.bak /tmp/x notes", "notes.bak"],
+		["cp -b -S .bak /tmp/x notes", "notes.bak"],
+		// B15: unlink writes.
+		["unlink config/deploy.yml", "config/deploy.yml"],
+		// B16: install -d and sed -I.
+		["install -d lib/admin/new /tmp/y", "lib/admin/new"],
+		["sed -I .bak s/a/b/ config/deploy.yml", "config/deploy.yml"],
+		// O5: find -exec targets are read.
+		["find . -exec touch protected/x \\;", "protected/x"],
+		["find . -name x -exec rm -rf protected \\;", "protected"],
+	])("denies %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test("removing a parent of the run directory is denied with its path", () => {
+		const parent = dirname(f.runDir);
+		expect(reason(`rm -rf '${parent}'`)).toBe(excludedReason(f.runDir));
+	});
+
+	test.each([
+		"echo x 2>&1",
+		"echo x >&2",
+		"echo x 3>&-",
+		"touch --reference config/deploy.yml app/a.rb",
+		"truncate --reference config/deploy.yml -s0 app/a.rb",
+		"touch -r config/deploy.yml app/a.rb",
+		"touch --date 2020-01-01 app/a.rb",
+		"cp config/deploy.yml /tmp/copy",
+		"rm -rf tmp/cache",
+		"cp -r config /tmp/conf",
+		"install -m 644 -o root /tmp/x app/a.rb",
+		"find . -name '*.tmp' -exec rm {} \\;",
+	])("allows %s", (command) => {
+		expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+	});
+
+	test("the log says which shell writes it did not read (B8)", () => {
+		for (const command of [
+			"cd config && echo x > deploy.yml",
+			"pushd config; echo x > deploy.yml",
+			'echo x > "$TMPDIR/x"',
+			"echo x > ~/x",
+			"touch config/$F",
+		]) {
+			bash(command);
+			expect(f.logLines().at(-1)).toMatch(
+				/ guard Bash bash \d+ms ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+			);
+		}
+		bash("echo x > app/a.rb");
+		expect(f.logLines().at(-1)).toMatch(
+			/ ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
+		bash("cd app");
+		expect(f.logLines().at(-1)).toMatch(/ ALLOW no history write session=s1$/);
+	});
+
+	test("a DENY reason holding % is encoded, and the run directory's line is named (B16)", () => {
+		bash("echo x > a%b.yml");
+		expect(f.logLines().at(-1)).toMatch(
+			/ DENY shell write a%25b.yml excluded by a%25b.yml session=s1$/,
+		);
+		const counter = join(f.runDir, "stop-s1");
+		bash(`rm -f '${counter}'`);
+		expect(f.logLines().at(-1)).toEndWith(
+			` DENY shell write ${counter} in the run directory session=s1`,
+		);
+		bash("rm -rf config");
+		expect(f.logLines().at(-1)).toMatch(
+			/ DENY shell write config contains config\/deploy.yml session=s1$/,
+		);
+	});
+
+	test("a known target is checked before an unreadable remainder is decided (B4)", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input({ history_writes: true, push_writes: true }));
+			const manifest = join(g.runDir, "builder-manifest.json");
+			const r = g.hook("guard", {
+				session_id: "s1",
+				tool_name: "Bash",
+				tool_input: { command: `echo x > '${manifest}'; $CMD` },
+			});
+			expect(denial(r)?.permissionDecisionReason).toBe(
+				excludedReason(manifest),
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("both grants with exclusions still refuse an unreadable command (B16)", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(
+				g.input({
+					history_writes: true,
+					push_writes: true,
+					excluded: ["config/deploy.yml"],
+				}),
+			);
+			expect(
+				g.hook("guard", {
+					session_id: "s1",
+					tool_name: "Bash",
+					tool_input: { command: "$GIT commit" },
+				}),
+			).toEqual({ code: 2, stdout: "", stderr: expansion("the command name") });
+		} finally {
+			g.cleanup();
+		}
+	});
+});
+
+describe("BH-19: pushes, fix round 1", () => {
+	const PUSH =
+		"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
+	let g: Fixture;
+	beforeAll(() => {
+		g = new Fixture();
+		g.prepare(g.input({ history_writes: true }));
+	});
+	afterAll(() => g.cleanup());
+	const run = (command: string) =>
+		g.hook("guard", {
+			session_id: "s1",
+			tool_name: "Bash",
+			tool_input: { command },
+		});
+
+	test.each([
+		"find . -exec git commit \\; -exec git push \\;",
+		"find . -exec git commit {} + -exec git push {} +",
+		"git-push origin main",
+		"/usr/libexec/git-core/git-push origin main",
+		"git send-pack origin HEAD:refs/heads/main",
+		"git subtree push --prefix=lib origin main",
+		"git -c alias.p=push p origin main",
+		"git -c alias.p='push --force' p",
+	])("denies %s", (command) => {
+		expect(denial(run(command))?.permissionDecisionReason).toBe(PUSH);
+	});
+
+	test.each([
+		'git checkout "$BRANCH"',
+		'git branch "$B"',
+		'git switch "$B"',
+		'git gc "$X"',
+		"git -c alias.s=status s",
+		"git subtree split --prefix=lib",
+	])("allows %s", (command) => {
+		expect(run(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+	});
+
+	test("a shell alias in the line is refused", () => {
+		expect(run("git -c 'alias.p=!git push' p").code).toBe(2);
+	});
+
+	test("history off reads dashed git and the new pushes as history writes (B14, B15)", () => {
+		for (const command of [
+			"git-commit -m x",
+			"git send-pack origin main",
+			"git subtree push --prefix=lib origin main",
+			"git -c alias.ci=commit ci -m x",
+		])
+			expect(denial(bash(command))?.permissionDecisionReason).toBe(HISTORY);
 	});
 });

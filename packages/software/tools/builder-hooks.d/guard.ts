@@ -6,8 +6,8 @@
 import { isAbsolute } from "node:path";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
-import { excludedBy, shownPath } from "./paths";
-import { historyWrite, pushes, shellWrites, Unclassifiable } from "./shell";
+import { excludedBy, holdsExclusion, shownPath } from "./paths";
+import { historyWrite, pushWrite, shellWrites, Unclassifiable } from "./shell";
 
 export const HISTORY_REASON =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
@@ -22,6 +22,17 @@ export function excludedReason(path: string): string {
 const EDITS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 export class CannotCheck extends Error {}
+
+/** A command the guard cannot read: the builder's to rewrite, not a fault. */
+export class Unreadable extends CannotCheck {
+	readonly text: string;
+	constructor(error: Unclassifiable) {
+		super(`the command holds ${error.message}`);
+		this.text = error.what
+			? `Role guard could not read this command: ${error.what} holds an expansion. Spell the command name and git options literally and run it again; this is not a hooks failure.`
+			: `Role guard could not read this command: it holds ${error.message}. Write it plainly and run it again; this is not a hooks failure.`;
+	}
+}
 
 export type Decision = {
 	deny: string | null;
@@ -46,19 +57,19 @@ export function decide(
 		const command = fields.command;
 		if (typeof command !== "string")
 			throw new CannotCheck("the Bash call has no command");
-		const unreadable = (error: unknown): never => {
-			if (error instanceof Unclassifiable)
-				throw new CannotCheck(`the command holds ${error.message}`);
-			throw error;
-		};
 		const history = m.history_writes ? "history authority" : "no history write";
-		if (!m.history_writes) {
-			let found: string | null = null;
+		let unreadable: Unclassifiable | null = null;
+		const attempt = (read: () => string | null): string | null => {
 			try {
-				found = historyWrite(command);
+				return read();
 			} catch (error) {
-				unreadable(error);
+				if (!(error instanceof Unclassifiable)) throw error;
+				unreadable ??= error;
+				return null;
 			}
+		};
+		if (!m.history_writes) {
+			const found = attempt(() => historyWrite(command));
 			if (found)
 				return {
 					deny: HISTORY_REASON,
@@ -67,65 +78,69 @@ export function decide(
 					reason: `history write ${found}`,
 				};
 		} else if (!m.push_writes) {
-			let push = false;
-			try {
-				push = pushes(command);
-			} catch (error) {
-				unreadable(error);
-			}
-			if (push)
+			const found = attempt(() => pushWrite(command));
+			if (found)
 				return {
 					deny: PUSH_REASON,
 					tool,
 					target: "bash",
-					reason: "push git push",
+					reason: `push ${found}`,
 				};
 		}
-		// With history and push authority and nothing excluded only the run
-		// directory is at stake, and an unreadable command passes unread.
-		let writes: string[];
-		try {
-			writes = shellWrites(command);
-		} catch (error) {
-			if (
-				error instanceof Unclassifiable &&
-				m.history_writes &&
-				m.push_writes &&
-				m.excluded.length === 0
-			)
-				return {
-					deny: null,
-					tool,
-					target: "bash",
-					reason: `${history}; command not read`,
-				};
-			writes = unreadable(error);
-		}
+		// What was read is checked before an unreadable remainder is decided.
+		const writes = shellWrites(command);
+		unreadable ??= writes.error;
 		const cwd =
 			typeof event.cwd === "string" && isAbsolute(event.cwd)
 				? event.cwd
 				: m.repo;
-		for (const write of writes) {
+		for (const write of writes.targets) {
 			// Unnormalized, so the path check resolves symlinks before `..`.
-			const path = isAbsolute(write) ? write : `${cwd}/${write}`;
-			const hit = excludedBy(m.repo, path, [runDir])
-				? "the run directory"
-				: excludedBy(m.repo, path, m.excluded);
-			if (hit)
-				return {
-					deny: excludedReason(shownPath(m.repo, path)),
-					tool,
-					target: "bash",
-					reason: `shell write ${shownPath(m.repo, path)} ${hit === "the run directory" ? "in" : "excluded by"} ${hit}`,
-				};
+			const path = isAbsolute(write.path) ? write.path : `${cwd}/${write.path}`;
+			const shown = shownPath(m.repo, path);
+			const deny = (named: string, why: string): Decision => ({
+				deny: excludedReason(named),
+				tool,
+				target: "bash",
+				reason: `shell write ${shown} ${why}`,
+			});
+			if (excludedBy(m.repo, path, [runDir]))
+				return deny(shown, "in the run directory");
+			const hit = excludedBy(m.repo, path, m.excluded);
+			if (hit) return deny(shown, `excluded by ${hit}`);
+			if (write.kind === "tree") {
+				if (holdsExclusion(m.repo, path, [runDir]))
+					return deny(runDir, "contains the run directory");
+				const held = holdsExclusion(m.repo, path, m.excluded);
+				if (held) {
+					const entry = held.replace(/\/+$/, "");
+					const named = /[*?[]/.test(entry) ? entry : shownPath(m.repo, entry);
+					return deny(named, `contains ${named}`);
+				}
+			}
 		}
+		// With history and push authority and nothing excluded only the run
+		// directory is at stake, and an unreadable command passes unread.
+		if (unreadable) {
+			if (!(m.history_writes && m.push_writes && m.excluded.length === 0))
+				throw new Unreadable(unreadable);
+			return {
+				deny: null,
+				tool,
+				target: "bash",
+				reason: `${history}; command not read`,
+			};
+		}
+		const said = writes.unread
+			? "shell writes not read, not health-checked"
+			: writes.targets.length
+				? "shell writes not excluded, not health-checked"
+				: null;
 		return {
 			deny: null,
 			tool,
 			target: "bash",
-			reason: writes.length
-				? `${history}; shell writes not excluded, not health-checked`
-				: history,
+			reason: said ? `${history}; ${said}` : history,
 		};
 	}
 	if (EDITS.has(tool)) {

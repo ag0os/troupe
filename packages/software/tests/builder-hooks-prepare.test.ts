@@ -305,6 +305,15 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 		const r = f.prepare(f.input());
 		expect(r.json.result.history_writes).toBe(true);
 		expect(r.json.result.warnings).toEqual([]);
+		const h = new Fixture();
+		try {
+			const p = h.prepare(h.input({ push_writes: true }));
+			expect(p.json.result.warnings).toEqual([
+				"push_writes is true: the brief must carry the grant that allows pushes",
+			]);
+		} finally {
+			h.cleanup();
+		}
 		const g = new Fixture();
 		try {
 			const r = g.prepare(g.input({ history_writes: false }));

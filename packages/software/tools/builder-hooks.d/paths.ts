@@ -138,6 +138,53 @@ export function excludedBy(
 }
 
 /**
+ * The exclusion that lies at or under `dir` (absolute, or relative to
+ * `repo`), so that removing, moving or overwriting `dir` as a tree reaches
+ * it, or null. A glob is followed segment by segment: `dir` holds it when
+ * its segments match the glob's leading ones and the glob goes deeper, and
+ * always once a `**` is reached. A directory above the repository holds
+ * every exclusion.
+ */
+export function holdsExclusion(
+	repo: string,
+	dir: string,
+	excluded: string[],
+): string | null {
+	const repoReal = resolveDeep(repo);
+	const given = isAbsolute(dir) ? dir : `${repo}/${dir}`;
+	const forms = [normalize(given), resolveOs(given)].map((f) =>
+		f.replace(/\/+$/, "").toLowerCase(),
+	);
+	const roots = [repo, repoReal].map((r) => r.toLowerCase());
+	const aboveRepo = forms.some((f) => roots.some((r) => under(r, f)));
+	for (const e of excluded) {
+		const pattern = e.replace(/\/+$/, "");
+		if (!GLOB.test(pattern)) {
+			const targets = [
+				normalize(isAbsolute(pattern) ? pattern : join(repo, pattern)),
+				isAbsolute(pattern) ? pattern : join(repoReal, pattern),
+				resolveOs(isAbsolute(pattern) ? pattern : `${repo}/${pattern}`),
+			].map((t) => t.toLowerCase());
+			if (forms.some((f) => targets.some((t) => under(t, f)))) return e;
+			continue;
+		}
+		if (aboveRepo) return e;
+		const globs = pattern.split("/");
+		for (const rel of relativeUnder(forms, roots)) {
+			const segments = rel.split("/");
+			for (let k = 0; ; k++) {
+				const g = globs[k];
+				if (g === undefined) break;
+				if (k >= segments.length || g === "**") return e;
+				const regex = new RegExp(globRegex(g).source, "i");
+				if (!regex.test(segments[k] as string)) break;
+			}
+		}
+	}
+	return null;
+}
+
+/**
  * How a denial names `file`: its resolved form relative to the repository's
  * real path, or the resolved form itself when that falls outside it.
  */
