@@ -311,8 +311,8 @@ Like every package tool it needs a Shepherd workspace (see [Which workspace auth
 running it from a repository outside any workspace gets `no workspace for package "software"`. The hooks the
 settings name call the package's launcher directly and need no workspace.
 
-`prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `excluded`,
-`gates`, `contract_tests`, `health`; any other field is refused, budgets included; `history_writes` defaults to true, and false, set when an implementation coordinator holds the commit, draws a warning that the brief must say "leave the change uncommitted; the host commits after recheck"), resolves the repository through
+`prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `push_writes`, `excluded`,
+`gates`, `contract_tests`, `health`; any other field is refused, budgets included; `history_writes` defaults to true, and false, set when an implementation coordinator holds the commit, draws a warning that the brief must say "leave the change uncommitted; the host commits after recheck"; `push_writes` defaults to false), resolves the repository through
 its real path and the base to a commit once, and writes `builder-manifest.json`, then `builder-hooks.settings.json`,
 private, into a new or empty run directory that is outside the repository, its git directory and any harness
 configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, gates and health argv
@@ -334,7 +334,7 @@ Claude prefixes the command to every hook failure the model sees, so the model r
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
-  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them, and an edit under an `excluded` path or under the
+  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies `git push` unless `push_writes` is true, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
   run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
@@ -383,7 +383,7 @@ one record. The first-call check in step 4 needs `ALLOW` or `DENY`, never `COULD
 nothing:
 `HH:MM:SS <hook> <tool or check> <file or scope> <n>ms <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`,
 the latency in milliseconds with its unit (`8ms`). The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`).
-A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`, `shell write <path> excluded by <entry>`. A
+A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`, `shell write <path> excluded by <entry>`, `push git push`. A
 guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
 block.
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, or, when no check

@@ -53,6 +53,7 @@ An input file, for a Rails repository:
     "repo": "/path/to/worktree",
     "base": "origin/main",
     "history_writes": true,
+    "push_writes": false,
     "excluded": ["bin/ci", "config/ci.rb", "app/controllers/admin/base_controller.rb"],
     "gates": {
       "test": { "argv": ["bin/rails", "test", "{files}"],

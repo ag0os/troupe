@@ -264,6 +264,7 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 			repo: f.repo,
 			base: first,
 			history_writes: true,
+			push_writes: false,
 			excluded: ["config/deploy.yml", "app/admin/**"],
 			gates: {},
 			contract_tests:
@@ -322,6 +323,7 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 			[{ budget_ms: 5 }, "unknown field: budget_ms"],
 			[{ log: "/tmp/x" }, "unknown field: log"],
 			[{ history_writes: "yes" }, "history_writes is not true or false"],
+			[{ push_writes: 1 }, "push_writes is not true or false"],
 			[
 				{ contract_tests: "'test/a.rb' 'test/b.rb'" },
 				"neither the discovery sentinel nor a list",

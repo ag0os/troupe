@@ -7,10 +7,13 @@ import { isAbsolute } from "node:path";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
 import { excludedBy, shownPath } from "./paths";
-import { historyWrite, shellWrites, Unclassifiable } from "./shell";
+import { historyWrite, pushes, shellWrites, Unclassifiable } from "./shell";
 
 export const HISTORY_REASON =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
+
+export const PUSH_REASON =
+	"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
 
 export function excludedReason(path: string): string {
 	return `Role guard: ${path} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
@@ -63,9 +66,23 @@ export function decide(
 					target: "bash",
 					reason: `history write ${found}`,
 				};
+		} else if (!m.push_writes) {
+			let push = false;
+			try {
+				push = pushes(command);
+			} catch (error) {
+				unreadable(error);
+			}
+			if (push)
+				return {
+					deny: PUSH_REASON,
+					tool,
+					target: "bash",
+					reason: "push git push",
+				};
 		}
-		// With history authority and nothing excluded only the run directory
-		// is at stake, and an unreadable command passes unread as it did.
+		// With history and push authority and nothing excluded only the run
+		// directory is at stake, and an unreadable command passes unread.
 		let writes: string[];
 		try {
 			writes = shellWrites(command);
@@ -73,6 +90,7 @@ export function decide(
 			if (
 				error instanceof Unclassifiable &&
 				m.history_writes &&
+				m.push_writes &&
 				m.excluded.length === 0
 			)
 				return {

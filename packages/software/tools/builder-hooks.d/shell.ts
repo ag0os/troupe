@@ -864,6 +864,11 @@ export function historyWrite(source: string): string | null {
 	return null;
 }
 
+/** Whether any command in a Bash command line is a git push; throws Unclassifiable. */
+export function pushes(source: string): boolean {
+	return simpleCommands(source).some((words) => classify(words) === "git push");
+}
+
 /**
  * The paths a Bash command line writes by redirection or a known writer,
  * each as written; a target holding an expansion or a leading `~` is left

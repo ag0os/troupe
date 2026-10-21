@@ -907,10 +907,10 @@ describe("BH-18: shell writes to excluded paths", () => {
 		}
 	});
 
-	test("with history authority and no exclusions an unreadable command passes unread, as before", () => {
+	test("with history and push authority and no exclusions an unreadable command passes unread, as before", () => {
 		const g = new Fixture();
 		try {
-			g.prepare(g.input());
+			g.prepare(g.input({ push_writes: true }));
 			expect(
 				g.hook("guard", {
 					session_id: "s1",
@@ -938,6 +938,70 @@ describe("BH-18: shell writes to excluded paths", () => {
 		bash("ls");
 		expect(f.logLines().at(-1)).toMatch(
 			/ guard Bash bash \d+ms ALLOW no history write session=s1$/,
+		);
+	});
+});
+
+describe("BH-19: pushes stay with the host", () => {
+	const PUSH =
+		"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
+	const run = (g: Fixture, command: string) =>
+		g.hook("guard", {
+			session_id: "s1",
+			tool_name: "Bash",
+			tool_input: { command },
+		});
+
+	test("history authority commits but does not push unless push_writes is true", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			expect(run(g, "git commit -m x").stdout).toBe("");
+			for (const command of [
+				"git push origin main",
+				"git commit -m x && git -C . push",
+			])
+				expect(denial(run(g, command))).toEqual({
+					hookEventName: "PreToolUse",
+					permissionDecision: "deny",
+					permissionDecisionReason: PUSH,
+				});
+			expect(g.logLines().at(-1)).toMatch(
+				/ guard Bash bash \d+ms DENY push git push session=s1$/,
+			);
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("with push_writes false an unreadable command is refused, nothing excluded", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input());
+			expect(run(g, "$GIT push")).toEqual({
+				code: 2,
+				stdout: "",
+				stderr: cannot("the command holds a command name it cannot read"),
+			});
+		} finally {
+			g.cleanup();
+		}
+	});
+
+	test("push_writes true allows the push; history off still denies it", () => {
+		const g = new Fixture();
+		try {
+			g.prepare(g.input({ push_writes: true }));
+			expect(run(g, "git push origin main")).toEqual({
+				code: 0,
+				stdout: "",
+				stderr: "",
+			});
+		} finally {
+			g.cleanup();
+		}
+		expect(denial(bash("git push origin main"))?.permissionDecisionReason).toBe(
+			HISTORY,
 		);
 	});
 });
