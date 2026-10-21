@@ -2487,6 +2487,9 @@ describe("package tools at launch (O14, O15, O16)", () => {
 			"Bash(shepherd tool mail unread *)",
 		]);
 		expect(rules("# none\n")).toEqual([shared]);
+		expect(rules("Modules: software\n")?.join("\n")).not.toContain(
+			"builder-hooks",
+		);
 	});
 
 	test("one guide rule on Claude when a selected package declares a guide (D5)", () => {

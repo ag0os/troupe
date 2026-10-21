@@ -281,7 +281,7 @@ function checkPath(
 
 const GLOB = /[*?[]/;
 
-function globRegex(pattern: string): RegExp {
+export function globRegex(pattern: string): RegExp {
 	let out = "";
 	for (let i = 0; i < pattern.length; i++) {
 		const ch = pattern[i] as string;
@@ -305,7 +305,7 @@ function globRegex(pattern: string): RegExp {
 	return new RegExp(`^${out}$`);
 }
 
-function refusedPattern(pattern: string): string | null {
+export function refusedPattern(pattern: string): string | null {
 	if (pattern.startsWith("!")) return "negation";
 	if (/[{}]/.test(pattern)) return "brace expansion";
 	if (/[?*+@!]\(/.test(pattern)) return "an extglob";

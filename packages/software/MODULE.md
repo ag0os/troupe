@@ -23,6 +23,10 @@ tools:
     description: Lint Contracts, count proof coverage, map components and report PR changes
     access: read
     requires: [bun, git]
+  builder-hooks:
+    description: Prepare a Claude Code builder's hook settings, run its guard, health and Stop hooks, and re-check its work
+    access: write
+    requires: [bun, git]
 guides:
   build:
     description: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder

@@ -1,0 +1,146 @@
+#!/bin/sh
+# builder-hooks: prepare a builder's hook settings, run as its guard, health
+# and Stop hooks, and re-check its work after the session. The work is in
+# builder-hooks.d/main.ts, run by bun from builder-hooks.d/, a directory this
+# package owns that holds no bunfig.toml or .env, so the caller's
+# configuration, preloads and environment files never load; the caller's
+# directory is recorded in BUILDER_HOOKS_TARGET_CWD. Contract: docs/PACKAGES.md
+# (contract 1) for prepare and recheck; Claude's hook protocol for the hooks.
+#
+# When bun cannot start, the hook modes fail as their protocol needs: the
+# guard refuses (exit 2), health says so as context (exit 0), also when the
+# runtime exits without answering, and stop does not block (exit 0).
+
+mode=$1
+
+# Escape text byte by byte, whatever the locale: `log` percent-encodes
+# control characters, C1 code points (UTF-8 C2 80 to C2 9F) and %, as
+# log.ts writes them (%0A, %85, %25); `json` makes JSON string content,
+# control characters as \n, \t, \r or \u00XX. The script builds a printf
+# format, so other bytes pass as octal escapes.
+escape() {
+	fmt=$(printf '%s' "$2" | LC_ALL=C od -An -tu1 -v | LC_ALL=C awk -v mode="$1" '
+		{ for (i = 1; i <= NF; i++) b[n++] = $i }
+		END {
+			for (i = 0; i < n; i++) {
+				c = b[i]
+				if (mode == "log") {
+					if (c == 194 && i + 1 < n && b[i + 1] >= 128 && b[i + 1] < 160) {
+						printf "%%%%%02X", b[++i]
+						continue
+					}
+					if (c < 32 || c == 127 || c == 37) {
+						printf "%%%%%02X", c
+						continue
+					}
+				} else if (c == 34 || c == 92) {
+					printf "\\\\\\%03o", c
+					continue
+				} else if (c == 10) {
+					printf "\\\\n"
+					continue
+				} else if (c == 9) {
+					printf "\\\\t"
+					continue
+				} else if (c == 13) {
+					printf "\\\\r"
+					continue
+				} else if (c < 32) {
+					printf "\\\\u%04X", c
+					continue
+				} else if (c == 37) {
+					printf "%%%%"
+					continue
+				}
+				printf "\\%03o", c
+			}
+		}')
+	# The format is built above from bytes alone.
+	# shellcheck disable=SC2059
+	printf "$fmt"
+}
+
+fail() {
+	# The diagnostics need sed, head and date even when PATH lost them.
+	PATH=$PATH:/usr/bin:/bin
+	case $mode in
+	guard)
+		printf 'Role guard could not run: %s. The call is refused until the host repairs the hooks.\n' "$1" >&2
+		code=2
+		;;
+	health)
+		# Context, not an exit code: the model sees only context.
+		[ -n "${hook_input+set}" ] || hook_input=$(cat 2>/dev/null)
+		file=$(printf '%s' "$hook_input" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
+		[ -n "$file" ] || file='the edited file'
+		text=$(escape json "health check could not run on $file: $1")
+		printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$text"
+		code=0
+		;;
+	stop)
+		printf 'Stop gate could not run: %s. Not blocking; the host will re-check.\n' "$1" >&2
+		code=0
+		;;
+	*)
+		printf 'builder-hooks: %s\n' "$1" >&2
+		code=2
+		;;
+	esac
+	# A fallback line goes only to a log the hook's wrapper checked (its run
+	# directory, the repository's real path and the manifest prepare wrote);
+	# run directly, the launcher cannot validate the manifest without bun
+	# and writes none. The location is checked again here.
+	case $mode in
+	guard | health | stop)
+		log=$SHEPHERD_HOOK_LOG
+		case $BUILDER_HOOKS_LOG_CHECKED:$log in
+		1:/*/hooks.log)
+			nl='
+'
+			rundir=$(cd "${log%/hooks.log}" 2>/dev/null && pwd -P && echo x) && rundir=${rundir%x} && rundir=${rundir%"$nl"} || rundir=
+			repo=
+			[ -z "$rundir" ] || repo=$(sed -n 's/^  "repo": "\([^"\\]*\)",$/\1/p' "$rundir/builder-manifest.json" 2>/dev/null | head -n 1)
+			real=
+			[ -z "$repo" ] || { real=$(cd "$repo" 2>/dev/null && pwd -P && echo x) && real=${real%x} && real=${real%"$nl"}; } || real=
+			if [ -n "$real" ]; then
+				case "$rundir/" in
+				"$repo"/* | "$real"/*) ;;
+				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(escape log "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
+				esac
+			fi
+			;;
+		esac
+		;;
+	esac
+	exit "$code"
+}
+
+case $0 in
+*/*) dir=${0%/*} ;;
+*) dir=. ;;
+esac
+dir=$(cd "$dir/builder-hooks.d" 2>/dev/null && pwd -P) || fail "cannot find builder-hooks.d beside $0"
+command -v bun >/dev/null 2>&1 || fail "bun is not on PATH; this tool requires bun and git"
+BUILDER_HOOKS_TARGET_CWD=$PWD
+export BUILDER_HOOKS_TARGET_CWD
+cd "$dir" || fail "cannot enter $dir"
+if [ "$mode" = health ]; then
+	# Health answers only through context: a runtime that exits without
+	# answering is said as context too, so bun runs as a child here.
+	# The event goes through a file: a shell variable would drop a NUL byte
+	# and check a different path from the one in the event.
+	event=$(mktemp "${TMPDIR:-/tmp}/builder-hooks-event.XXXXXX") || fail "the event cannot be held"
+	trap 'rm -f "$event"' EXIT
+	cat >"$event"
+	hook_input=$(tr -d '\000' <"$event")
+	[ "$(tr -cd '\000' <"$event" | wc -c)" -eq 0 ] || fail "the event is not valid JSON"
+	out=$(bun --no-install --env-file=/dev/null "$dir/main.ts" "$@" <"$event")
+	code=$?
+	if [ -n "$out" ]; then
+		printf '%s\n' "$out"
+		exit 0
+	fi
+	[ "$code" -eq 0 ] || fail "the runtime exited $code"
+	exit 0
+fi
+exec bun --no-install --env-file=/dev/null "$dir/main.ts" "$@"

@@ -466,6 +466,12 @@ describe("software is a base package (O8, O2)", () => {
 			requires: ["git"],
 			network: false,
 		});
+		expect(software?.package?.tools["builder-hooks"]).toEqual({
+			description: expect.any(String),
+			access: "write",
+			requires: ["bun", "git"],
+			network: false,
+		});
 		expect(software?.package?.guides).toEqual({
 			build: {
 				description:
