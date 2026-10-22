@@ -31,6 +31,7 @@ export type Manifest = {
 	repo: string;
 	base: string;
 	history_writes: boolean;
+	push_writes: boolean;
 	excluded: string[];
 	gates: { test?: TestGate; lint?: FileGate };
 	contract_tests: typeof SENTINEL | string[];
@@ -45,6 +46,7 @@ const INPUT_FIELDS = [
 	"repo",
 	"base",
 	"history_writes",
+	"push_writes",
 	"excluded",
 	"gates",
 	"contract_tests",
@@ -245,6 +247,8 @@ export function checkInput(value: unknown, manifest = false): Input {
 		bad("base is not a revision");
 	if (o.history_writes !== undefined && typeof o.history_writes !== "boolean")
 		bad("history_writes is not true or false");
+	if (o.push_writes !== undefined && typeof o.push_writes !== "boolean")
+		bad("push_writes is not true or false");
 	let contract: Manifest["contract_tests"] = SENTINEL;
 	if (o.contract_tests !== undefined && o.contract_tests !== SENTINEL) {
 		if (!Array.isArray(o.contract_tests))
@@ -263,7 +267,8 @@ export function checkInput(value: unknown, manifest = false): Input {
 		role: "builder",
 		repo: o.repo,
 		base: o.base,
-		history_writes: o.history_writes === true,
+		history_writes: o.history_writes !== false,
+		push_writes: o.push_writes === true,
 		excluded: strings(o.excluded ?? [], "excluded").map((p) =>
 			pattern(p, "excluded"),
 		),

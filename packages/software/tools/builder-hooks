@@ -105,7 +105,7 @@ fail() {
 			if [ -n "$real" ]; then
 				case "$rundir/" in
 				"$repo"/* | "$real"/*) ;;
-				*) printf '%s %s launcher - 0 COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(escape log "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
+				*) printf '%s %s launcher - 0ms COULD-NOT-RUN %s\n' "$(date +%H:%M:%S 2>/dev/null)" "$mode" "$(escape log "$1")" >>"$rundir/hooks.log" 2>/dev/null ;;
 				esac
 			fi
 			;;

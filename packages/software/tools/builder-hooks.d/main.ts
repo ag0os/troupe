@@ -6,7 +6,7 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { neutralizers } from "./git";
-import { answer, CannotCheck, decide } from "./guard";
+import { answer, CannotCheck, decide, Unreadable } from "./guard";
 import { health } from "./health";
 import { logLine } from "./log";
 import { loadManifest, type Manifest, ToolError } from "./manifest";
@@ -28,8 +28,8 @@ prepare   check the Shepherd's policy file, resolve the repository and base,
           into a new or empty run directory outside the repository; prints
           the settings path to pass to claude --settings, which adds
           these hooks to the project's own
-guard     PreToolUse hook: deny history writes and excluded edits;
-          refuse what it cannot check
+guard     PreToolUse hook: deny history writes, and edits and shell
+          writes to excluded paths; refuse what it cannot check
 health    PostToolUse hook: one checker on the edited file; anything it
           cannot do is said as context
 stop      Stop hook: the changed scope's gates, at most three blocks
@@ -52,7 +52,8 @@ An input file, for a Rails repository:
     "role": "builder",
     "repo": "/path/to/worktree",
     "base": "origin/main",
-    "history_writes": false,
+    "history_writes": true,
+    "push_writes": false,
     "excluded": ["bin/ci", "config/ci.rb", "app/controllers/admin/base_controller.rb"],
     "gates": {
       "test": { "argv": ["bin/rails", "test", "{files}"],
@@ -75,8 +76,11 @@ The runbook:
   1. Prepare through the installed binary into the item's runs/<run>/
      directory; do not reinstall while the builder runs.
   2. Copy the resolved base and exclusions from prepare --json into the
-     brief, with history authority, attribution, the reserved-stop line and
-     the third-block reporting instruction.
+     brief, with attribution, the reserved-stop line and the third-block
+     reporting instruction. History writes are on unless an implementation
+     coordinator holds the commit; then history_writes is false and the
+     brief says "leave the change uncommitted; the host commits after
+     recheck".
   3. Launch with --settings <path>; a one-shot builder runs claude -p with a
      finite --max-turns.
   4. After the first guarded tool call, confirm an ALLOW or DENY line in
@@ -153,10 +157,10 @@ function load(): { manifest: Manifest; runDir: string } {
 }
 
 async function guardMode(args: string[]): Promise<number> {
-	const refuse = (why: string): number => {
+	const refuse = (why: string, text?: string): number => {
 		tryLog(fallbackLog(), "guard", why);
 		process.stderr.write(
-			`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`,
+			`${text ?? `Role guard could not run: ${why}. The call is refused until the host repairs the hooks.`}\n`,
 		);
 		return 2;
 	};
@@ -195,6 +199,7 @@ async function guardMode(args: string[]): Promise<number> {
 			error instanceof CannotCheck
 				? error.message
 				: `an internal error (${(error as Error).message})`,
+			error instanceof Unreadable ? error.text : undefined,
 		);
 	} finally {
 		clearTimeout(timer);

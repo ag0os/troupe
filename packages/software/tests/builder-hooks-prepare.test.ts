@@ -263,7 +263,8 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 			role: "builder",
 			repo: f.repo,
 			base: first,
-			history_writes: false,
+			history_writes: true,
+			push_writes: false,
 			excluded: ["config/deploy.yml", "app/admin/**"],
 			gates: {},
 			contract_tests:
@@ -300,14 +301,25 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 		);
 	});
 
-	test("history authority defaults to false and true carries a warning", () => {
-		expect(f.prepare(f.input()).json.result.history_writes).toBe(false);
+	test("history authority defaults to true and false carries a warning", () => {
+		const r = f.prepare(f.input());
+		expect(r.json.result.history_writes).toBe(true);
+		expect(r.json.result.warnings).toEqual([]);
+		const h = new Fixture();
+		try {
+			const p = h.prepare(h.input({ push_writes: true }));
+			expect(p.json.result.warnings).toEqual([
+				"push_writes is true: the brief must carry the grant that allows pushes",
+			]);
+		} finally {
+			h.cleanup();
+		}
 		const g = new Fixture();
 		try {
-			const r = g.prepare(g.input({ history_writes: true }));
-			expect(r.json.result.history_writes).toBe(true);
+			const r = g.prepare(g.input({ history_writes: false }));
+			expect(r.json.result.history_writes).toBe(false);
 			expect(r.json.result.warnings).toEqual([
-				"history_writes is true: the brief must carry the grant that allows it",
+				'history_writes is false: the brief must say "leave the change uncommitted; the host commits after recheck"',
 			]);
 		} finally {
 			g.cleanup();
@@ -320,6 +332,7 @@ describe("BH-3: preparation boundaries and shared policy", () => {
 			[{ budget_ms: 5 }, "unknown field: budget_ms"],
 			[{ log: "/tmp/x" }, "unknown field: log"],
 			[{ history_writes: "yes" }, "history_writes is not true or false"],
+			[{ push_writes: 1 }, "push_writes is not true or false"],
 			[
 				{ contract_tests: "'test/a.rb' 'test/b.rb'" },
 				"neither the discovery sentinel nor a list",
@@ -484,7 +497,7 @@ describe("BH-4: settings artifacts", () => {
 	});
 
 	test("with the launcher present each wrapper answers as the launcher does", () => {
-		f.prepare(f.input());
+		f.prepare(f.input({ history_writes: false }));
 		const events = {
 			guard: {
 				session_id: "s",
@@ -527,7 +540,7 @@ describe("BH-4: settings artifacts", () => {
 		const g = new Fixture();
 		try {
 			g.runDir = join(g.root, "it's $(x) `y` run");
-			g.prepare(g.input());
+			g.prepare(g.input({ history_writes: false }));
 			const s = settingsOf(g);
 			const guard = s.hooks.PreToolUse[0].hooks[0].command as string;
 			const child = spawn(["/bin/sh", "-c", guard], {

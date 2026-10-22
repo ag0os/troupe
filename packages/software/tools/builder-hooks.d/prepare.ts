@@ -92,7 +92,7 @@ function wrapper(
 ): string {
 	const why = `the launcher ${launcher} is missing or not executable`;
 	const logged = (reason: string) =>
-		`[ -z "$log" ] || printf '%s ${mode} launcher - 0 COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>"$log" 2>/dev/null`;
+		`[ -z "$log" ] || printf '%s ${mode} launcher - 0ms COULD-NOT-RUN %s\\n' "$(date +%H:%M:%S)" ${reason} >>"$log" 2>/dev/null`;
 	const head = `#!/bin/sh
 # builder-hooks ${mode} hook for this run, written by prepare.
 PATH=$PATH:/usr/bin:/bin
@@ -113,7 +113,7 @@ export SHEPHERD_HOOK_MANIFEST=${shq(join(runDir, MANIFEST))} SHEPHERD_HOOK_LOG="
 	const run = `${shq(launcher)} ${mode}`;
 	if (mode === "guard") {
 		const refused = `Role guard could not run: ${why}. The call is refused until the host repairs the hooks.`;
-		return `${head}[ -x ${shq(launcher)} ] || { printf '%s\\n' ${shq(refused)} >&2; exit 2; }\nexec ${run}\n`;
+		return `${head}[ -x ${shq(launcher)} ] || {\n\tprintf '%s\\n' ${shq(refused)} >&2\n\t${logged(shq(encode(why, false)))}\n\texit 2\n}\nexec ${run}\n`;
 	}
 	if (mode === "health") {
 		const context = JSON.stringify({
@@ -204,9 +204,13 @@ export function prepare(
 		for (const p of input.contract_tests)
 			if (!hookGit(repo, ["cat-file", "-e", `${sha}:${p}`]).ok)
 				usage(`contract_tests names ${p}, which is absent at the base`);
-	if (input.history_writes)
+	if (input.push_writes)
 		warnings.push(
-			"history_writes is true: the brief must carry the grant that allows it",
+			"push_writes is true: the brief must carry the grant that allows pushes",
+		);
+	if (!input.history_writes)
+		warnings.push(
+			'history_writes is false: the brief must say "leave the change uncommitted; the host commits after recheck"',
 		);
 
 	if (runDirArg === "") usage("--run-dir is empty");

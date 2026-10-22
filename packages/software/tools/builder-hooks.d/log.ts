@@ -1,5 +1,5 @@
 // The run log: one line per outcome,
-// HH:MM:SS <hook> <tool or check> <file or scope> <ms> <STATUS> <reason>.
+// HH:MM:SS <hook> <tool or check> <file or scope> <n>ms <STATUS> <reason>.
 // Fields before the reason are percent-encoded where they hold whitespace,
 // `%` or control characters; the reason keeps its spaces and has only control
 // characters and `%` encoded. Each line is one append, so concurrent hooks
@@ -50,7 +50,7 @@ export function logLine(
 		encode(hook, true),
 		encode(tool, true),
 		encode(scope, true),
-		String(Math.max(0, Math.round(ms))),
+		`${Math.max(0, Math.round(ms))}ms`,
 		status,
 		encode(reason, false),
 	].join(" ");

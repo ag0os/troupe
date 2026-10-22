@@ -311,8 +311,8 @@ Like every package tool it needs a Shepherd workspace (see [Which workspace auth
 running it from a repository outside any workspace gets `no workspace for package "software"`. The hooks the
 settings name call the package's launcher directly and need no workspace.
 
-`prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `excluded`,
-`gates`, `contract_tests`, `health`; any other field is refused, budgets included), resolves the repository through
+`prepare` reads the Shepherd's policy file (JSON: `role` `"builder"`, `repo`, `base`, `history_writes`, `push_writes`, `excluded`,
+`gates`, `contract_tests`, `health`; any other field is refused, budgets included; `history_writes` defaults to true, and false, set when an implementation coordinator holds the commit, draws a warning that the brief must say "leave the change uncommitted; the host commits after recheck"; `push_writes` defaults to false), resolves the repository through
 its real path and the base to a commit once, and writes `builder-manifest.json`, then `builder-hooks.settings.json`,
 private, into a new or empty run directory that is outside the repository, its git directory and any harness
 configuration directory. It prints the settings path; `--json` also reports the resolved base, exclusions, gates and health argv
@@ -334,16 +334,46 @@ Claude prefixes the command to every hook failure the model sees, so the model r
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
-  expire, gc `--prune`, am, clean) unless `history_writes` is true, and an edit under an `excluded` path or under the
-  run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
+  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies a push (`git push`, `send-pack`, `subtree push`, a dashed `git-push`, an alias the line defines with `-c alias.<name>=`, chained or in any case, read through to its subcommand; an alias named after one of git's own commands in the guard's fixed set is not expanded (git ignores those), and one named after a command outside the set (`hash-object`, for one) is expanded, which can only over-deny; a body holding quotes or a backslash, a `!` shell alias, an alias from `--config-env` and git configuration the line sets through `GIT_CONFIG_*` are refused) unless `push_writes` is true, which draws a prepare warning that the brief must carry the grant, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
+  run directory itself, which is a fixed rule; the denial names the path relative to the repository, the segments an exclusion matched (case folded) spelled as the manifest spells them. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
   (nested in parameter and arithmetic expansion too, quote state tracked per expansion level, transitions included), git's global options; heredoc
   bodies, aliases, scripts and `sh -c` strings are not read, and a command name holding an expansion is refused.
+  It denies a shell write under an excluded path or the run directory as it denies an edit, whatever `history_writes`
+  says: output redirections (`>`, `>>`, `>|`, `&>`, `&>>`, `<>`, and `>&` to a word that is not a descriptor), `tee`,
+  `touch`, `truncate`, `unlink`, `sed -i`/`-I`/`--in-place` with its backup suffix, the destination of `cp`, `mv`,
+  `ln` and `install` (`-t`, attached or not, and `--target-directory` included) and, when it is a directory, the
+  source's name inside it, each with a `-S`/`--suffix`/`-b` backup, and the commands `find -exec` runs. An operand of
+  `rm`, `rmdir`, a `mv` or `ln` source (a link names the source's content by another path; a relative symbolic source
+  is read from the link's directory too), the entry a recursive `cp` creates (the destination itself for a source
+  ending in `/`, `.` or `..`), and every path of a `find` that deletes or whose command names `{}`, that holds an
+  exclusion or the run directory is denied too; a glob exclusion is held once the operand's segments match its leading
+  ones (always below a `**`), and a regular file holds nothing. A glob in a target's last segment, on its unquoted
+  characters, is expanded against its directory (no dotfile unless the glob starts with `.`; the word itself when
+  nothing matches; a character class is not read); more than 64 matches or a directory of more than 5000 entries is
+  refused. The caps bound each glob's work; the 200 ms deadline is enforced by refusing a call that overran it. `find -execdir` writes under the find's roots and its writer's own operands (a
+  relative one read from each root and its parent), a wrapper directory moves them, and `-L` or `-files0-from` leave
+  them unread; `cp -l`, `cp -s` and `install -l` protect their source as `ln` does.
+  Relative targets resolve against the event's `cwd`, or the directory `env -C`/`--chdir` or `sudo -D`/`--chdir`
+  gives. Not read: a target holding an expansion, a glob above its last segment, a brace or a leading `~`, a write
+  after a `cd`, `pushd` or `popd` earlier in the line, operands a writer under `xargs` takes from stdin, where a
+  `find`'s found path lands in a copy, `find -L` or `-files0-from` roots, a character class, and an `-execdir` operand
+  climbing with `..`: for these the guard's ALLOW line says `shell writes not read, not health-checked`. Also not
+  read, without that note: a link made before the run and a glob whose directory is a symlink into the excluded tree
+  past what the listing shows (read as ordinary targets, logged `shell writes not excluded`), and `tee >(...)` and
+  other process substitutions, writers reading paths from stdin, `rsync` (and its `--link-dest`), and other programs
+  that write (`dd`, `git checkout -- <path>`, editors, interpreters), logged as a plain ALLOW. Recheck's `excluded`
+  covers all of them after the run. With `history_writes` and `push_writes` true and no exclusions, a command it cannot read passes unread;
+  otherwise it is refused with `Role guard could not read this command: <what> holds an expansion. Spell the command
+  name and git options literally and run it again; this is not a hooks failure.` (or `it holds <syntax>` for syntax it
+  cannot place). Both the push denial and the shell-write denial are lexical and bind a cooperative builder: `sh -c`,
+  `eval`, a script and `gh pr create` (which pushes an unpushed branch) pass; the host's credentials are the boundary.
   Paths resolve segment by segment through symlinks, case folded, and a glob's static prefix is resolved too.
   Whatever it cannot check or read (manifest, a missing or moved repository, a run directory inside it, event,
   syntax, its 200 ms deadline, its log) refuses the call with exit 2.
-- `health` runs the stack's checker on the edited file within 2 s: silent when clean, unadopted or without a stack,
+- `health` runs the stack's checker on a file edited through Edit, Write or MultiEdit within 2 s (edits through the
+  shell are not health-checked, and the guard's ALLOW line for a shell write says so): silent when clean, unadopted or without a stack,
   `additionalContext` for a finding or for any reason it could not run (a missing launcher or runtime included),
   always exit 0. A rubocop result must have its shape and an exit that agrees with its offense count; an event holding
   a NUL byte is an inability.
@@ -373,8 +403,9 @@ missing or altered manifest, a redirected run directory or a moved repository ge
 refuses or answers as context. A fallback reason is percent-encoded like any other, so a path holding a newline stays
 one record. The first-call check in step 4 needs `ALLOW` or `DENY`, never `COULD-NOT-RUN`, so this weakens
 nothing:
-`HH:MM:SS <hook> <tool or check> <file or scope> <ms> <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`.
-The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`). A
+`HH:MM:SS <hook> <tool or check> <file or scope> <n>ms <ALLOW|DENY|FINDING|CLEAN|BLOCK|GIVE-UP|PASS|COULD-NOT-RUN> <reason>`,
+the latency in milliseconds with its unit (`8ms`). The tool or check and the file or scope fields are percent-encoded (`0%20paths`, `floors%20bin/fake-health`).
+A guard `DENY` reason names its rule and match: `history write git commit`, `excluded by <entry>`, `the run directory`, `shell write <path> excluded by <entry>`, `push git push`. A
 guard or health line ends `session=<id>`; a Stop line ends `session=<id> active=<bool>`, and `attempt=<n>` on a
 block.
 Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check that could not run, or, when no check
