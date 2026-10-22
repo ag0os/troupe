@@ -671,16 +671,16 @@ describe("staged workspace findings", () => {
 		]);
 	});
 
-	test("current-over-mark uses the diet wording only above 600 words", () => {
-		for (const count of [600, 601]) {
+	test("current-over-mark uses the diet wording only above 1,500 words", () => {
+		for (const count of [1_000, 1_500, 1_501]) {
 			const { workspace, tree } = fixture({
 				"root/.shepherd/CURRENT.md": Array(count).fill("word").join(" "),
 			});
 			const matches = checkWorkspace(workspace, tree, config(), TODAY).filter(
 				({ code }) => code === "current-over-mark",
 			);
-			expect(matches).toHaveLength(count === 600 ? 0 : 1);
-			if (count === 601) {
+			expect(matches).toHaveLength(count === 1_501 ? 1 : 0);
+			if (count === 1_501) {
 				expect(matches[0]).toMatchObject({ level: "info", file: "CURRENT.md" });
 				expect(matches[0]?.message).toContain(
 					"standing how-tos go to a doc with an action-named index line; standing values to the charter, rules to a module; keep what is costly on first misuse",

@@ -6,7 +6,7 @@ import { localDate } from "./dates";
 export const DEFAULT_MARKS = {
 	opening: 12_000,
 	charter: 1_000,
-	current: 600,
+	current: 1_500,
 	shared: 1_500,
 } as const;
 

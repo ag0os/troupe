@@ -41,7 +41,7 @@ describe("loadConfig", () => {
 		const home = fixture();
 
 		const config = loadConfig({ home, env: {}, workspaceChain: [] });
-		expect(config.marks.current).toBe(600);
+		expect(config.marks.current).toBe(1_500);
 		expect(config.windows.pendingDays).toBe(14);
 		expect(config.start.journalWords).toBe(1_500);
 		expect(config).toEqual({
