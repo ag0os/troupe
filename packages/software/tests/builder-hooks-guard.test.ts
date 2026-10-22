@@ -1661,3 +1661,44 @@ describe("fix round 4", () => {
 		}
 	});
 });
+
+describe("fix round 5", () => {
+	// The reason spells what the exclusion matched as the manifest does,
+	// whether or not the host's filesystem folds case.
+	let g: Fixture;
+	beforeAll(() => {
+		g = new Fixture();
+		g.write("config/deploy.yml", "x\n");
+		g.prepare(
+			g.input({
+				history_writes: true,
+				excluded: ["Config/Deploy.yml", "Secrets/", "App/**/Key_*.rb"],
+			}),
+		);
+	});
+	afterAll(() => g.cleanup());
+	const reason = (input: Record<string, unknown>) => {
+		const r = g.hook("guard", { session_id: "s1", ...input });
+		return denial(r)?.permissionDecisionReason;
+	};
+
+	test.each([
+		["echo x > config/deploy.yml", "Config/Deploy.yml"],
+		["echo x > ./CONFIG/DEPLOY.YML", "Config/Deploy.yml"],
+		["touch secrets/a/B.txt", "Secrets/a/B.txt"],
+		["touch app/models/KEY_x.rb", "App/models/KEY_x.rb"],
+	])("names %s as %s", (command, path) => {
+		expect(reason({ tool_name: "Bash", tool_input: { command } })).toBe(
+			excludedReason(path),
+		);
+	});
+
+	test("an edit is named the same way", () => {
+		expect(
+			reason({
+				tool_name: "Write",
+				tool_input: { file_path: join(g.repo, "config/deploy.yml") },
+			}),
+		).toBe(excludedReason("Config/Deploy.yml"));
+	});
+});

@@ -196,6 +196,22 @@ export function shownPath(repo: string, file: string): string {
 		: resolved;
 }
 
+/**
+ * `shown` with the segments `exclusion` matched literally spelled as the
+ * exclusion spells them, up to its first glob segment; matching folds
+ * case, so one denial reads the same on every filesystem.
+ */
+export function spelledAs(shown: string, exclusion: string): string {
+	const want = exclusion.replace(/\/+$/, "").split("/");
+	const have = shown.split("/");
+	for (let k = 0; k < Math.min(want.length, have.length); k++) {
+		const seg = want[k] as string;
+		if (GLOB.test(seg) || seg.toLowerCase() !== have[k]?.toLowerCase()) break;
+		have[k] = seg;
+	}
+	return have.join("/");
+}
+
 /** A repository-relative path as a checker argument: never an option. */
 export function argPath(rel: string): string {
 	return rel.startsWith("-") ? `./${rel}` : rel;

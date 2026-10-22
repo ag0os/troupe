@@ -8,7 +8,7 @@ import { isAbsolute } from "node:path";
 import { globRegex } from "../contract.d/lint";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
-import { excludedBy, holdsExclusion, shownPath } from "./paths";
+import { excludedBy, holdsExclusion, shownPath, spelledAs } from "./paths";
 import {
 	historyWrite,
 	pushWrite,
@@ -168,7 +168,7 @@ export function decide(
 		for (const write of expand(writes.targets, cwd)) {
 			// Unnormalized, so the path check resolves symlinks before `..`.
 			const path = isAbsolute(write.path) ? write.path : `${cwd}/${write.path}`;
-			const shown = shownPath(m.repo, path);
+			let shown = shownPath(m.repo, path);
 			const deny = (named: string, why: string): Decision => ({
 				deny: excludedReason(named),
 				tool,
@@ -178,7 +178,10 @@ export function decide(
 			if (excludedBy(m.repo, path, [runDir]))
 				return deny(shown, "in the run directory");
 			const hit = excludedBy(m.repo, path, m.excluded);
-			if (hit) return deny(shown, `excluded by ${hit}`);
+			if (hit) {
+				shown = spelledAs(shown, hit);
+				return deny(shown, `excluded by ${hit}`);
+			}
 			// A regular file holds nothing, whatever a glob exclusion says.
 			if (write.kind === "tree" && !regularFile(path)) {
 				if (holdsExclusion(m.repo, path, [runDir]))
@@ -230,7 +233,7 @@ export function decide(
 		const hit = excludedBy(m.repo, path, m.excluded);
 		return hit
 			? {
-					deny: excludedReason(shownPath(m.repo, path)),
+					deny: excludedReason(spelledAs(shownPath(m.repo, path), hit)),
 					tool,
 					target: path,
 					reason: `excluded by ${hit}`,
