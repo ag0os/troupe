@@ -828,7 +828,7 @@ function classifyGit(args: Word[], push: boolean, depth = 0): string | null {
 			throw new Unclassifiable("a git shell alias defined in the line");
 		// Git unquotes the body; this reading splits on spaces only.
 		if (/["'\\]/.test(body))
-			throw new Unclassifiable("a git alias body holding quotes");
+			throw new Unclassifiable("a git alias body with quotes or a backslash");
 		if (depth > 4)
 			throw new Unclassifiable("a git alias chain it cannot follow");
 		const words = body
