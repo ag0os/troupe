@@ -1597,3 +1597,67 @@ describe("fix round 3", () => {
 			expect(run(command).code).toBe(2);
 	});
 });
+
+describe("fix round 4", () => {
+	const BS = String.fromCodePoint(0x5c);
+	const reason = (command: string) =>
+		denial(bash(command))?.permissionDecisionReason;
+
+	// 1: -execdir keeps the writer's own operands beside find's roots.
+	test.each([
+		(repo: string) =>
+			`find src -name deploy.yml -execdir cp {} ${repo}/config/deploy.yml ${BS};`,
+		() =>
+			`find src -name deploy.yml -execdir cp {} ../config/deploy.yml ${BS};`,
+	])("-execdir denies an excluded destination (%#)", (command) => {
+		expect(reason(command(f.repo))).toBe(excludedReason("config/deploy.yml"));
+	});
+
+	test("-execdir still makes find's roots trees", () => {
+		expect(reason(`find config -name deploy.yml -execdir cp {} x ${BS};`)).toBe(
+			excludedReason("config/deploy.yml"),
+		);
+	});
+
+	test("-execdir reads a relative operand; one climbing with .. is not read", () => {
+		bash(`find src -name x -execdir touch y ${BS};`);
+		expect(f.logLines().at(-1)).toMatch(
+			/ ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
+		bash(`find src -name x -execdir touch ../../y ${BS};`);
+		expect(f.logLines().at(-1)).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	// 2: install -l links as ln does.
+	test.each([
+		"install -l h config/deploy.yml out",
+		"install -lh config/deploy.yml out",
+		"install -l s config/deploy.yml out",
+	])("denies %s", (command) => {
+		expect(reason(command)).toBe(excludedReason("config/deploy.yml"));
+	});
+
+	test("install without -l does not protect its source", () => {
+		expect(denial(bash("install config/deploy.yml out"))).toBeNull();
+	});
+
+	// 3: a directory of exactly 5000 entries is read.
+	test("a glob over a directory of exactly 5000 entries is read", () => {
+		const g = new Fixture();
+		try {
+			for (let i = 0; i < 5000; i++) g.write(`bulk5000/x${i}`, "");
+			g.prepare(g.input({ history_writes: true, excluded: [".env"] }));
+			expect(
+				g.hook("guard", {
+					session_id: "s1",
+					tool_name: "Bash",
+					tool_input: { command: "rm -f bulk5000/y*" },
+				}),
+			).toEqual({ code: 0, stdout: "", stderr: "" });
+		} finally {
+			g.cleanup();
+		}
+	});
+});

@@ -1132,7 +1132,7 @@ const WRITERS: Record<string, Writer> = {
 	cp: { short: "tS", long: COPYING, shape: "destination" },
 	ln: { short: "tS", long: COPYING, shape: "destination" },
 	install: {
-		short: "tSmogBf",
+		short: "tSmogBfl",
 		long: [...COPYING, "--mode", "--owner", "--group", "--strip-program"],
 		shape: "destination",
 	},
@@ -1233,6 +1233,7 @@ function writeTargets(c: Command): {
 					: (args[++k] ?? null);
 				if (ch === "t") targetDir = value;
 				if (ch === "S" || (name === "install" && ch === "B")) suffix = value;
+				if (name === "install" && ch === "l") linking = true;
 				break;
 			}
 			if (name === "cp" && "rRa".includes(ch)) recursive = true;
@@ -1248,15 +1249,39 @@ function writeTargets(c: Command): {
 	const targets: Target[] = [];
 	const add = (w: Word | string, kind: Target["kind"]) => {
 		const word = typeof w === "string" ? { text: w, dynamic: false } : w;
-		// -execdir runs in each found path's directory: its operands are
-		// relative to paths under find's own, so those are the trees.
-		if (c.execdir && c.under) {
-			for (const p of c.under) put(p, "tree");
-			return;
-		}
 		// find's `{}` stands for paths under its own: each is a tree then.
-		if (c.under && word.text.includes("{}") && !word.dynamic) {
+		const found = !!c.under && word.text.includes("{}") && !word.dynamic;
+		if (c.under && (found || c.execdir))
 			for (const p of c.under) put(p, "tree");
+		if (found) return;
+		// -execdir runs in each found path's directory: a root, its parent
+		// or a directory under the root. A relative operand is read from a
+		// root and from its parent; one climbing with `..` may land
+		// anywhere from deeper down.
+		if (
+			c.execdir &&
+			c.under &&
+			!word.text.startsWith("/") &&
+			!unreadWord(word)
+		) {
+			if (word.text.split("/").includes("..")) unread = true;
+			for (const p of c.under) {
+				if (unreadWord(p) || globbed(p)) {
+					unread = true;
+					continue;
+				}
+				for (const from of [p.text, `${p.text}/..`]) {
+					const shift = from.length + 1;
+					put(
+						{
+							...word,
+							text: `${from}/${word.text}`,
+							globs: word.globs?.map((g) => g + shift),
+						},
+						kind,
+					);
+				}
+			}
 			return;
 		}
 		put(word, kind);
@@ -1304,11 +1329,22 @@ function writeTargets(c: Command): {
 		// A link names its source's content by another path: writing
 		// through it writes the source, so the source is a write. A
 		// relative symbolic source resolves from the link's directory.
-		// `cp -l` and `cp -s` link as ln does.
-		if (name === "ln" || (name === "cp" && (linking || symbolic)))
+		// `cp -l`, `cp -s` and `install -l` link as ln does; install's
+		// `-s` strips, and it reads a relative source from here.
+		if (
+			name === "ln" ||
+			(name === "cp" && (linking || symbolic)) ||
+			(name === "install" && linking)
+		)
 			for (const s of sources) {
 				add(s, "tree");
-				if (symbolic && dest && !s.text.startsWith("/") && !unreadWord(s)) {
+				if (
+					symbolic &&
+					name !== "install" &&
+					dest &&
+					!s.text.startsWith("/") &&
+					!unreadWord(s)
+				) {
 					// A destination without a slash may be an existing
 					// directory: the link lands in it, or beside it.
 					const into = dest.text.replace(/\/+$/, "");
