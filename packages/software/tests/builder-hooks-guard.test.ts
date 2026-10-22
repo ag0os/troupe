@@ -40,6 +40,7 @@ beforeAll(() => {
 	f.write("lib/admin/base.rb", "x\n");
 	f.write("src/deploy.yml", "x\n");
 	f.write("protected/x", "x\n");
+	f.write("vendor/v.rb", "x\n");
 	f.commit("Files");
 	expect(
 		f.prepare(
@@ -54,6 +55,7 @@ beforeAll(() => {
 					"123",
 					"notes.bak",
 					"a%b.yml",
+					"notes~",
 				],
 			}),
 		).code,
@@ -1123,7 +1125,7 @@ describe("BH-18: shell writes, fix round 1", () => {
 		"rm -rf tmp/cache",
 		"cp -r config /tmp/conf",
 		"install -m 644 -o root /tmp/x app/a.rb",
-		"find . -name '*.tmp' -exec rm {} \\;",
+		"find tmp -name '*.tmp' -exec rm {} \\;",
 	])("allows %s", (command) => {
 		expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
 	});
@@ -1258,5 +1260,176 @@ describe("BH-19: pushes, fix round 1", () => {
 			"git -c alias.ci=commit ci -m x",
 		])
 			expect(denial(bash(command))?.permissionDecisionReason).toBe(HISTORY);
+	});
+});
+
+describe("fix round 2", () => {
+	// Built from a code point: Biome rewrites a backslash escape before ;.
+	const BS = String.fromCodePoint(0x5c);
+	const PUSH =
+		"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
+	let g: Fixture;
+	beforeAll(() => {
+		g = new Fixture();
+		g.prepare(g.input({ history_writes: true }));
+	});
+	afterAll(() => g.cleanup());
+	const pushRun = (command: string) =>
+		g.hook("guard", {
+			session_id: "s1",
+			tool_name: "Bash",
+			tool_input: { command },
+		});
+	const reason = (command: string) =>
+		denial(bash(command))?.permissionDecisionReason;
+	const lastLine = (command: string) => {
+		bash(command);
+		return f.logLines().at(-1);
+	};
+
+	// M1: aliases and configuration the line defines.
+	test.each([
+		"git -c alias.p=push -c alias.q=p q origin main",
+		"git -c alias.P=push P origin main",
+		"git -c ALIAS.p=push p origin main",
+	])("denies the push %s", (command) => {
+		expect(denial(pushRun(command))?.permissionDecisionReason).toBe(PUSH);
+	});
+
+	test.each([
+		"X=push git --config-env=alias.p=X p origin main",
+		"git --config-env alias.p=X p",
+		`GIT_CONFIG_PARAMETERS="'alias.p=push'" git p origin main`,
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+		"export GIT_CONFIG_PARAMETERS=x; git p",
+		"env GIT_CONFIG_COUNT=1 git p",
+		"git -c alias.p=p p",
+	])("refuses %s", (command) => {
+		const r = pushRun(command);
+		expect(r.code).toBe(2);
+		expect(r.stderr).toStartWith("Role guard could not read this command: ");
+	});
+
+	test("history off reads a chained alias as the commit it is", () => {
+		expect(reason("git -c alias.a=commit -c alias.b=a b -m x")).toBe(HISTORY);
+	});
+
+	// M2: find's {} and -delete touch everything under its paths.
+	test.each([
+		[`find config -name deploy.yml -exec rm {} ${BS};`, "config/deploy.yml"],
+		[
+			`find src config -name x -exec cp src/deploy.yml {} ${BS};`,
+			"config/deploy.yml",
+		],
+		[`find . -name deploy.yml -execdir rm {} +`, "config/deploy.yml"],
+		["find config -name deploy.yml -delete", "config/deploy.yml"],
+		["find -name deploy.yml -delete", "config/deploy.yml"],
+	])("denies %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test.each([
+		`find tmp -name '*.tmp' -exec rm {} ${BS};`,
+		"find tmp -name x -delete",
+		"find . -name '*.rb'",
+	])("allows %s", (command) => {
+		expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+	});
+
+	test.each([
+		`find src -name deploy.yml -exec cp {} app/ ${BS};`,
+		"echo src/deploy.yml | xargs -I{} cp {} app/",
+		"echo app/a.rb | xargs rm -f",
+		"xargs -a list cp -t app",
+		"echo x > app/{a,b}.rb",
+		"touch app/a.{rb,txt}",
+	])("logs %s as not read", (command) => {
+		expect(lastLine(command)).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	// M3: a link names an excluded file's content by another path.
+	test.each([
+		["ln config/deploy.yml x && echo y > x", "config/deploy.yml"],
+		["ln -s config/deploy.yml x && echo y > x", "config/deploy.yml"],
+		["ln -s config z && echo y > z/deploy.yml", "config/deploy.yml"],
+		["ln -sf ../config/deploy.yml app/d.yml", "config/deploy.yml"],
+	])("denies %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	// L4: into a directory holding an exclusion, only its named entry counts.
+	test.each([
+		"ln -s /etc/hosts config/",
+		"ln -s src/deploy.yml lib/",
+		"cp -r vendor config/",
+	])("allows %s", (command) => {
+		expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+	});
+
+	test.each([
+		["cp -R src/ config", "config/deploy.yml"],
+		["cp -r src/. config/", "config/deploy.yml"],
+		["cp -a src/.. config", "config/deploy.yml"],
+	])("still denies %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	// L1: a glob in the last segment is expanded against the directory.
+	test.each([
+		["rm -rf config/*", "config/deploy.yml"],
+		["rm -rf config/deploy.y*", "config/deploy.yml"],
+		["echo x > config/dep*", "config/deploy.yml"],
+	])("denies the glob %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test("rm -rf * from the repository is denied; find . with {} too", () => {
+		expect(reason("rm -rf *")).toStartWith("Role guard: ");
+		expect(reason(`find . -name x -exec rm {} ${BS};`)).toStartWith(
+			"Role guard: ",
+		);
+		expect(bash("cp -r src config/").code).toBe(0);
+	});
+
+	test("a glob that matches nothing excluded is read; a deeper glob is not", () => {
+		expect(lastLine("rm -f app/models/*.tmp")).toMatch(
+			/ ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
+		expect(lastLine("touch */deploy.yml")).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	// Pins (the review's item 4).
+	test("a ** exclusion holds every directory below its prefix", () => {
+		expect(reason("rm -rf app/models/x")).toBe(
+			excludedReason("app/**/secret_*.rb"),
+		);
+	});
+
+	test("a wrapper directory holding an expansion leaves its targets unread", () => {
+		expect(lastLine('env -C "$D" touch x')).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	test("-b backs up to <target>~", () => {
+		expect(reason("cp -b /tmp/x notes")).toBe(excludedReason("notes~"));
+	});
+
+	// L6, L7.
+	test.each(["find . -newermt 2020-01-01 -name x", "find . -depth 2 -name x"])(
+		"reads the find primary in %s",
+		(command) => {
+			expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+		},
+	);
+
+	test("a cd after the write leaves it read", () => {
+		expect(lastLine("echo x > app/a.rb && cd config")).toMatch(
+			/ ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
 	});
 });

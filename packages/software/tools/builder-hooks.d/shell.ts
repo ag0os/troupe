@@ -30,7 +30,7 @@ class Lexer {
 	i = 0;
 	commands: Word[][] = [];
 	/** Output redirection targets, in every nested list. */
-	redirects: Word[] = [];
+	redirects: { word: Word; at: number }[] = [];
 	heredocs: { delim: string; strip: boolean }[] = [];
 	backticks = 0;
 
@@ -141,7 +141,7 @@ class Lexer {
 					target === "write" ||
 					(target === "duplicate" && !/^(\d+|-)$/.test(word.text))
 				)
-					this.redirects.push(word);
+					this.redirects.push({ word, at: this.commands.length });
 				if (target === "heredoc" || target === "heredoc-strip")
 					this.heredocs.push({
 						delim: word.text,
@@ -599,15 +599,23 @@ const FIND_BARE = new Set(
  * expression is walked so a value such as -name's is never read as an
  * action; a primary it does not know is Unclassifiable.
  */
-function findCommands(args: Word[]): Word[][] {
+function findCommands(args: Word[]): {
+	commands: Word[][];
+	paths: Word[];
+	deletes: boolean;
+} {
 	const out: Word[][] = [];
+	let deletes = false;
 	let k = 0;
 	while (k < args.length && /^-[HLPEXsxd]+$/.test((args[k] as Word).text)) k++;
+	const first = k;
 	while (k < args.length) {
 		const w = args[k] as Word;
 		if (!w.dynamic && (w.text.startsWith("-") || FIND_BARE.has(w.text))) break;
 		k++;
 	}
+	const paths =
+		k > first ? args.slice(first, k) : [{ text: ".", dynamic: false }];
 	for (; k < args.length; k++) {
 		const w = args[k] as Word;
 		if (w.dynamic)
@@ -615,8 +623,14 @@ function findCommands(args: Word[]): Word[][] {
 				"an unreadable find expression",
 				"the find expression",
 			);
+		if (w.text === "-delete") deletes = true;
+		// BSD's -depth takes a level; GNU's takes none.
+		if (w.text === "-depth" && /^[-+]?\d+$/.test(args[k + 1]?.text ?? "")) {
+			k++;
+			continue;
+		}
 		if (FIND_BARE.has(w.text)) continue;
-		if (FIND_VALUED.has(w.text)) {
+		if (FIND_VALUED.has(w.text) || /^-newer[aBcmt][aBcmt]$/.test(w.text)) {
 			k++;
 			continue;
 		}
@@ -638,7 +652,7 @@ function findCommands(args: Word[]): Word[][] {
 		out.push(args.slice(k + 1, end));
 		k = end;
 	}
-	return out;
+	return { commands: out, paths, deletes };
 }
 
 function basename(path: string): string {
@@ -756,20 +770,41 @@ function classifyGit(args: Word[], push: boolean, depth = 0): string | null {
 		);
 	const rest = args.slice(i + 1);
 	const name = sub.text;
+	for (let k = 0; k < i; k++) {
+		const t = (args[k] as Word).text;
+		const value =
+			t === "--config-env"
+				? (args[k + 1]?.text ?? "")
+				: t.startsWith("--config-env=")
+					? t.slice(13)
+					: "";
+		if (value.toLowerCase().startsWith("alias."))
+			throw new Unclassifiable("a git alias taken from the environment");
+	}
+	// Git folds the key's case, so `alias.P` defines `p`.
 	const alias = optionValues(args, 0, i, "-c", "--config")
-		.filter((v) => v.text.toLowerCase().startsWith(`alias.${name}=`))
+		.filter((v) =>
+			v.text.toLowerCase().startsWith(`alias.${name.toLowerCase()}=`),
+		)
 		.at(-1);
 	if (alias) {
 		if (alias.dynamic)
 			throw new Unclassifiable("an unreadable git alias", "a git alias");
 		const body = alias.text.slice(alias.text.indexOf("=") + 1).trim();
-		if (body.startsWith("!") || depth > 4)
+		if (body.startsWith("!"))
 			throw new Unclassifiable("a git shell alias defined in the line");
+		if (depth > 4)
+			throw new Unclassifiable("a git alias chain it cannot follow");
 		const words = body
 			.split(/\s+/)
 			.filter(Boolean)
 			.map((text) => ({ text, dynamic: false }));
-		return classifyGit([...words, ...rest], push, depth + 1);
+		// The global options stay, so a chained alias is found again.
+		return classifyGit(
+			[...args.slice(0, i), ...words, ...rest],
+			push,
+			depth + 1,
+		);
 	}
 	if (PUSHES.has(name)) return `git ${name}`;
 	if (name === "subtree") {
@@ -834,9 +869,12 @@ const CHDIR: Record<string, [string, string]> = {
  * written; `dynamic` when it holds an expansion), or null when `command -v`
  * only looks it up.
  */
-function program(words: Word[]): { i: number; dir: Word | null } | null {
+function program(
+	words: Word[],
+): { i: number; dir: Word | null; stdin: boolean } | null {
 	let i = 0;
 	let dir = null as Word | null;
+	let stdin = false;
 	while (i < words.length) {
 		const w = words[i] as Word;
 		if (!w.dynamic && SKIPPED.has(w.text)) {
@@ -878,6 +916,7 @@ function program(words: Word[]): { i: number; dir: Word | null } | null {
 		}
 		const wrapper = WRAPPERS[name];
 		if (wrapper) {
+			if (name === "xargs") stdin = true;
 			const start = i + 1;
 			i = consume(words, start, wrapper, name) + (wrapper.operands ?? 0);
 			const chdir = CHDIR[name];
@@ -898,7 +937,7 @@ function program(words: Word[]): { i: number; dir: Word | null } | null {
 					i++;
 			continue;
 		}
-		return { i, dir };
+		return { i, dir, stdin };
 	}
 	return null;
 }
@@ -907,17 +946,43 @@ function program(words: Word[]): { i: number; dir: Word | null } | null {
  * Every simple command a line runs: its own, and those its find commands
  * run, each with its program's index and wrapper directory.
  */
-function commandsOf(
-	words: Word[],
-): { words: Word[]; i: number; dir: Word | null }[] {
+type Command = {
+	words: Word[];
+	i: number;
+	dir: Word | null;
+	/** Its operands come from stdin (under xargs). */
+	stdin: boolean;
+	/** The paths of the find that runs it, which its `{}` stands for. */
+	under: Word[] | null;
+	/** The paths a find's -delete removes from. */
+	deletes: Word[] | null;
+};
+
+function commandsOf(words: Word[], under: Word[] | null = null): Command[] {
 	const head = program(words);
 	if (!head) return [];
 	const name = basename((words[head.i] as Word).text);
-	if (name !== "find") return [{ words, ...head }];
+	if (name !== "find") return [{ words, ...head, under, deletes: null }];
+	const found = findCommands(words.slice(head.i + 1));
 	return [
-		{ words, ...head },
-		...findCommands(words.slice(head.i + 1)).flatMap(commandsOf),
+		{
+			words,
+			...head,
+			under,
+			deletes: found.deletes ? found.paths : null,
+		},
+		...found.commands.flatMap((c) => commandsOf(c, found.paths)),
 	];
+}
+
+/** Configuration the line hands git through the environment. */
+const GIT_CONFIG = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/;
+
+function lineCommands(source: string): Command[] {
+	const all = simpleCommands(source);
+	if (all.some((words) => words.some((w) => GIT_CONFIG.test(w.text))))
+		throw new Unclassifiable("git configuration set in the line");
+	return all.flatMap((words) => commandsOf(words));
 }
 
 /** The history write, or with `push` the push, one command makes. */
@@ -940,21 +1005,19 @@ function classify(
 
 /** The first history write in a Bash command line, or null; throws Unclassifiable. */
 export function historyWrite(source: string): string | null {
-	for (const words of simpleCommands(source))
-		for (const c of commandsOf(words)) {
-			const found = classify(c, false);
-			if (found) return found;
-		}
+	for (const c of lineCommands(source)) {
+		const found = classify(c, false);
+		if (found) return found;
+	}
 	return null;
 }
 
 /** The first push in a Bash command line, or null; throws Unclassifiable. */
 export function pushWrite(source: string): string | null {
-	for (const words of simpleCommands(source))
-		for (const c of commandsOf(words)) {
-			const found = classify(c, true);
-			if (found) return found;
-		}
+	for (const c of lineCommands(source)) {
+		const found = classify(c, true);
+		if (found) return found;
+	}
 	return null;
 }
 
@@ -962,7 +1025,12 @@ export function pushWrite(source: string): string | null {
  * A path a command writes: `file` is the path itself, `tree` also everything
  * under it (a removal, a move's source, a recursive copy's destination).
  */
-export type Target = { path: string; kind: "file" | "tree" };
+export type Target = {
+	path: string;
+	kind: "file" | "tree";
+	/** Its last segment is a glob, for the guard to expand. */
+	glob?: boolean;
+};
 
 type Writer = {
 	/** Short options that take a value, attached or as the next word. */
@@ -999,14 +1067,28 @@ const WRITERS: Record<string, Writer> = {
 	},
 };
 
+const GLOB = /[*?[]/;
+/** Brace expansion, and the `{}` find and `xargs -I` replace. */
+const BRACES = /\{[^{}]*(,|\.\.)[^{}]*\}|\{\}/;
+
+/** A word the guard cannot resolve to paths; a last-segment glob it can. */
 const unreadWord = (w: Word) =>
-	w.dynamic || w.text.startsWith("~") || /[*?[]/.test(w.text);
+	w.dynamic ||
+	w.text.startsWith("~") ||
+	BRACES.test(w.text) ||
+	GLOB.test(w.text.slice(0, w.text.lastIndexOf("/") + 1));
+
+function target(path: string, kind: Target["kind"]): Target {
+	return GLOB.test(basename(path))
+		? { path, kind, glob: true }
+		: { path, kind };
+}
 
 /**
  * The paths one command writes through a known writer, relative to its
  * wrapper directory, and whether any it writes could not be read.
  */
-function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
+function writeTargets(c: Command): {
 	targets: Target[];
 	unread: boolean;
 } {
@@ -1021,6 +1103,7 @@ function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
 	let recursive = false;
 	let backup = false;
 	let directories = false;
+	let symbolic = false;
 	for (let k = 0; k < args.length; k++) {
 		const w = args[k] as Word;
 		const t = w.text;
@@ -1046,6 +1129,7 @@ function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
 			}
 			if (opt === "--recursive" || opt === "--archive") recursive = true;
 			if (opt === "--backup") backup = true;
+			if (opt === "--symbolic") symbolic = true;
 			if (opt === "--directory" && name === "install") directories = true;
 			continue;
 		}
@@ -1073,14 +1157,21 @@ function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
 			}
 			if (name === "cp" && "rRa".includes(ch)) recursive = true;
 			if (ch === "b") backup = true;
+			if (ch === "s") symbolic = true;
 			if (name === "install" && ch === "d") directories = true;
 		}
 	}
 	if (name === "sed" && !inPlace) return { targets: [], unread: false };
-	let unread = false;
+	// Operands from stdin are not on the line.
+	let unread = c.stdin;
 	const targets: Target[] = [];
 	const add = (w: Word | string, kind: Target["kind"]) => {
 		const word = typeof w === "string" ? { text: w, dynamic: false } : w;
+		// find's `{}` stands for paths under its own: each is a tree then.
+		if (c.under && word.text.includes("{}") && !word.dynamic) {
+			for (const p of c.under) add(p, "tree");
+			return;
+		}
 		if (unreadWord(word) || word.text === "" || c.dir?.dynamic) {
 			unread = true;
 			return;
@@ -1089,11 +1180,11 @@ function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
 			c.dir && !word.text.startsWith("/")
 				? `${c.dir.text}/${word.text}`
 				: word.text;
-		targets.push({ path, kind });
+		targets.push(target(path, kind));
 		const tail = suffix ?? (backup ? { text: "~", dynamic: false } : null);
 		if (tail && kind === "file") {
-			if (unreadWord(tail)) unread = true;
-			else targets.push({ path: `${path}${tail.text}`, kind });
+			if (tail.dynamic) unread = true;
+			else targets.push(target(`${path}${tail.text}`, kind));
 		}
 	};
 	if (spec.shape === "operands" || directories)
@@ -1103,16 +1194,39 @@ function writeTargets(c: { words: Word[]; i: number; dir: Word | null }): {
 		const sources = targetDir ? operands : operands.slice(0, -1);
 		const dest = targetDir ?? operands.at(-1);
 		if (dest) {
-			add(dest, recursive || name === "ln" ? "tree" : "file");
+			add(dest, "file");
+			const into = dest.text.replace(/\/+$/, "");
 			if (!unreadWord(dest))
 				for (const s of sources) {
 					const base = basename(s.text.replace(/\/+$/, ""));
-					if (unreadWord(s)) unread = true;
-					else if (base && base !== "." && base !== "..")
-						add(`${dest.text.replace(/\/+$/, "")}/${base}`, "file");
+					// A recursive copy of a directory's contents (`src/`,
+					// `src/.`) merges into the destination itself.
+					const merges = s.text.endsWith("/") || base === "." || base === "..";
+					// Where each found path lands is not on the line.
+					if (c.under && s.text.includes("{}")) unread = true;
+					else if (unreadWord(s)) unread = true;
+					else if (recursive && merges) add(dest, "tree");
+					else if (base && !merges)
+						add(`${into}/${base}`, recursive ? "tree" : "file");
 				}
 		}
 		if (name === "mv") for (const s of sources) add(s, "tree");
+		// A link names its source's content by another path: writing
+		// through it writes the source, so the source is a write. A
+		// relative symbolic source resolves from the link's directory.
+		if (name === "ln")
+			for (const s of sources) {
+				add(s, "tree");
+				if (symbolic && dest && !s.text.startsWith("/") && !unreadWord(s)) {
+					const linkDir =
+						targetDir || dest.text.endsWith("/")
+							? dest.text.replace(/\/+$/, "")
+							: dest.text
+									.slice(0, dest.text.lastIndexOf("/") + 1)
+									.replace(/\/+$/, "") || ".";
+					add(`${linkDir}/${s.text}`, "tree");
+				}
+			}
 	}
 	return { targets, unread };
 }
@@ -1137,28 +1251,36 @@ export function shellWrites(source: string): {
 		error = e;
 	}
 	let unread = false;
-	let moved = false;
+	// The first command that changes directory; a write after it is
+	// resolved against the wrong directory, so it is not read.
+	let moved = Number.POSITIVE_INFINITY;
 	const targets: Target[] = [];
-	for (const w of lexer.redirects)
-		if (unreadWord(w)) unread = true;
-		else targets.push({ path: w.text, kind: "file" });
-	for (const words of lexer.commands) {
+	const found: { at: number; targets: Target[] }[] = [];
+	for (const { word, at } of lexer.redirects)
+		if (unreadWord(word)) unread = true;
+		else found.push({ at, targets: [target(word.text, "file")] });
+	lexer.commands.forEach((words, at) => {
 		try {
 			for (const c of commandsOf(words)) {
 				const name = basename((c.words[c.i] as Word).text);
-				if (["cd", "pushd", "popd"].includes(name)) moved = true;
-				const found = writeTargets(c);
-				targets.push(...found.targets);
-				unread ||= found.unread;
+				if (["cd", "pushd", "popd"].includes(name)) moved = Math.min(moved, at);
+				if (c.deletes)
+					for (const p of c.deletes) {
+						if (unreadWord(p)) unread = true;
+						else found.push({ at, targets: [target(p.text, "tree")] });
+					}
+				const w = writeTargets(c);
+				found.push({ at, targets: w.targets });
+				unread ||= w.unread;
 			}
 		} catch (e) {
 			if (!(e instanceof Unclassifiable)) throw e;
 			error ??= e;
 		}
+	});
+	for (const f of found) {
+		targets.push(...f.targets);
+		if (f.at > moved && f.targets.length) unread = true;
 	}
-	return {
-		targets,
-		unread: unread || (moved && targets.length > 0),
-		error,
-	};
+	return { targets, unread, error };
 }

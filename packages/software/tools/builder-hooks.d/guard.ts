@@ -3,17 +3,66 @@
 // run's own directory.
 // Every other call passes with no explicit grant. Whatever stops it from
 // checking is the caller's to turn into a refusal.
+import { opendirSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { globRegex } from "../contract.d/lint";
 import { logLine } from "./log";
 import type { Manifest } from "./manifest";
 import { excludedBy, holdsExclusion, shownPath } from "./paths";
-import { historyWrite, pushWrite, shellWrites, Unclassifiable } from "./shell";
+import {
+	historyWrite,
+	pushWrite,
+	shellWrites,
+	type Target,
+	Unclassifiable,
+} from "./shell";
 
 export const HISTORY_REASON =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
 
 export const PUSH_REASON =
 	"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
+
+/** Directory entries read for one glob; more is left unread. */
+const GLOB_LIMIT = 5000;
+
+/**
+ * Each target whose last segment is a glob, replaced by the entries of its
+ * directory it matches, as Bash expands it (no leading dot unless the glob
+ * has one). A directory it cannot list matches nothing; one too large to
+ * list calls `unread`.
+ */
+function expand(targets: Target[], cwd: string, unread: () => void): Target[] {
+	return targets.flatMap((t) => {
+		if (!t.glob) return [t];
+		const cut = t.path.lastIndexOf("/");
+		const dir = cut < 0 ? "" : t.path.slice(0, cut + 1);
+		const pattern = t.path.slice(cut + 1);
+		const regex = globRegex(pattern);
+		const entries: string[] = [];
+		try {
+			const listed = opendirSync(isAbsolute(dir) ? dir : `${cwd}/${dir}`);
+			try {
+				for (let e = listed.readSync(); e; e = listed.readSync()) {
+					if (entries.length >= GLOB_LIMIT) {
+						unread();
+						break;
+					}
+					entries.push(e.name);
+				}
+			} finally {
+				listed.closeSync();
+			}
+		} catch {
+			return [];
+		}
+		return entries
+			.filter(
+				(e) => (pattern.startsWith(".") || !e.startsWith(".")) && regex.test(e),
+			)
+			.map((e) => ({ path: `${dir}${e}`, kind: t.kind }));
+	});
+}
 
 export function excludedReason(path: string): string {
 	return `Role guard: ${path} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
@@ -94,7 +143,10 @@ export function decide(
 			typeof event.cwd === "string" && isAbsolute(event.cwd)
 				? event.cwd
 				: m.repo;
-		for (const write of writes.targets) {
+		let globbed = false;
+		for (const write of expand(writes.targets, cwd, () => {
+			globbed = true;
+		})) {
 			// Unnormalized, so the path check resolves symlinks before `..`.
 			const path = isAbsolute(write.path) ? write.path : `${cwd}/${write.path}`;
 			const shown = shownPath(m.repo, path);
@@ -131,11 +183,12 @@ export function decide(
 				reason: `${history}; command not read`,
 			};
 		}
-		const said = writes.unread
-			? "shell writes not read, not health-checked"
-			: writes.targets.length
-				? "shell writes not excluded, not health-checked"
-				: null;
+		const said =
+			writes.unread || globbed
+				? "shell writes not read, not health-checked"
+				: writes.targets.length
+					? "shell writes not excluded, not health-checked"
+					: null;
 		return {
 			deny: null,
 			tool,
