@@ -3,7 +3,7 @@
 // run's own directory.
 // Every other call passes with no explicit grant. Whatever stops it from
 // checking is the caller's to turn into a refusal.
-import { opendirSync } from "node:fs";
+import { lstatSync, opendirSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { globRegex } from "../contract.d/lint";
 import { logLine } from "./log";
@@ -23,45 +23,67 @@ export const HISTORY_REASON =
 export const PUSH_REASON =
 	"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
 
-/** Directory entries read for one glob; more is left unread. */
-const GLOB_LIMIT = 5000;
+/**
+ * The most entries one glob's directory may hold, and the most it may match:
+ * each match is checked like any target, so these bound the guard's time
+ * (measured in the fix3 report). Past either the command is refused.
+ */
+export const GLOB_LISTED = 5000;
+export const GLOB_MATCHED = 64;
 
 /**
  * Each target whose last segment is a glob, replaced by the entries of its
- * directory it matches, as Bash expands it (no leading dot unless the glob
- * has one). A directory it cannot list matches nothing; one too large to
- * list calls `unread`.
+ * directory it matches, as Bash expands it: no leading dot unless the glob
+ * has one, and the word itself when nothing matches or the directory cannot
+ * be listed. A matched entry that is not a directory is a file target.
  */
-function expand(targets: Target[], cwd: string, unread: () => void): Target[] {
+function expand(targets: Target[], cwd: string): Target[] {
+	const tooMany = (what: string) =>
+		new Unreadable(new Unclassifiable(`a glob over ${what}`));
 	return targets.flatMap((t) => {
 		if (!t.glob) return [t];
 		const cut = t.path.lastIndexOf("/");
 		const dir = cut < 0 ? "" : t.path.slice(0, cut + 1);
 		const pattern = t.path.slice(cut + 1);
 		const regex = globRegex(pattern);
-		const entries: string[] = [];
+		const matched: Target[] = [];
+		let listed = 0;
 		try {
-			const listed = opendirSync(isAbsolute(dir) ? dir : `${cwd}/${dir}`);
+			const handle = opendirSync(isAbsolute(dir) ? dir : `${cwd}/${dir}`);
 			try {
-				for (let e = listed.readSync(); e; e = listed.readSync()) {
-					if (entries.length >= GLOB_LIMIT) {
-						unread();
-						break;
+				for (let e = handle.readSync(); e; e = handle.readSync()) {
+					if (++listed > GLOB_LISTED)
+						throw tooMany(`a directory of more than ${GLOB_LISTED} entries`);
+					if (
+						(pattern.startsWith(".") || !e.name.startsWith(".")) &&
+						regex.test(e.name)
+					) {
+						if (matched.length >= GLOB_MATCHED)
+							throw tooMany(`more than ${GLOB_MATCHED} entries`);
+						matched.push({
+							path: `${dir}${e.name}`,
+							kind: e.isDirectory() || e.isSymbolicLink() ? t.kind : "file",
+						});
 					}
-					entries.push(e.name);
 				}
 			} finally {
-				listed.closeSync();
+				handle.closeSync();
 			}
-		} catch {
-			return [];
+		} catch (error) {
+			if (error instanceof Unreadable) throw error;
 		}
-		return entries
-			.filter(
-				(e) => (pattern.startsWith(".") || !e.startsWith(".")) && regex.test(e),
-			)
-			.map((e) => ({ path: `${dir}${e}`, kind: t.kind }));
+		// Unmatched, Bash keeps the word: a path that does not exist, which
+		// holds nothing.
+		return matched.length ? matched : [{ path: t.path, kind: "file" }];
 	});
+}
+
+function regularFile(path: string): boolean {
+	try {
+		return lstatSync(path).isFile();
+	} catch {
+		return false;
+	}
 }
 
 export function excludedReason(path: string): string {
@@ -143,10 +165,7 @@ export function decide(
 			typeof event.cwd === "string" && isAbsolute(event.cwd)
 				? event.cwd
 				: m.repo;
-		let globbed = false;
-		for (const write of expand(writes.targets, cwd, () => {
-			globbed = true;
-		})) {
+		for (const write of expand(writes.targets, cwd)) {
 			// Unnormalized, so the path check resolves symlinks before `..`.
 			const path = isAbsolute(write.path) ? write.path : `${cwd}/${write.path}`;
 			const shown = shownPath(m.repo, path);
@@ -160,7 +179,8 @@ export function decide(
 				return deny(shown, "in the run directory");
 			const hit = excludedBy(m.repo, path, m.excluded);
 			if (hit) return deny(shown, `excluded by ${hit}`);
-			if (write.kind === "tree") {
+			// A regular file holds nothing, whatever a glob exclusion says.
+			if (write.kind === "tree" && !regularFile(path)) {
 				if (holdsExclusion(m.repo, path, [runDir]))
 					return deny(runDir, "contains the run directory");
 				const held = holdsExclusion(m.repo, path, m.excluded);
@@ -183,12 +203,11 @@ export function decide(
 				reason: `${history}; command not read`,
 			};
 		}
-		const said =
-			writes.unread || globbed
-				? "shell writes not read, not health-checked"
-				: writes.targets.length
-					? "shell writes not excluded, not health-checked"
-					: null;
+		const said = writes.unread
+			? "shell writes not read, not health-checked"
+			: writes.targets.length
+				? "shell writes not excluded, not health-checked"
+				: null;
 		return {
 			deny: null,
 			tool,

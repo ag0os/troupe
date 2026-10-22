@@ -20,7 +20,8 @@ export class Unclassifiable extends Error {
 	}
 }
 
-export type Word = { text: string; dynamic: boolean };
+/** A word as read: `globs` holds the offsets of its unquoted `*`, `?`, `[`. */
+export type Word = { text: string; dynamic: boolean; globs?: number[] };
 
 /** Redirection operators that open their target for writing. */
 const WRITES = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
@@ -273,6 +274,8 @@ class Lexer {
 		const s = this.s;
 		let text = "";
 		let dynamic = false;
+		/** Where an unquoted glob character sits in `text`. */
+		const globs: number[] = [];
 		const add = (w: Word) => {
 			text += w.text;
 			dynamic ||= w.dynamic;
@@ -307,11 +310,12 @@ class Lexer {
 				this.backtick();
 				dynamic = true;
 			} else {
+				if (c === "*" || c === "?" || c === "[") globs.push(text.length);
 				text += c;
 				this.i++;
 			}
 		}
-		return { text, dynamic };
+		return globs.length ? { text, dynamic, globs } : { text, dynamic };
 	}
 
 	doubleQuoted(): Word {
@@ -600,14 +604,19 @@ const FIND_BARE = new Set(
  * action; a primary it does not know is Unclassifiable.
  */
 function findCommands(args: Word[]): {
-	commands: Word[][];
+	commands: { words: Word[]; execdir: boolean }[];
 	paths: Word[];
 	deletes: boolean;
 } {
-	const out: Word[][] = [];
+	const out: { words: Word[]; execdir: boolean }[] = [];
 	let deletes = false;
 	let k = 0;
-	while (k < args.length && /^-[HLPEXsxd]+$/.test((args[k] as Word).text)) k++;
+	// -L follows symlinks, which may lead anywhere: the roots are unread.
+	let follows = false;
+	while (k < args.length && /^-[HLPEXsxd]+$/.test((args[k] as Word).text)) {
+		if ((args[k] as Word).text.includes("L")) follows = true;
+		k++;
+	}
 	const first = k;
 	while (k < args.length) {
 		const w = args[k] as Word;
@@ -649,10 +658,19 @@ function findCommands(args: Word[]): {
 			)
 		)
 			end++;
-		out.push(args.slice(k + 1, end));
+		out.push({
+			words: args.slice(k + 1, end),
+			execdir: w.text === "-execdir" || w.text === "-okdir",
+		});
 		k = end;
 	}
-	return { commands: out, paths, deletes };
+	const unreadRoots =
+		follows || args.some((a) => a.text === "-files0-from" && !a.dynamic);
+	return {
+		commands: out,
+		paths: unreadRoots ? [{ text: "", dynamic: true }] : paths,
+		deletes,
+	};
 }
 
 function basename(path: string): string {
@@ -750,6 +768,18 @@ function shortCluster(
 	return false;
 }
 
+/** git's own commands, which an alias cannot shadow. */
+const BUILTINS = new Set(
+	`add am annotate apply archive bisect blame branch bundle cat-file check-ignore
+	checkout cherry cherry-pick citool clean clone commit config count-objects
+	describe diff difftool fetch filter-branch for-each-ref format-patch fsck gc
+	grep gui help init instaweb log ls-files ls-remote ls-tree merge merge-base mv
+	notes pull push range-diff rebase reflog remote repack replace request-pull
+	reset restore rev-list rev-parse revert rm send-email send-pack shortlog show
+	show-ref sparse-checkout stash status submodule subtree switch symbolic-ref tag
+	update-index update-ref verify-commit worktree write-tree`.split(/\s+/),
+);
+
 /** git subcommands that publish history. */
 const PUSHES = new Set(["push", "send-pack"]);
 
@@ -781,8 +811,11 @@ function classifyGit(args: Word[], push: boolean, depth = 0): string | null {
 		if (value.toLowerCase().startsWith("alias."))
 			throw new Unclassifiable("a git alias taken from the environment");
 	}
-	// Git folds the key's case, so `alias.P` defines `p`.
-	const alias = optionValues(args, 0, i, "-c", "--config")
+	// Git folds the key's case, so `alias.P` defines `p`; an alias that
+	// shadows a git command is ignored, as git ignores it.
+	const alias = (
+		BUILTINS.has(name) ? [] : optionValues(args, 0, i, "-c", "--config")
+	)
 		.filter((v) =>
 			v.text.toLowerCase().startsWith(`alias.${name.toLowerCase()}=`),
 		)
@@ -793,6 +826,9 @@ function classifyGit(args: Word[], push: boolean, depth = 0): string | null {
 		const body = alias.text.slice(alias.text.indexOf("=") + 1).trim();
 		if (body.startsWith("!"))
 			throw new Unclassifiable("a git shell alias defined in the line");
+		// Git unquotes the body; this reading splits on spaces only.
+		if (/["'\\]/.test(body))
+			throw new Unclassifiable("a git alias body holding quotes");
 		if (depth > 4)
 			throw new Unclassifiable("a git alias chain it cannot follow");
 		const words = body
@@ -956,32 +992,67 @@ type Command = {
 	under: Word[] | null;
 	/** The paths a find's -delete removes from. */
 	deletes: Word[] | null;
+	/** Run by -execdir or -okdir: its operands are relative to `under`. */
+	execdir: boolean;
 };
 
-function commandsOf(words: Word[], under: Word[] | null = null): Command[] {
+function commandsOf(
+	words: Word[],
+	under: Word[] | null = null,
+	execdir = false,
+): Command[] {
 	const head = program(words);
 	if (!head) return [];
 	const name = basename((words[head.i] as Word).text);
-	if (name !== "find") return [{ words, ...head, under, deletes: null }];
+	if (name !== "find")
+		return [{ words, ...head, under, deletes: null, execdir }];
 	const found = findCommands(words.slice(head.i + 1));
+	// A wrapper's directory moves find's roots as it moves any target.
+	const dir = head.dir;
+	const roots = found.paths.map((p) =>
+		!dir || p.dynamic || p.text.startsWith("/")
+			? p
+			: dir.dynamic
+				? { text: "", dynamic: true }
+				: {
+						text: `${dir.text}/${p.text}`,
+						dynamic: false,
+						globs: p.globs?.map((g) => g + dir.text.length + 1),
+					},
+	);
 	return [
 		{
 			words,
 			...head,
+			dir: null,
 			under,
-			deletes: found.deletes ? found.paths : null,
+			deletes: found.deletes ? roots : null,
+			execdir,
 		},
-		...found.commands.flatMap((c) => commandsOf(c, found.paths)),
+		...found.commands.flatMap((c) => commandsOf(c.words, roots, c.execdir)),
 	];
 }
 
 /** Configuration the line hands git through the environment. */
 const GIT_CONFIG = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/;
 
+/** Builtins whose operands are assignments. */
+const EXPORTS = new Set(["export", "declare", "typeset", "readonly", "local"]);
+
 function lineCommands(source: string): Command[] {
 	const all = simpleCommands(source);
-	if (all.some((words) => words.some((w) => GIT_CONFIG.test(w.text))))
-		throw new Unclassifiable("git configuration set in the line");
+	// Only an assignment sets configuration: one before the program (git's
+	// prefix, env's assignments) or an export's operand, not any argument.
+	for (const words of all) {
+		const head = program(words);
+		const name = head ? basename((words[head.i] as Word).text) : "";
+		const assigned = [
+			...words.slice(0, head ? head.i : words.length),
+			...(head && EXPORTS.has(name) ? words.slice(head.i + 1) : []),
+		];
+		if (assigned.some((w) => GIT_CONFIG.test(w.text)))
+			throw new Unclassifiable("git configuration set in the line");
+	}
 	return all.flatMap((words) => commandsOf(words));
 }
 
@@ -1067,21 +1138,28 @@ const WRITERS: Record<string, Writer> = {
 	},
 };
 
-const GLOB = /[*?[]/;
 /** Brace expansion, and the `{}` find and `xargs -I` replace. */
 const BRACES = /\{[^{}]*(,|\.\.)[^{}]*\}|\{\}/;
 
 /** A word the guard cannot resolve to paths; a last-segment glob it can. */
+/** Whether a word holds an unquoted glob character, after `from`. */
+const globbed = (w: Word, from = -1) => !!w.globs?.some((g) => g > from);
+
+/**
+ * A word the guard cannot resolve to paths: an expansion, a `~`, a brace, a
+ * glob above the last segment or a character class. A last-segment glob it
+ * expands; a quoted glob character is a literal.
+ */
 const unreadWord = (w: Word) =>
 	w.dynamic ||
 	w.text.startsWith("~") ||
 	BRACES.test(w.text) ||
-	GLOB.test(w.text.slice(0, w.text.lastIndexOf("/") + 1));
+	(globbed(w) &&
+		(/\[\[?:/.test(w.text) ||
+			(w.globs as number[]).some((g) => g < w.text.lastIndexOf("/"))));
 
-function target(path: string, kind: Target["kind"]): Target {
-	return GLOB.test(basename(path))
-		? { path, kind, glob: true }
-		: { path, kind };
+function target(path: string, kind: Target["kind"], glob: boolean): Target {
+	return glob ? { path, kind, glob: true } : { path, kind };
 }
 
 /**
@@ -1104,6 +1182,7 @@ function writeTargets(c: Command): {
 	let backup = false;
 	let directories = false;
 	let symbolic = false;
+	let linking = false;
 	for (let k = 0; k < args.length; k++) {
 		const w = args[k] as Word;
 		const t = w.text;
@@ -1129,7 +1208,8 @@ function writeTargets(c: Command): {
 			}
 			if (opt === "--recursive" || opt === "--archive") recursive = true;
 			if (opt === "--backup") backup = true;
-			if (opt === "--symbolic") symbolic = true;
+			if (opt === "--symbolic" || opt === "--symbolic-link") symbolic = true;
+			if (opt === "--link") linking = true;
 			if (opt === "--directory" && name === "install") directories = true;
 			continue;
 		}
@@ -1158,6 +1238,7 @@ function writeTargets(c: Command): {
 			if (name === "cp" && "rRa".includes(ch)) recursive = true;
 			if (ch === "b") backup = true;
 			if (ch === "s") symbolic = true;
+			if (name === "cp" && ch === "l") linking = true;
 			if (name === "install" && ch === "d") directories = true;
 		}
 	}
@@ -1167,11 +1248,20 @@ function writeTargets(c: Command): {
 	const targets: Target[] = [];
 	const add = (w: Word | string, kind: Target["kind"]) => {
 		const word = typeof w === "string" ? { text: w, dynamic: false } : w;
-		// find's `{}` stands for paths under its own: each is a tree then.
-		if (c.under && word.text.includes("{}") && !word.dynamic) {
-			for (const p of c.under) add(p, "tree");
+		// -execdir runs in each found path's directory: its operands are
+		// relative to paths under find's own, so those are the trees.
+		if (c.execdir && c.under) {
+			for (const p of c.under) put(p, "tree");
 			return;
 		}
+		// find's `{}` stands for paths under its own: each is a tree then.
+		if (c.under && word.text.includes("{}") && !word.dynamic) {
+			for (const p of c.under) put(p, "tree");
+			return;
+		}
+		put(word, kind);
+	};
+	const put = (word: Word, kind: Target["kind"]) => {
 		if (unreadWord(word) || word.text === "" || c.dir?.dynamic) {
 			unread = true;
 			return;
@@ -1180,11 +1270,11 @@ function writeTargets(c: Command): {
 			c.dir && !word.text.startsWith("/")
 				? `${c.dir.text}/${word.text}`
 				: word.text;
-		targets.push(target(path, kind));
+		targets.push(target(path, kind, globbed(word)));
 		const tail = suffix ?? (backup ? { text: "~", dynamic: false } : null);
 		if (tail && kind === "file") {
 			if (tail.dynamic) unread = true;
-			else targets.push(target(`${path}${tail.text}`, kind));
+			else targets.push(target(`${path}${tail.text}`, kind, globbed(word)));
 		}
 	};
 	if (spec.shape === "operands" || directories)
@@ -1214,17 +1304,22 @@ function writeTargets(c: Command): {
 		// A link names its source's content by another path: writing
 		// through it writes the source, so the source is a write. A
 		// relative symbolic source resolves from the link's directory.
-		if (name === "ln")
+		// `cp -l` and `cp -s` link as ln does.
+		if (name === "ln" || (name === "cp" && (linking || symbolic)))
 			for (const s of sources) {
 				add(s, "tree");
 				if (symbolic && dest && !s.text.startsWith("/") && !unreadWord(s)) {
-					const linkDir =
-						targetDir || dest.text.endsWith("/")
-							? dest.text.replace(/\/+$/, "")
-							: dest.text
-									.slice(0, dest.text.lastIndexOf("/") + 1)
-									.replace(/\/+$/, "") || ".";
-					add(`${linkDir}/${s.text}`, "tree");
+					// A destination without a slash may be an existing
+					// directory: the link lands in it, or beside it.
+					const into = dest.text.replace(/\/+$/, "");
+					const beside =
+						dest.text
+							.slice(0, dest.text.lastIndexOf("/") + 1)
+							.replace(/\/+$/, "") || ".";
+					for (const linkDir of targetDir || dest.text.endsWith("/")
+						? [into]
+						: [beside, into])
+						add(`${linkDir}/${s.text}`, "tree");
 				}
 			}
 	}
@@ -1258,7 +1353,8 @@ export function shellWrites(source: string): {
 	const found: { at: number; targets: Target[] }[] = [];
 	for (const { word, at } of lexer.redirects)
 		if (unreadWord(word)) unread = true;
-		else found.push({ at, targets: [target(word.text, "file")] });
+		else
+			found.push({ at, targets: [target(word.text, "file", globbed(word))] });
 	lexer.commands.forEach((words, at) => {
 		try {
 			for (const c of commandsOf(words)) {
@@ -1267,7 +1363,8 @@ export function shellWrites(source: string): {
 				if (c.deletes)
 					for (const p of c.deletes) {
 						if (unreadWord(p)) unread = true;
-						else found.push({ at, targets: [target(p.text, "tree")] });
+						else
+							found.push({ at, targets: [target(p.text, "tree", globbed(p))] });
 					}
 				const w = writeTargets(c);
 				found.push({ at, targets: w.targets });

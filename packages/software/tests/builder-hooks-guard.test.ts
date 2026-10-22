@@ -1433,3 +1433,167 @@ describe("fix round 2", () => {
 		);
 	});
 });
+
+describe("fix round 3", () => {
+	const BS = String.fromCodePoint(0x5c);
+	const PUSH =
+		"Role guard: pushes and pull requests stay with the host in this run. Commit on your branch; the host pushes after recheck.";
+	let g: Fixture;
+	beforeAll(() => {
+		g = new Fixture();
+		g.write(".env", "x\n");
+		for (let i = 0; i < 64; i++) g.write(`bulk64/x${i}.tmp`, "x\n");
+		for (let i = 0; i < 65; i++) g.write(`bulk65/x${i}.tmp`, "x\n");
+		for (let i = 0; i < 5001; i++) g.write(`bulk5001/x${i}`, "");
+		g.prepare(g.input({ history_writes: true, excluded: [".env"] }));
+	});
+	afterAll(() => g.cleanup());
+	const run = (command: string) =>
+		g.hook("guard", {
+			session_id: "s1",
+			tool_name: "Bash",
+			tool_input: { command },
+		});
+	const reason = (command: string) =>
+		denial(bash(command))?.permissionDecisionReason;
+	const lastLine = (command: string) => {
+		bash(command);
+		return f.logLines().at(-1);
+	};
+	const chain = (n: number) =>
+		`git ${Array.from({ length: n }, (_, k) => `-c alias.a${k}=${k === n - 1 ? "push" : `a${k + 1}`}`).join(" ")} a0 origin main`;
+
+	// 1: an alias never overrides a built-in.
+	test.each([
+		"git -c alias.p=push -c alias.push=status p origin main",
+		"git -c alias.push=status push origin main",
+	])("denies the push %s", (command) => {
+		expect(denial(run(command))?.permissionDecisionReason).toBe(PUSH);
+	});
+
+	// 2: a body git would unquote is refused.
+	test.each([
+		`git -c 'alias.p="push"' p origin main`,
+		`git -c 'alias.p=${BS}push' p origin main`,
+	])("refuses %s", (command) => {
+		expect(run(command).code).toBe(2);
+	});
+
+	// 9: the five-hop boundary.
+	test("five aliases are followed; a sixth is refused", () => {
+		expect(denial(run(chain(5)))?.permissionDecisionReason).toBe(PUSH);
+		expect(run(chain(6)).code).toBe(2);
+	});
+
+	// 3: an existing directory destination without a slash.
+	test("ln -s into an existing directory resolves the source from it", () => {
+		expect(reason("ln -s ../config/deploy.yml app")).toBe(
+			excludedReason("config/deploy.yml"),
+		);
+	});
+
+	// 4: quoting reaches the glob decision.
+	test.each([
+		["touch 'protected/new*'", "protected/new*"],
+		['touch "protected/a?"', "protected/a?"],
+		["touch protected/new*", "protected/new*"],
+	])("denies %s as a literal", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test("a quoted glob is a literal path, read", () => {
+		expect(lastLine("touch 'config/dep*'")).toMatch(
+			/ ALLOW no history write; shell writes not excluded, not health-checked session=s1$/,
+		);
+	});
+
+	test("a character class is not read", () => {
+		expect(lastLine("rm -f app/[[:alpha:]]*.rb")).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	// 5 and 9: the cap is a refusal; the dotfile rule.
+	test("a glob over 64 entries is refused; 64 are read", () => {
+		expect(run("rm -f bulk64/*.tmp").code).toBe(0);
+		const r = run("rm -f bulk65/*.tmp");
+		expect(r.code).toBe(2);
+		expect(r.stderr).toContain("a glob over more than 64 entries");
+	});
+
+	test("a glob over a directory of more than 5000 entries is refused", () => {
+		const r = run("rm -f bulk5001/y*");
+		expect(r.code).toBe(2);
+		expect(r.stderr).toContain(
+			"a glob over a directory of more than 5000 entries",
+		);
+	});
+
+	test("a glob matches a dotfile only when it starts with a dot", () => {
+		expect(run("rm -f *")).toEqual({ code: 0, stdout: "", stderr: "" });
+		expect(denial(run("rm -f .e*"))?.permissionDecisionReason).toBe(
+			excludedReason(".env"),
+		);
+	});
+
+	// 6: find's -execdir, wrapper directory, -L and -files0-from.
+	test.each([
+		[
+			`find config -name deploy.yml -execdir rm deploy.yml ${BS};`,
+			"config/deploy.yml",
+		],
+		["env -C config find . -name deploy.yml -delete", "config/deploy.yml"],
+	])("denies %s", (command, path) => {
+		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test("a wrapper directory applies to find's roots", () => {
+		expect(bash("env -C src find . -name x -delete").code).toBe(0);
+		expect(denial(bash("env -C src find . -name x -delete"))).toBeNull();
+	});
+
+	test.each([
+		"find -L tmp -name x -delete",
+		"find tmp -files0-from list -delete",
+	])("logs %s as not read", (command) => {
+		expect(lastLine(command)).toMatch(
+			/ ALLOW no history write; shell writes not read, not health-checked session=s1$/,
+		);
+	});
+
+	// 7: cp --link and -l protect their source as ln does.
+	test.each([
+		"cp --link config/deploy.yml x",
+		"cp -l config/deploy.yml x",
+		"cp -s config/deploy.yml x",
+	])("denies %s", (command) => {
+		expect(reason(command)).toBe(excludedReason("config/deploy.yml"));
+	});
+
+	// 8: the over-denials.
+	test("a matched regular file holds nothing", () => {
+		f.write("app/models/old.tmp", "x\n");
+		expect(bash("rm -f app/models/*.tmp")).toEqual({
+			code: 0,
+			stdout: "",
+			stderr: "",
+		});
+		expect(bash("rm -f app/models/user.rb").code).toBe(0);
+	});
+
+	test.each(["echo GIT_CONFIG_COUNT=1", "printf '%s' GIT_CONFIG_PARAMETERS=x"])(
+		"allows %s",
+		(command) => {
+			expect(bash(command)).toEqual({ code: 0, stdout: "", stderr: "" });
+		},
+	);
+
+	test("GIT_CONFIG_* is still refused as an assignment, under env and export", () => {
+		for (const command of [
+			"GIT_CONFIG_COUNT=1 git p",
+			"env GIT_CONFIG_COUNT=1 git p",
+			"export GIT_CONFIG_PARAMETERS=x; git p",
+		])
+			expect(run(command).code).toBe(2);
+	});
+});
