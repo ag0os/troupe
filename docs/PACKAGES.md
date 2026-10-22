@@ -334,7 +334,7 @@ Claude prefixes the command to every hook failure the model sees, so the model r
 
 - `guard` denies a git history write in a Bash command (commit, push, pull, merge, rebase, revert, tag, reset,
   cherry-pick, stash drop and clear, branch `-d`/`-D`/`-f`/`-m`, checkout `-B`, switch `-C`, update-ref, reflog
-  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies a push (`git push`, `send-pack`, `subtree push`, a dashed `git-push`, an alias the line defines with `-c alias.<name>=`, chained or in any case, read through to its subcommand, never one that shadows a git command (git ignores those); a body holding quotes or a backslash, a `!` shell alias, an alias from `--config-env` and git configuration the line sets through `GIT_CONFIG_*` are refused) unless `push_writes` is true, which draws a prepare warning that the brief must carry the grant, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
+  expire, gc `--prune`, am, clean) when `history_writes` is false, with a reason that says history writes are off for this run and the host holds them; with history writes on, it still denies a push (`git push`, `send-pack`, `subtree push`, a dashed `git-push`, an alias the line defines with `-c alias.<name>=`, chained or in any case, read through to its subcommand; an alias named after one of git's own commands in the guard's fixed set is not expanded (git ignores those), and one named after a command outside the set (`hash-object`, for one) is expanded, which can only over-deny; a body holding quotes or a backslash, a `!` shell alias, an alias from `--config-env` and git configuration the line sets through `GIT_CONFIG_*` are refused) unless `push_writes` is true, which draws a prepare warning that the brief must carry the grant, saying pushes and pull requests stay with the host (`gh` and other pull request clients are not read); and an edit under an `excluded` path or under the
   run directory itself, which is a fixed rule; the denial names the path relative to the repository. It reads the command lexically: separators, quotes, assignments, the
   wrappers `env`, `command`, `exec`, `builtin`, `time`, `timeout`, `caffeinate`, `nohup`, `nice`, `sudo` and `xargs`,
   `find -exec` (its expression walked, so a `-name` value is data and an unknown primary is refused), substitutions
@@ -350,18 +350,21 @@ Claude prefixes the command to every hook failure the model sees, so the model r
   ending in `/`, `.` or `..`), and every path of a `find` that deletes or whose command names `{}`, that holds an
   exclusion or the run directory is denied too; a glob exclusion is held once the operand's segments match its leading
   ones (always below a `**`), and a regular file holds nothing. A glob in a target's last segment, on its unquoted
-  characters, is expanded against its directory as Bash would (no dotfile unless the glob starts with `.`; the word
-  itself when nothing matches); more than 64 matches or a directory of more than 5000 entries is refused, which keeps
-  the guard inside its 200 ms budget. `find -execdir` writes under the find's roots, a wrapper directory moves them,
-  and `-L` or `-files0-from` leave them unread; `cp -l` and `cp -s` protect their source as `ln` does.
+  characters, is expanded against its directory (no dotfile unless the glob starts with `.`; the word itself when
+  nothing matches; a character class is not read); more than 64 matches or a directory of more than 5000 entries is
+  refused. The caps bound each glob's work; the 200 ms deadline is enforced by refusing a call that overran it. `find -execdir` writes under the find's roots and its writer's own operands (a
+  relative one read from each root and its parent), a wrapper directory moves them, and `-L` or `-files0-from` leave
+  them unread; `cp -l`, `cp -s` and `install -l` protect their source as `ln` does.
   Relative targets resolve against the event's `cwd`, or the directory `env -C`/`--chdir` or `sudo -D`/`--chdir`
   gives. Not read: a target holding an expansion, a glob above its last segment, a brace or a leading `~`, a write
   after a `cd`, `pushd` or `popd` earlier in the line, operands a writer under `xargs` takes from stdin, where a
-  `find`'s found path lands in a copy, a link made before the run, a glob whose directory is a symlink into the excluded tree past what the listing
-  shows, `tee >(...)` and other process substitutions, writers reading paths from stdin, `rsync` (and its
-  `--link-dest`), and other programs that write (`dd`, `git checkout -- <path>`, editors, interpreters); the
-  guard's ALLOW line then says `shell writes not read, not health-checked`, and recheck's `excluded` covers them after
-  the run. With `history_writes` and `push_writes` true and no exclusions, a command it cannot read passes unread;
+  `find`'s found path lands in a copy, `find -L` or `-files0-from` roots, a character class, and an `-execdir` operand
+  climbing with `..`: for these the guard's ALLOW line says `shell writes not read, not health-checked`. Also not
+  read, without that note: a link made before the run and a glob whose directory is a symlink into the excluded tree
+  past what the listing shows (read as ordinary targets, logged `shell writes not excluded`), and `tee >(...)` and
+  other process substitutions, writers reading paths from stdin, `rsync` (and its `--link-dest`), and other programs
+  that write (`dd`, `git checkout -- <path>`, editors, interpreters), logged as a plain ALLOW. Recheck's `excluded`
+  covers all of them after the run. With `history_writes` and `push_writes` true and no exclusions, a command it cannot read passes unread;
   otherwise it is refused with `Role guard could not read this command: <what> holds an expansion. Spell the command
   name and git options literally and run it again; this is not a hooks failure.` (or `it holds <syntax>` for syntax it
   cannot place). Both the push denial and the shell-write denial are lexical and bind a cooperative builder: `sh -c`,
