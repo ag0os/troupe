@@ -108,7 +108,7 @@ Each entry leads with a status word that tells the next session what it may do:
 - **ASK**: needs the user's decision. Propose, do not start.
 - **CANDIDATE**: plausible, not agreed. Raise it, do not begin it.
 
-Take every timestamp you write from `date`; your own sense of the time is a guess. Rewrite CURRENT whole at handoff, and when patching has left it out of shape; in between, edit the entry that changed. `Updated:` stays. It holds what changes with the work: a standing value goes in the charter, a rule in core or a module; a standing how-to, in a doc indexed by the action it guards; what is costly on first misuse stays here or in the charter. The 600-word mark is for review. A warning whose destination does not exist yet, or needs the user, goes in `pending.md` with that destination until it carries the warning.
+Take every timestamp you write from `date`; your own sense of the time is a guess. Rewrite CURRENT whole at handoff, and when patching has left it out of shape; in between, edit the entry that changed. `Updated:` stays. It holds what changes with the work: a standing value goes in the charter, a rule in core or a module; a standing how-to, in a doc indexed by the action it guards; what is costly on first misuse stays here or in the charter. The 1,500-word mark is for review. A warning whose destination does not exist yet, or needs the user, goes in `pending.md` with that destination until it carries the warning.
 
 An item with more to it than its line is one directory, `work/todo|in-progress|done/<slug>/`, holding `STATUS.md` plus the artifacts the work produced; advancing a state is a move. Keep artifacts here, not scattered in the directories the work touches. `STATUS.md` answers on its own, in this shape:
 
