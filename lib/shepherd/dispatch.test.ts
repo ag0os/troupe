@@ -492,6 +492,55 @@ describe("extractable (O1, acceptance 6)", () => {
 		expect(child.stdout.toString()).toContain("usage: builder-hooks <mode>");
 	});
 
+	test("the install-skills tool is a write tool that gets its arguments unchanged (IS-1)", () => {
+		const outside = scratch();
+		const location = join(outside, "location");
+		cpSync(join(repo, "packages/software"), join(location, "software"), {
+			recursive: true,
+		});
+		write(join(outside, "ws/.shepherd/charter.md"), "Modules: software\n");
+		const ws = join(outside, "ws");
+		const locations = (): PackageLocation[] => [
+			{ dir: location, layer: "builtin" },
+		];
+		expect(
+			composeFragments(
+				ws,
+				"claude-cli",
+				undefined,
+				[],
+				new Date(),
+				undefined,
+				locations(),
+			).at(-1),
+		).toContain("software install-skills (write)");
+		const args = ["--repo", "a dir", "--json"];
+		expect(
+			dispatch(["tool", "software", "install-skills", ...args], ws, locations),
+		).toMatchObject({
+			exec: {
+				file: join(location, "software/tools/install-skills"),
+				args,
+				cwd: ws,
+			},
+		});
+		const help = dispatch(
+			["tool", "software", "install-skills", "--help"],
+			ws,
+			locations,
+		);
+		if (!help || !("exec" in help))
+			throw new Error("expected an exec description");
+		const child = Bun.spawnSync([help.exec.file, ...help.exec.args], {
+			cwd: help.exec.cwd,
+			env: { ...process.env, ...help.exec.env, HOME: join(outside, "home") },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(child.exitCode).toBe(0);
+		expect(child.stdout.toString()).toContain("usage: install-skills");
+	});
+
 	test("no file under packages/ imports from Troupe's lib/", () => {
 		const files = (dir: string): string[] =>
 			readdirSync(dir).flatMap((name) => {

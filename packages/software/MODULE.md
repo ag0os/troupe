@@ -27,6 +27,10 @@ tools:
     description: Prepare a Claude Code builder's hook settings, run its guard, health and Stop hooks, and re-check its work
     access: write
     requires: [bun, git]
+  install-skills:
+    description: Install the package's skills into Claude Code's and Codex's skills directories, user level or a repository's
+    access: write
+    requires: [bun]
 guides:
   build:
     description: the shape table's Contract timing and Checks rows, steps 3 to 5 and the skills rule; read before briefing a builder
