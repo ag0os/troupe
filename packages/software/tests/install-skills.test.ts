@@ -84,6 +84,11 @@ function snapshot(dir: string): Record<string, string> {
 	return out;
 }
 
+/** The fake home's entries, without the `.bun` directory bun itself may create there. */
+function homeEntries(): string[] {
+	return readdirSync(home).filter((name) => name !== ".bun");
+}
+
 function sourceFiles(skill: string): string[] {
 	return Object.keys(snapshot(join(skillsDir, skill))).sort();
 }
@@ -154,7 +159,7 @@ describe("package integration (IS-1)", () => {
 				status: "error",
 			});
 		}
-		expect(readdirSync(home)).toEqual([]);
+		expect(homeEntries()).toEqual([]);
 	});
 });
 
@@ -235,7 +240,7 @@ describe("the Codex root (IS-3)", () => {
 		const result = run([]);
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain(".codex-active");
-		expect(readdirSync(home)).toEqual([".codex-active"]);
+		expect(homeEntries()).toEqual([".codex-active"]);
 	});
 });
 
@@ -250,7 +255,7 @@ describe("the repo argument (IS-4)", () => {
 		]);
 		expectInstalled(join(repo, ".claude/skills/imp-feature"), "imp-feature");
 		expectInstalled(join(repo, ".agents/skills/imp-feature"), "imp-feature");
-		expect(readdirSync(home)).toEqual([]);
+		expect(homeEntries()).toEqual([]);
 	});
 
 	test("a missing repository is refused", () => {
