@@ -258,7 +258,7 @@ A brief may tell a delegate to follow `shepherd tool guide software build`, sinc
 any directory. A guide holds method only, so a brief that points a delegate at one still states the module's stop rule
 (step 4) and the attribution rule.
 
-The package carries two read tools. The first:
+The package carries two read tools and two write tools. The first:
 
 ```
 shepherd tool software publish-check [--base <ref>] [--body <file>] [--terms <file>]
@@ -412,3 +412,36 @@ Exit (prepare, recheck): 0 complete, 1 findings, 2 usage, environment, a check t
 failed, a changed excluded path or a changed system test; a failed check takes exit 1 with every finding reported.
 
 The builder runbook, for a Shepherd starting a Claude Code builder with these hooks, is in `shepherd tool guide software hooks`.
+
+The fourth, `install-skills`, is a write tool: it installs the skills the package carries in `skills/<skill>/` (today
+`imp-feature`, the feature shape as a skill) for Claude Code and Codex. Troupe's copy is the source; an installed copy
+is never edited in place.
+
+```
+shepherd tool software install-skills [--repo <dir>] [--json]
+```
+
+It needs `bun`: a launcher runs its TypeScript from `tools/install-skills.d/` with `--no-install --env-file=/dev/null`.
+Its obligations:
+
+1. **IS-1, a package tool.** A POSIX sh launcher that finds `install-skills.d/` beside `$0`, answers `--help` without
+   writing anything, and exits 2 with one stderr line when bun is missing or an argument is unknown (one JSON error
+   object under `--json`).
+2. **IS-2, user level.** Without `--repo`, every directory under `skills/` that holds a `SKILL.md` is installed byte
+   for byte to `$HOME/.claude/skills/<skill>/` and to `<codex root>/skills/<skill>/`, with each file's permission bits.
+   `HOME` is read from the environment, so a fake home sees every write.
+3. **IS-3, the Codex root.** `$CODEX_HOME` when set, else the path `$HOME/.codex-active` holds when that file exists,
+   else `$HOME/.codex`. A relative `CODEX_HOME` or `.codex-active` path is refused (exit 2) before any write.
+4. **IS-4, a repository.** With `--repo <dir>`, relative to the caller's directory and required to exist, the
+   destinations are `<dir>/.claude/skills/<skill>/` and `<dir>/.agents/skills/<skill>/`, Codex's repository location;
+   nothing is written under `HOME`.
+5. **IS-5, one skill directory each.** Each install makes the skill directory hold exactly the source's files: a
+   changed file is rewritten, a file or directory no longer in the source is removed, and a symlink is replaced or
+   removed, never followed. Nothing else under either skills root is touched, sibling skills included, apart from
+   creating the roots when they are missing. A destination that exists and is not a directory is refused before any
+   write.
+6. **IS-6, a report per destination.** Each destination prints `<harness> <skill>: <path> changed: added ...; updated
+   ...; removed ...` or `<harness> <skill>: <path> current`; `--json` reports the same per destination. A second run
+   changes nothing and reports every destination current.
+
+Exit 0 installed or current, 2 usage or environment error.
