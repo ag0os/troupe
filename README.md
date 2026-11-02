@@ -56,6 +56,7 @@ bun run check:all             # typecheck and Biome, as CI and the pre-commit ho
 - [docs/SETUP.md](docs/SETUP.md): read when setting up a new machine.
 - [docs/COACH.md](docs/COACH.md): read to use `tutors:coach` or write a subject pack for it.
 - [docs/WEBFETCH-SKILL.md](docs/WEBFETCH-SKILL.md): read when an agent should call `tools:webfetch`.
+- [docs/HERDR-CORE.md](docs/HERDR-CORE.md): read before planning Shepherd work on herdr-core or the Herdr desktop app; analysis and spike plan, nothing built yet.
 - [AGENTS.md](AGENTS.md): conventions for coding agents and contributors working in this repo.
 
 ## Origins
