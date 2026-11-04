@@ -47,7 +47,8 @@ const KEPT = [
 	"where data matters, authorized representative records, read only, in a safe environment",
 	"A merge grant the user wrote, in the plan or in charter slot `software.merge-grant`",
 	"A chore's or a bug's one line (Shapes, above) in `CURRENT.md` serves as its plan",
-	"mutation wherever the project can run it, on every subject where that runs in reasonable time, otherwise scoped to the changed code",
+	"mutation wherever the project can run it, gated on zero new survivors against the merge base: every subject while the full run fits the repo's budget",
+	"red when a scoped run cannot run",
 	"The builder stops only for a decision the plan reserves",
 	"where the question is one the user reserved, put throwaway prototypes in front of them",
 ];
