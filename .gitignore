@@ -5,7 +5,7 @@ node_modules
 out
 dist
 bin
-# publication temp dirs left by a killed compile (scripts/agent-compiler.ts)
+# publication temp dirs left by a killed compile (lib/agent-format/compiler.ts)
 .troupe-build-*/
 *.tgz
 # a running Shepherd eval invocation's lock, a killed one's unpublished result files, and evidence it set aside (docs/SHEPHERD-EVALS.md)
