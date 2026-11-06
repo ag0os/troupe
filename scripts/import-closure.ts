@@ -1,7 +1,9 @@
 /**
  * Static import closure of TypeScript sources: every file reached through
  * relative `import`, `export ... from`, type-only and dynamic string imports,
- * read with TypeScript's preprocessor so type-only edges count. Bare
+ * read with TypeScript's preprocessor so type-only edges count, plus
+ * runtime file URLs (a relative string literal passed to `new URL` with
+ * `import.meta.url`). Bare
  * specifiers (packages, `node:` and `bun:` builtins) are external and not
  * followed. Text imports (`.md`, `.txt`) are members but not followed.
  */
@@ -34,10 +36,14 @@ function resolveRelative(from: string, specifier: string): string | undefined {
 	return undefined;
 }
 
+const RUNTIME_URL = /new URL\(\s*"(\.\.?\/[^"]+)",\s*import\.meta\.url\s*\)/g;
+
 /** The specifiers one file imports, type-only and dynamic ones included. */
 export function importsOf(file: string): string[] {
-	const info = ts.preProcessFile(readFileSync(file, "utf8"), true, true);
+	const text = readFileSync(file, "utf8");
+	const info = ts.preProcessFile(text, true, true);
 	return [
+		...[...text.matchAll(RUNTIME_URL)].map((match) => match[1] as string),
 		...info.importedFiles.map((ref) => ref.fileName),
 		...info.referencedFiles.map((ref) => ref.fileName),
 		...info.typeReferenceDirectives.map((ref) => ref.fileName),
