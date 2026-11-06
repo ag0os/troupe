@@ -384,6 +384,15 @@ describe("stage refusals", () => {
 		expect(problems(root)).toEqual(["symlink lib/linked.ts"]);
 	});
 
+	test("an opaque reference", () => {
+		const root = fixture("opaque", {
+			"lib/index.ts": "export const d = import.meta.dir;\n",
+		});
+		expect(problems(root)).toEqual([
+			"opaque reference lib/index.ts:1: import.meta.dir",
+		]);
+	});
+
 	test("an undeclared dependency", () => {
 		const root = fixture("undeclared", {
 			"lib/index.ts": 'export * from "left-pad";\n',

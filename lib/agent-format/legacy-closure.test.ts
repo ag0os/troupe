@@ -26,6 +26,13 @@ export const COMPILER_ENTRIES = [
 	"scripts/binary-name.ts",
 ] as const;
 
+/**
+ * Runtime directory references the walker cannot follow, reviewed: the
+ * base package location is derived from the module directory and lies in
+ * legacy membership (`packages/`). A new one fails the guard.
+ */
+const REVIEWED_OPAQUE = ["lib/shepherd/package-resolution.ts: import.meta.dir"];
+
 /** Repo-relative closure members outside legacy membership. */
 function escapes(
 	root: string,
@@ -35,6 +42,12 @@ function escapes(
 	const closure = importClosure(entries);
 	return {
 		unresolved: closure.unresolved,
+		opaque: closure.opaque
+			.map((line) => {
+				const [where = "", what = ""] = line.split(": ");
+				return `${relative(root, where.replace(/:\d+$/, ""))}: ${what}`;
+			})
+			.sort(),
 		outside: closure.files
 			.filter((file) => !generated.includes(file))
 			.map((file) => relative(root, file))
@@ -49,7 +62,7 @@ describe("legacy import membership (O31)", () => {
 			repo,
 			COMPILER_ENTRIES.map((entry) => join(repo, entry)),
 		);
-		expect(result).toEqual({ unresolved: [], outside: [] });
+		expect(result).toEqual({ unresolved: [], opaque: [], outside: [] });
 	});
 
 	test("Shepherd's generated entry imports only legacy members", async () => {
@@ -61,28 +74,38 @@ describe("legacy import membership (O31)", () => {
 		expect(closure.files).toContain(join(repo, "agents/shepherd.ts"));
 		expect(escapes(repo, [entry], [entry])).toEqual({
 			unresolved: [],
+			opaque: [...REVIEWED_OPAQUE],
 			outside: [],
 		});
 	});
 
-	test("a compiler helper outside membership is reported", () => {
-		const root = join(scratch, "bad-move");
-		const put = (path: string, text: string) => {
-			mkdirSync(dirname(join(root, path)), { recursive: true });
-			writeFileSync(join(root, path), text);
-		};
-		put(
-			"scripts/agent-compiler.ts",
-			'export * from "../lib/build/compiler";\n',
-		);
-		put(
-			"lib/build/compiler.ts",
-			'import { name } from "../agent-format/binary-name";\nexport { name };\n',
-		);
-		put("lib/agent-format/binary-name.ts", 'export const name = "x";\n');
-		expect(escapes(root, [join(root, "scripts/agent-compiler.ts")])).toEqual({
-			unresolved: [],
-			outside: ["lib/build/compiler.ts"],
+	for (const [label, reexport] of [
+		["export *", "export * from"],
+		["export * as", "export * as compiler from"],
+	] as const) {
+		test(`a compiler helper outside membership is reported (${label})`, () => {
+			const root = join(
+				scratch,
+				`bad-move-${label.replaceAll(" ", "-").replace("*", "star")}`,
+			);
+			const put = (path: string, text: string) => {
+				mkdirSync(dirname(join(root, path)), { recursive: true });
+				writeFileSync(join(root, path), text);
+			};
+			put(
+				"scripts/agent-compiler.ts",
+				`${reexport} "../lib/build/compiler";\n`,
+			);
+			put(
+				"lib/build/compiler.ts",
+				'import { name } from "../agent-format/binary-name";\nexport { name };\n',
+			);
+			put("lib/agent-format/binary-name.ts", 'export const name = "x";\n');
+			expect(escapes(root, [join(root, "scripts/agent-compiler.ts")])).toEqual({
+				unresolved: [],
+				opaque: [],
+				outside: ["lib/build/compiler.ts"],
+			});
 		});
-	});
+	}
 });

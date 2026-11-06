@@ -111,6 +111,9 @@ export function planStage(root: string): {
 	for (const line of closure.unresolved) {
 		problems.push(`missing closure member: ${relative(root, line)}`);
 	}
+	for (const line of closure.opaque) {
+		problems.push(`opaque reference ${relative(root, line)}`);
+	}
 	for (const specifier of closure.external) {
 		if (BUILTIN.test(specifier)) continue;
 		const name = specifier.startsWith("@")
