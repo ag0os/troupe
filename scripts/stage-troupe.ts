@@ -8,7 +8,9 @@
  * holds exactly the export map's import closure, the type entry and a
  * generated `package.json` with no lifecycle scripts, and it must sit outside
  * any consumer's tree. Restaging rewrites members in place and removes stale
- * ones, so an installed consumer sees the new bytes without reinstalling.
+ * ones. Bun links each staged file into the consumer at install time, so
+ * changed bytes in an existing member need no reinstall, but an added member
+ * appears in the consumer only after it reinstalls.
  *
  * Usage:
  *   bun scripts/stage-troupe.ts [--out <dir>]
@@ -37,15 +39,25 @@ export const STAGE_MANIFEST = "troupe-stage.json";
 
 /**
  * Members allowed although they are not framework library code. The legacy
- * Shepherd source module is reached from the compiler until the stamp seam
- * lands; it is the distribution's one temporary policy exception.
+ * Shepherd source module is reached from the compiler for the stamp and backs
+ * `troupe/provenance` until PR 3 relocates E8; it is the distribution's one
+ * temporary policy exception.
  */
 export const TEMPORARY_MEMBERS = {
 	"scripts/shepherd-source.ts":
-		"legacy Shepherd stamp module reached from the compiler; removed when the stamp policy seam lands",
+		"legacy Shepherd source module: reached from the compiler for the stamp, and it backs troupe/provenance until PR 3 relocates E8 and removes this member",
 } as const;
 
-const LIBRARY = "lib/";
+/** The library members the distribution may hold: directories and files. */
+const ALLOWED_DIRS = ["lib/agent-format/", "lib/entries/"] as const;
+const ALLOWED_FILES = ["lib/index.ts", "lib/text-imports.d.ts"] as const;
+
+function isAllowed(path: string): boolean {
+	return (
+		(ALLOWED_FILES as readonly string[]).includes(path) ||
+		ALLOWED_DIRS.some((dir) => path.startsWith(dir))
+	);
+}
 const BUILTIN = /^(node:|bun:|bun$)/;
 
 export class StageError extends Error {
@@ -85,6 +97,7 @@ function isTestPath(path: string): boolean {
 	const parts = path.split("/");
 	return (
 		path.endsWith(".test.ts") ||
+		path.endsWith(".spec.ts") ||
 		parts.includes("__fixtures__") ||
 		parts.includes("__snapshots__")
 	);
@@ -132,7 +145,7 @@ export function planStage(root: string): {
 			continue;
 		}
 		const temporary = path in TEMPORARY_MEMBERS;
-		if (!temporary && (!path.startsWith(LIBRARY) || isTestPath(path))) {
+		if (!temporary && (!isAllowed(path) || isTestPath(path))) {
 			problems.push(`unexpected file ${path}`);
 		}
 		const full = join(root, path);

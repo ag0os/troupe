@@ -426,6 +426,10 @@ describe("staged distribution", () => {
 			.map((member: { path: string }) => member.path);
 		expect(temporary).toEqual(Object.keys(TEMPORARY_MEMBERS));
 		expect(temporary).toEqual(["scripts/shepherd-source.ts"]);
+		// The label names both reasons the member is still reached.
+		const label = TEMPORARY_MEMBERS["scripts/shepherd-source.ts"];
+		expect(label).toContain("compiler");
+		expect(label).toContain("troupe/provenance");
 	});
 
 	test("installs without the repository's development tools", () => {
@@ -613,6 +617,24 @@ describe("stage refusals", () => {
 		expect(problems(root)).toEqual(["unexpected file agents/x.ts"]);
 	});
 
+	test("a self-contained lib/shepherd dependency", () => {
+		const root = fixture("shepherd-lib", {
+			"lib/index.ts": 'export * from "./shepherd/helper";\n',
+			"lib/shepherd/helper.ts": "export const helper = 1;\n",
+		});
+		expect(problems(root)).toEqual(["unexpected file lib/shepherd/helper.ts"]);
+	});
+
+	test("a .spec.ts member", () => {
+		const root = fixture("spec-member", {
+			"lib/index.ts": 'export * from "./agent-format/x.spec";\n',
+			"lib/agent-format/x.spec.ts": "export const x = 1;\n",
+		});
+		expect(problems(root)).toEqual([
+			"unexpected file lib/agent-format/x.spec.ts",
+		]);
+	});
+
 	test("a missing closure member", () => {
 		const root = fixture("missing", {
 			"lib/index.ts": 'export * from "./gone";\n',
@@ -624,11 +646,15 @@ describe("stage refusals", () => {
 
 	test("a symlinked member", () => {
 		const root = fixture("symlink", {
-			"lib/index.ts": 'export * from "./linked";\n',
+			"lib/index.ts": 'export * from "./agent-format/linked";\n',
 			"elsewhere.ts": "export const y = 2;\n",
 		});
-		symlinkSync(join(root, "elsewhere.ts"), join(root, "lib/linked.ts"));
-		expect(problems(root)).toEqual(["symlink lib/linked.ts"]);
+		mkdirSync(join(root, "lib/agent-format"), { recursive: true });
+		symlinkSync(
+			join(root, "elsewhere.ts"),
+			join(root, "lib/agent-format/linked.ts"),
+		);
+		expect(problems(root)).toEqual(["symlink lib/agent-format/linked.ts"]);
 	});
 
 	test("an opaque reference", () => {
@@ -665,17 +691,17 @@ describe("stage refusals", () => {
 
 	test("a symlinked directory in the destination", () => {
 		const root = fixture("link-dir", {
-			"lib/index.ts": 'export * from "./sub/a";\n',
-			"lib/sub/a.ts": "export const a = 1;\n",
+			"lib/index.ts": 'export * from "./agent-format/a";\n',
+			"lib/agent-format/a.ts": "export const a = 1;\n",
 		});
 		const out = join(parent, "link-dir-out");
 		expect(problems(root, out)).toEqual([]);
 		const sentinel = join(parent, "sentinel-dir");
 		put(sentinel, "a.ts", "sentinel bytes\n");
-		rmSync(join(out, "lib/sub"), { recursive: true });
-		symlinkSync(sentinel, join(out, "lib/sub"));
+		rmSync(join(out, "lib/agent-format"), { recursive: true });
+		symlinkSync(sentinel, join(out, "lib/agent-format"));
 		expect(problems(root, out)).toEqual([
-			"destination holds a symlink: lib/sub",
+			"destination holds a symlink: lib/agent-format",
 		]);
 		expect(readFileSync(join(sentinel, "a.ts"), "utf8")).toBe(
 			"sentinel bytes\n",
