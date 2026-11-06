@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -432,6 +433,40 @@ describe("stage refusals", () => {
 		expect(problems(root)).toEqual([
 			"import of undeclared dependency left-pad",
 		]);
+	});
+
+	test("a symlinked file in the destination", () => {
+		const root = fixture("link-file", { "lib/index.ts": "export {};\n" });
+		const out = join(parent, "link-file-out");
+		expect(problems(root, out)).toEqual([]);
+		const sentinel = join(parent, "sentinel-file.ts");
+		writeFileSync(sentinel, "sentinel bytes\n");
+		rmSync(join(out, "lib/index.ts"));
+		symlinkSync(sentinel, join(out, "lib/index.ts"));
+		expect(problems(root, out)).toEqual([
+			"destination holds a symlink: lib/index.ts",
+		]);
+		expect(readFileSync(sentinel, "utf8")).toBe("sentinel bytes\n");
+	});
+
+	test("a symlinked directory in the destination", () => {
+		const root = fixture("link-dir", {
+			"lib/index.ts": 'export * from "./sub/a";\n',
+			"lib/sub/a.ts": "export const a = 1;\n",
+		});
+		const out = join(parent, "link-dir-out");
+		expect(problems(root, out)).toEqual([]);
+		const sentinel = join(parent, "sentinel-dir");
+		put(sentinel, "a.ts", "sentinel bytes\n");
+		rmSync(join(out, "lib/sub"), { recursive: true });
+		symlinkSync(sentinel, join(out, "lib/sub"));
+		expect(problems(root, out)).toEqual([
+			"destination holds a symlink: lib/sub",
+		]);
+		expect(readFileSync(join(sentinel, "a.ts"), "utf8")).toBe(
+			"sentinel bytes\n",
+		);
+		expect(readdirSync(sentinel)).toEqual(["a.ts"]);
 	});
 
 	test("a destination that is not a previous stage", () => {

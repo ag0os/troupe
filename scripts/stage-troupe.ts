@@ -172,6 +172,27 @@ function removeEmptyDirs(dir: string): void {
 	}
 }
 
+/**
+ * Every symlink in an existing destination, the destination itself, members,
+ * metadata and directories included, found with lstat before any write.
+ */
+function symlinksIn(out: string): string[] {
+	const found: string[] = [];
+	const stat = lstatSync(out, { throwIfNoEntry: false });
+	if (!stat) return found;
+	if (stat.isSymbolicLink()) return [out];
+	const walk = (dir: string) => {
+		for (const name of readdirSync(dir)) {
+			const path = join(dir, name);
+			const entry = lstatSync(path);
+			if (entry.isSymbolicLink()) found.push(relative(out, path));
+			else if (entry.isDirectory()) walk(path);
+		}
+	};
+	if (stat.isDirectory()) walk(out);
+	return found.sort();
+}
+
 /** Refuse a destination that is not a previous stage or holds the root. */
 function checkDestination(root: string, out: string): void {
 	const realRoot = realpathSync(root);
@@ -180,6 +201,12 @@ function checkDestination(root: string, out: string): void {
 	const realOut = join(realpathSync(probe), relative(probe, out));
 	if (realOut === realRoot || !relative(realOut, realRoot).startsWith("..")) {
 		throw new StageError([`destination ${out} contains the source root`]);
+	}
+	const links = symlinksIn(out);
+	if (links.length > 0) {
+		throw new StageError(
+			links.map((path) => `destination holds a symlink: ${path}`),
+		);
 	}
 	if (existsSync(out)) {
 		const files = listFiles(out);
