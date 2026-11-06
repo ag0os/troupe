@@ -336,9 +336,7 @@ describe("staged distribution", () => {
 		repo,
 		JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).exports,
 	);
-	let staged: ReturnType<typeof stageTroupe>;
-	let install: ReturnType<typeof run>;
-	staged = stageTroupe(repo, dist);
+	const staged = stageTroupe(repo, dist);
 	put(
 		consumer,
 		"package.json",
@@ -387,7 +385,7 @@ describe("staged distribution", () => {
 		"private.ts",
 		'import { createSerialQueue } from "troupe/compiler";\nexport const q = createSerialQueue;\n',
 	);
-	install = run([process.execPath, "install"], consumer);
+	const install = run([process.execPath, "install"], consumer);
 
 	test("holds exactly the export closure, package.json and its manifest", () => {
 		const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
