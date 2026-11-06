@@ -90,6 +90,11 @@ export function excludedReason(path: string): string {
 	return `Role guard: ${path} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
 }
 
+/** The denial for an operand that holds an excluded entry. */
+export function containsReason(operand: string, entry: string): string {
+	return `Role guard: ${operand} holds ${entry}, which is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
+}
+
 const EDITS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 export class CannotCheck extends Error {}
@@ -169,8 +174,12 @@ export function decide(
 			// Unnormalized, so the path check resolves symlinks before `..`.
 			const path = isAbsolute(write.path) ? write.path : `${cwd}/${write.path}`;
 			let shown = shownPath(m.repo, path);
-			const deny = (named: string, why: string): Decision => ({
-				deny: excludedReason(named),
+			const deny = (
+				named: string,
+				why: string,
+				operand?: string,
+			): Decision => ({
+				deny: operand ? containsReason(operand, named) : excludedReason(named),
 				tool,
 				target: "bash",
 				reason: `shell write ${shown} ${why}`,
@@ -185,12 +194,12 @@ export function decide(
 			// A regular file holds nothing, whatever a glob exclusion says.
 			if (write.kind === "tree" && !regularFile(path)) {
 				if (holdsExclusion(m.repo, path, [runDir]))
-					return deny(runDir, "contains the run directory");
+					return deny(runDir, "contains the run directory", shown);
 				const held = holdsExclusion(m.repo, path, m.excluded);
 				if (held) {
 					const entry = held.replace(/\/+$/, "");
 					const named = /[*?[]/.test(entry) ? entry : shownPath(m.repo, entry);
-					return deny(named, `contains ${named}`);
+					return deny(named, `contains ${named}`, shown);
 				}
 			}
 		}

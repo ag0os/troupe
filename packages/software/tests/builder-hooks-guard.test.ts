@@ -18,6 +18,9 @@ const HISTORY =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
 const excludedReason = (p: string) =>
 	`Role guard: ${p} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
+// The denial for an operand that holds an excluded entry.
+const containsReason = (operand: string, entry: string) =>
+	`Role guard: ${operand} holds ${entry}, which is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
 const cannot = (why: string) =>
 	`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`;
 // The mark a wrapper sets on a log it checked; the launcher run directly
@@ -1064,12 +1067,6 @@ describe("BH-18: shell writes, fix round 1", () => {
 		["cp -t config src/deploy.yml", "config/deploy.yml"],
 		["cp --target-directory=config src/deploy.yml", "config/deploy.yml"],
 		["cp --target-directory config src/deploy.yml", "config/deploy.yml"],
-		// B1: an operand holding an exclusion.
-		["rm -rf config", "config/deploy.yml"],
-		["rm -r ./config/", "config/deploy.yml"],
-		["mv config /tmp/x", "config/deploy.yml"],
-		["cp -r src/. config/", "config/deploy.yml"],
-		["rmdir lib", "lib/admin"],
 		// B2: sed -E is a flag.
 		["sed -E -i '' s/a/b/ config/deploy.yml", "config/deploy.yml"],
 		["sed -E -i.bak s/a/b/ config/deploy.yml", "config/deploy.yml"],
@@ -1108,9 +1105,26 @@ describe("BH-18: shell writes, fix round 1", () => {
 		expect(reason(command)).toBe(excludedReason(path));
 	});
 
+	// B1: an operand holding an exclusion names itself and the entry.
+	test.each([
+		["rm -rf config", "config", "config/deploy.yml"],
+		["rm -r ./config/", "config", "config/deploy.yml"],
+		["mv config /tmp/x", "config", "config/deploy.yml"],
+		["cp -r src/. config/", "config", "config/deploy.yml"],
+		["rmdir lib", "lib", "lib/admin"],
+	])("denies %s", (command, operand, entry) => {
+		expect(reason(command)).toBe(containsReason(operand, entry));
+	});
+
 	test("removing a parent of the run directory is denied with its path", () => {
 		const parent = dirname(f.runDir);
-		expect(reason(`rm -rf '${parent}'`)).toBe(excludedReason(f.runDir));
+		expect(reason(`rm -rf '${parent}'`)).toBe(containsReason(parent, f.runDir));
+	});
+
+	test("an excluded path named directly keeps the plain denial", () => {
+		expect(reason("rm -f config/deploy.yml")).toBe(
+			excludedReason("config/deploy.yml"),
+		);
 	});
 
 	test.each([
@@ -1316,16 +1330,15 @@ describe("fix round 2", () => {
 
 	// M2: find's {} and -delete touch everything under its paths.
 	test.each([
-		[`find config -name deploy.yml -exec rm {} ${BS};`, "config/deploy.yml"],
-		[
-			`find src config -name x -exec cp src/deploy.yml {} ${BS};`,
-			"config/deploy.yml",
-		],
-		[`find . -name deploy.yml -execdir rm {} +`, "config/deploy.yml"],
-		["find config -name deploy.yml -delete", "config/deploy.yml"],
-		["find -name deploy.yml -delete", "config/deploy.yml"],
-	])("denies %s", (command, path) => {
-		expect(reason(command)).toBe(excludedReason(path));
+		[`find config -name deploy.yml -exec rm {} ${BS};`, "config"],
+		[`find src config -name x -exec cp src/deploy.yml {} ${BS};`, "config"],
+		[`find . -name deploy.yml -execdir rm {} +`, "."],
+		["find config -name deploy.yml -delete", "config"],
+		["find -name deploy.yml -delete", "."],
+	])("denies %s", (command, operand) => {
+		// The repository root shows as its full path.
+		const shown = operand === "." ? f.repo : operand;
+		expect(reason(command)).toBe(containsReason(shown, "config/deploy.yml"));
 	});
 
 	test.each([
@@ -1353,10 +1366,15 @@ describe("fix round 2", () => {
 	test.each([
 		["ln config/deploy.yml x && echo y > x", "config/deploy.yml"],
 		["ln -s config/deploy.yml x && echo y > x", "config/deploy.yml"],
-		["ln -s config z && echo y > z/deploy.yml", "config/deploy.yml"],
 		["ln -sf ../config/deploy.yml app/d.yml", "config/deploy.yml"],
 	])("denies %s", (command, path) => {
 		expect(reason(command)).toBe(excludedReason(path));
+	});
+
+	test("a link to a directory holding an exclusion names the directory", () => {
+		expect(reason("ln -s config z && echo y > z/deploy.yml")).toBe(
+			containsReason("config", "config/deploy.yml"),
+		);
 	});
 
 	// L4: into a directory holding an exclusion, only its named entry counts.
@@ -1369,11 +1387,11 @@ describe("fix round 2", () => {
 	});
 
 	test.each([
-		["cp -R src/ config", "config/deploy.yml"],
-		["cp -r src/. config/", "config/deploy.yml"],
-		["cp -a src/.. config", "config/deploy.yml"],
-	])("still denies %s", (command, path) => {
-		expect(reason(command)).toBe(excludedReason(path));
+		"cp -R src/ config",
+		"cp -r src/. config/",
+		"cp -a src/.. config",
+	])("still denies %s", (command) => {
+		expect(reason(command)).toBe(containsReason("config", "config/deploy.yml"));
 	});
 
 	// L1: a glob in the last segment is expanded against the directory.
@@ -1405,7 +1423,7 @@ describe("fix round 2", () => {
 	// Pins (the review's item 4).
 	test("a ** exclusion holds every directory below its prefix", () => {
 		expect(reason("rm -rf app/models/x")).toBe(
-			excludedReason("app/**/secret_*.rb"),
+			containsReason("app/models/x", "app/**/secret_*.rb"),
 		);
 	});
 
@@ -1538,13 +1556,10 @@ describe("fix round 3", () => {
 
 	// 6: find's -execdir, wrapper directory, -L and -files0-from.
 	test.each([
-		[
-			`find config -name deploy.yml -execdir rm deploy.yml ${BS};`,
-			"config/deploy.yml",
-		],
-		["env -C config find . -name deploy.yml -delete", "config/deploy.yml"],
-	])("denies %s", (command, path) => {
-		expect(reason(command)).toBe(excludedReason(path));
+		`find config -name deploy.yml -execdir rm deploy.yml ${BS};`,
+		"env -C config find . -name deploy.yml -delete",
+	])("denies %s", (command) => {
+		expect(reason(command)).toBe(containsReason("config", "config/deploy.yml"));
 	});
 
 	test("a wrapper directory applies to find's roots", () => {
@@ -1615,7 +1630,7 @@ describe("fix round 4", () => {
 
 	test("-execdir still makes find's roots trees", () => {
 		expect(reason(`find config -name deploy.yml -execdir cp {} x ${BS};`)).toBe(
-			excludedReason("config/deploy.yml"),
+			containsReason("config", "config/deploy.yml"),
 		);
 	});
 
