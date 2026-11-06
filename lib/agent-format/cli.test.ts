@@ -415,7 +415,10 @@ describe("D-039 a declaration may opt out of backend passthrough", () => {
 	});
 
 	test("after --, declared and framework flags are positionals too", () => {
-		const invocation = run(["--", "--prompt", "p", "--help", "--backend"], sealed);
+		const invocation = run(
+			["--", "--prompt", "p", "--help", "--backend"],
+			sealed,
+		);
 		expect(invocation.args).toEqual(["--prompt", "p", "--help", "--backend"]);
 		expect(invocation.flags).toEqual({});
 		expect(invocation.backend).toBe("claude");

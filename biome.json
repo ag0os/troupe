@@ -4,7 +4,9 @@
 		"ignoreUnknown": false,
 		"includes": [
 			"./agents/**/*",
+			"./lib/agent-format/**/*",
 			"./lib/shepherd/**/*",
+			"./scripts/**/*",
 			"./packages/**/*.ts",
 			"./evals/**/*",
 			"!evals/shepherd/results/**",

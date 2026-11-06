@@ -34,8 +34,8 @@ import {
 	type Interpolate,
 	interpolateMcp,
 	previewAgent,
-	RunScope,
 	type RunnerSignal,
+	RunScope,
 	runPrepare,
 	type SignalSource,
 } from "./run";
@@ -877,11 +877,20 @@ describe("stream decoders (AC #5; B-006, D-010)", () => {
 		const encode = (text: string) => new TextEncoder().encode(text);
 		const cases: [string[], string[]][] = [
 			// CRLF, including a CR and LF split across chunks.
-			[["one\r", "\ntwo\r\n"], ["one", "two"]],
+			[
+				["one\r", "\ntwo\r\n"],
+				["one", "two"],
+			],
 			// An empty final line before the end of the stream.
-			[["one\n", "\n"], ["one", ""]],
+			[
+				["one\n", "\n"],
+				["one", ""],
+			],
 			// A valid final line without a newline.
-			[["one\ntw", "o"], ["one", "two"]],
+			[
+				["one\ntw", "o"],
+				["one", "two"],
+			],
 			// A trailing CR on an unterminated final line is kept as data.
 			[["one\r\nlast"], ["one", "last"]],
 		];

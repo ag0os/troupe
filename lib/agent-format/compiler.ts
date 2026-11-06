@@ -34,10 +34,14 @@ import {
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import {
-	AgentSourceError,
-	formatIssue,
-	type SourceIssue,
-} from "./errors";
+	type BuildProvenance,
+	gitStamp,
+	SHEPHERD_ID,
+	type StampSource,
+	versionLine,
+} from "../../scripts/shepherd-source";
+import { toBinaryName } from "./binary-name";
+import { AgentSourceError, formatIssue, type SourceIssue } from "./errors";
 import {
 	type IncludeText,
 	materializeAgentSpec,
@@ -48,14 +52,6 @@ import {
 	EXTENSION_EXPORTS,
 	type ExtensionExport,
 } from "./types";
-import { toBinaryName } from "./binary-name";
-import {
-	type BuildProvenance,
-	gitStamp,
-	SHEPHERD_ID,
-	type StampSource,
-	versionLine,
-} from "../../scripts/shepherd-source";
 
 /** Roots an include's realpath must stay under (D-027). */
 export const INCLUDE_ROOTS = ["agents", "system-prompts"] as const;
@@ -151,9 +147,7 @@ export async function loadAgentDefinition(
 				moduleCandidates(resolve(importBase, specifier)).some(
 					(candidate) =>
 						existsSync(candidate) &&
-						frameworkDirs.some((dir) =>
-							isInside(dir, realpathSync(candidate)),
-						),
+						frameworkDirs.some((dir) => isInside(dir, realpathSync(candidate))),
 				),
 			textImportProblem: (specifier) =>
 				textImportProblem(repoRoot, importBase, specifier),
@@ -778,12 +772,8 @@ export function generateEntry(
 	agent: LoadedAgent,
 	provenance?: BuildProvenance,
 ): string {
-	const cli = fileURLToPath(
-		new URL("./cli.ts", import.meta.url),
-	);
-	const run = fileURLToPath(
-		new URL("./run.ts", import.meta.url),
-	);
+	const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
+	const run = fileURLToPath(new URL("./run.ts", import.meta.url));
 	const stamped = agent.id === SHEPHERD_ID && provenance !== undefined;
 	const names = agent.extension?.exports ?? [];
 	const dispatched = names.includes("dispatch");

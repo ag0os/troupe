@@ -71,7 +71,9 @@ function stray(path: string) {
 function previewedPrompt(binary: string): string {
 	const preview = run(binary, ["--show-prompt"]);
 	expect(preview.code).toBe(0);
-	return preview.stdout.split("--- System prompt ---\n")[1]?.split("\n")[0] ?? "";
+	return (
+		preview.stdout.split("--- System prompt ---\n")[1]?.split("\n")[0] ?? ""
+	);
 }
 
 /** Every entry under `dir`: type, mode and content, keyed by relative path. */
@@ -223,9 +225,7 @@ describe("declarations only (D-017)", () => {
 		write("agents/ns/b.md", `${header}---\nB body\n`);
 		write("agents/ns/b.test.ts", 'import "bun:test";\n');
 		const plan = await planBuild(opts());
-		expect(
-			plan.entries.map((entry) => [entry.id, entry.source]),
-		).toEqual([
+		expect(plan.entries.map((entry) => [entry.id, entry.source])).toEqual([
 			["a", "agents/a.md"],
 			["ns:b", "agents/ns/b.md"],
 		]);
@@ -727,7 +727,8 @@ describe("package scripts", () => {
 	}
 
 	test("compile-all --dry-run over the full roster writes nothing", () => {
-		for (const id of ROSTER) addDeclaration(`agents/${id.split(":").join("/")}.md`);
+		for (const id of ROSTER)
+			addDeclaration(`agents/${id.split(":").join("/")}.md`);
 		mkdirSync(join(root, "agents/local"));
 		seedOutDir();
 		const before = snapshot(root);
@@ -938,7 +939,8 @@ describe("fix round 1: publication safety (D-011, D-023)", () => {
 
 	for (const signals of [["SIGINT", "SIGINT"], ["SIGHUP"]] as const) {
 		test(`compile-all on ${signals.join(" then ")} removes its temp dir and leaves bin/ untouched`, async () => {
-			for (const id of ROSTER) addDeclaration(`agents/${id.split(":").join("/")}.md`, id);
+			for (const id of ROSTER)
+				addDeclaration(`agents/${id.split(":").join("/")}.md`, id);
 			// A real Shepherd build needs a Git revision and its source set.
 			initShepherdRepo(root);
 			seedOutDir();
