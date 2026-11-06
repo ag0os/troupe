@@ -16,6 +16,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	readlinkSync,
 	realpathSync,
 	symlinkSync,
 	writeFileSync,
@@ -152,22 +153,35 @@ export interface LiveSnapshot {
 	packages: string[];
 }
 
+/** The baseline section a content-bearing `packages/` manifest lives under. */
+export const MANIFEST_HEADING =
+	"## packages/ manifest (path, bytes, mode, sha256)";
+
 function sha256File(path: string): string {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-/** Hash of `bin/shepherd` and a sorted `path bytes mode` list of `packages/`. */
+/**
+ * Hash of `bin/shepherd` and a sorted manifest of `packages/`: a regular file
+ * is `<path> <bytes> <mode> <sha256>`, a symlink is `<path> symlink <target>`.
+ * Any other kind of entry throws.
+ */
 export function liveSnapshot(liveRoot: string): LiveSnapshot {
 	const packages: string[] = [];
 	const walk = (dir: string) => {
 		for (const name of readdirSync(dir)) {
 			const path = join(dir, name);
+			const rel = relative(liveRoot, path);
 			const stat = lstatSync(path);
 			if (stat.isDirectory()) walk(path);
-			else {
+			else if (stat.isSymbolicLink()) {
+				packages.push(`${rel} symlink ${readlinkSync(path)}`);
+			} else if (stat.isFile()) {
 				packages.push(
-					`${relative(liveRoot, path)} ${stat.size} ${(stat.mode & 0o777).toString(8)}`,
+					`${rel} ${stat.size} ${(stat.mode & 0o777).toString(8)} ${sha256File(path)}`,
 				);
+			} else {
+				throw new Error(`unexpected entry kind in packages/: ${rel}`);
 			}
 		}
 	};
@@ -179,19 +193,24 @@ export function liveSnapshot(liveRoot: string): LiveSnapshot {
 	};
 }
 
-/** The hash and manifest block recorded in a `live-baseline.md`. */
+/** The hash and content-bearing manifest recorded in a live baseline. */
 export function readBaseline(file: string): LiveSnapshot {
 	const text = readFileSync(file, "utf8");
 	const binary = /^([0-9a-f]{64}) {2}bin\/shepherd$/m.exec(text)?.[1];
-	const block = /## packages\/ manifest[^\n]*\n```\n([\s\S]*?)```/.exec(
-		text,
-	)?.[1];
-	if (!binary || block === undefined) {
-		throw new Error(`${file} holds no binary hash or packages manifest`);
+	const start = text.indexOf(`${MANIFEST_HEADING}\n\`\`\`\n`);
+	const end =
+		start === -1
+			? -1
+			: text.indexOf("```", start + MANIFEST_HEADING.length + 5);
+	if (!binary || start === -1 || end === -1) {
+		throw new Error(
+			`${file} holds no binary hash or no "${MANIFEST_HEADING}" block`,
+		);
 	}
 	return {
 		binary,
-		packages: block
+		packages: text
+			.slice(start + MANIFEST_HEADING.length + 5, end)
 			.split("\n")
 			.filter((line) => line.length > 0)
 			.sort(),
@@ -207,7 +226,24 @@ export function sameSnapshot(a: LiveSnapshot, b: LiveSnapshot): boolean {
 }
 
 export function formatSnapshot(label: string, snapshot: LiveSnapshot): string {
-	return `## ${label}\n\n\`\`\`\n${snapshot.binary}  bin/shepherd\n\`\`\`\n\n\`\`\`\n${snapshot.packages.join("\n")}\n\`\`\`\n`;
+	return `## ${label}\n\n\`\`\`\n${snapshot.binary}  bin/shepherd\n\`\`\`\n\n${MANIFEST_HEADING.replace("## ", "### ")}\n\n\`\`\`\n${snapshot.packages.join("\n")}\n\`\`\`\n`;
+}
+
+/**
+ * Refuse an evidence directory that lies, or would be created, inside the
+ * live root: the nearest existing ancestor's realpath decides, so a symlink
+ * into the live root is caught too. Runs before the first snapshot.
+ */
+export function guardEvidence(evidence: string, liveRoot: string): void {
+	const live = realpathSync(liveRoot);
+	let probe = resolve(evidence);
+	while (!existsSync(probe)) probe = dirname(probe);
+	const real = realpathSync(probe);
+	if (real === live || !relative(live, real).startsWith("..")) {
+		throw new Error(
+			`refusing evidence directory ${evidence}: it resolves inside the live root ${live}`,
+		);
+	}
 }
 
 /** A clone of the repository's object store, checked out nowhere yet. */
@@ -230,26 +266,75 @@ export function cloneSlot(repo: string, slot: string): void {
 	);
 }
 
-/** Check `rev` out in the slot from a clean state and install dependencies. */
-export function checkoutSlot(slot: string, rev: string): string {
+export interface SlotCheckout {
+	commit: string;
+	/** The install and `setup:extractions` runs, in order. */
+	runs: Ran[];
+	/** The step that failed, if any; its run carries the full output. */
+	failed?: string;
+}
+
+/**
+ * Check `rev` out in the slot from a clean state, install dependencies and
+ * run `setup:extractions` when the commit defines it.
+ */
+export function checkoutSlot(slot: string, rev: string): SlotCheckout {
 	must(run(["git", "checkout", "--quiet", "--detach", rev], slot), "checkout");
 	must(run(["git", "clean", "-fdxq"], slot), "clean");
 	must(run(["git", "reset", "--hard", "--quiet"], slot), "reset");
-	const pkg = JSON.parse(readFileSync(join(slot, "package.json"), "utf8"));
-	must(
-		run([process.execPath, "install", "--frozen-lockfile"], slot),
-		"bun install",
-	);
-	if (pkg.scripts?.["setup:extractions"]) {
-		must(
-			run([process.execPath, "run", "setup:extractions"], slot),
-			"setup:extractions",
-		);
-	}
-	return must(
+	const commit = must(
 		run(["git", "rev-parse", "HEAD"], slot),
 		"rev-parse",
 	).stdout.trim();
+	const pkg = JSON.parse(readFileSync(join(slot, "package.json"), "utf8"));
+	const runs: Ran[] = [];
+	const install = run([process.execPath, "install", "--frozen-lockfile"], slot);
+	runs.push(install);
+	if (install.code !== 0) return { commit, runs, failed: "bun install" };
+	if (pkg.scripts?.["setup:extractions"]) {
+		const setup = run([process.execPath, "run", "setup:extractions"], slot);
+		runs.push(setup);
+		if (setup.code !== 0) return { commit, runs, failed: "setup:extractions" };
+	}
+	return { commit, runs };
+}
+
+/**
+ * The truthful `--version` line for `commit` built in the slot, from the
+ * slot's own legacy source module run in a child process, so older commits
+ * are driven from outside.
+ */
+export function expectedVersionLine(
+	slot: string,
+	commit: string,
+): { line?: string; ran: Ran } {
+	const module = join(slot, "scripts/shepherd-source.ts");
+	const ran = run(
+		[
+			process.execPath,
+			"-e",
+			`const m = await import(${JSON.stringify(module)}); console.log(m.readCommitSource(${JSON.stringify(slot)}, ${JSON.stringify(commit)}).source);`,
+		],
+		slot,
+	);
+	const source = ran.stdout.trim();
+	if (ran.code !== 0 || !/^sha256:[0-9a-f]{64}$/.test(source)) return { ran };
+	return {
+		line: `shepherd revision=${commit} dirty=false source=${source}`,
+		ran,
+	};
+}
+
+/** A problem when the candidate's whole `--version` line is not `expected`. */
+export function versionProblem(
+	actual: string,
+	expected: string | undefined,
+): string | undefined {
+	if (expected === undefined) return "expected --version line unavailable";
+	const line = actual.trim();
+	return line === expected
+		? undefined
+		: `--version ${JSON.stringify(line)} is not ${JSON.stringify(expected)}`;
 }
 
 export function revParse(repo: string, rev: string): string {
@@ -316,6 +401,9 @@ export function installFakes(slot: string, dir: string): string {
 export function writeEvidence(dir: string, name: string, text: string): string {
 	mkdirSync(dir, { recursive: true });
 	const file = join(dir, name);
+	if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
+		throw new Error(`refusing to write evidence through the symlink ${file}`);
+	}
 	writeFileSync(file, text);
 	return file;
 }

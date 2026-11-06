@@ -5,9 +5,10 @@
  * in one disposable clone, installs dependencies (running
  * `setup:extractions` when the commit defines it), builds Shepherd in the
  * existing layout and runs `--version` (expecting that commit's own clean
- * stamp), a plain-fixture `--show-prompt` for both backends and
- * `tool doctor` with the candidate first on PATH. It drives older commits
- * from outside, inserting no files into them.
+ * stamp: the whole line, its source digest read from the commit with
+ * the commit's own legacy source module), a plain-fixture `--show-prompt`
+ * for both backends and `tool doctor` with the candidate first on PATH. It
+ * drives older commits from outside, inserting no files into them.
  *
  * The live root is only read: its `bin/shepherd` hash and `packages/` list
  * must not change during the run, and must equal `--baseline` when given.
@@ -26,7 +27,9 @@ import {
 	childEnv,
 	cloneSlot,
 	describeRan,
+	expectedVersionLine,
 	formatSnapshot,
+	guardEvidence,
 	guardWorkspace,
 	installFakes,
 	liveSnapshot,
@@ -39,14 +42,12 @@ import {
 	run,
 	sameSnapshot,
 	scratchDir,
+	versionProblem,
 	writeEvidence,
 } from "./extraction-continuity";
 
 const USAGE =
 	"Usage: bun scripts/check-extraction-commits.ts --base <rev> [--head <rev>] --live-root <dir> [--evidence <dir>] [--baseline <file>] [--keep]";
-
-const VERSION_LINE =
-	/^shepherd revision=([0-9a-f]{40}) dirty=(true|false) source=sha256:[0-9a-f]{64}$/;
 
 async function main(): Promise<number> {
 	const args = parseArgs(process.argv.slice(2), USAGE);
@@ -62,6 +63,7 @@ async function main(): Promise<number> {
 		.filter((line) => line.length > 0);
 	const scratch = scratchDir("check-extraction-commits");
 	const evidence = args.evidence ?? join(scratch, "evidence");
+	guardEvidence(evidence, args.liveRoot);
 	const before = liveSnapshot(args.liveRoot);
 	const slot = join(scratch, "slot/troupe");
 	cloneSlot(repo, slot);
@@ -76,8 +78,11 @@ async function main(): Promise<number> {
 		).stdout.trim();
 		const logs: Ran[] = [];
 		const problems: string[] = [];
+		let error_: string | undefined;
 		try {
-			checkoutSlot(slot, commit);
+			const checkout = checkoutSlot(slot, commit);
+			logs.push(...checkout.runs);
+			if (checkout.failed) throw new Error(`${checkout.failed} failed`);
 			const build = buildShepherd(slot);
 			logs.push(build);
 			if (build.code !== 0) throw new Error("build failed");
@@ -87,11 +92,13 @@ async function main(): Promise<number> {
 
 			const version = run([binary, "--version"], scratch, env);
 			logs.push(version);
-			const match = VERSION_LINE.exec(version.stdout.trim());
-			if (version.code !== 0 || !match) problems.push("--version unreadable");
-			else if (match[1] !== commit || match[2] !== "false") {
-				problems.push(`--version stamp ${match[1]} dirty=${match[2]}`);
-			}
+			const expected = expectedVersionLine(slot, commit);
+			logs.push(expected.ran);
+			const versionIssue =
+				version.code === 0
+					? versionProblem(version.stdout, expected.line)
+					: `--version exit ${version.code}`;
+			if (versionIssue) problems.push(versionIssue);
 
 			const workspaces = buildWorkspaces(
 				join(slot, "agents/__fixtures__/shepherd/workspaces.json"),
@@ -120,16 +127,16 @@ async function main(): Promise<number> {
 			logs.push(doctor);
 			if (doctor.code !== 0) problems.push(`tool doctor exit ${doctor.code}`);
 		} catch (error) {
-			problems.push(
-				error instanceof Error
-					? (error.message.split("\n")[0] as string)
-					: String(error),
-			);
+			error_ = error instanceof Error ? error.message : String(error);
+			problems.push((error_.split("\n")[0] as string) || "failed");
 		}
 		const log = writeEvidence(
 			evidence,
 			`commit-${String(index + 1).padStart(2, "0")}-${short}.log`,
-			logs.map(describeRan).join("\n"),
+			[
+				...logs.map(describeRan),
+				...(error_ ? [`--- failure (full)\n${error_}\n`] : []),
+			].join("\n"),
 		);
 		rows.push(
 			`| ${index + 1} | ${short} | ${subject} | ${problems.length === 0 ? "pass" : problems.join("; ")} | ${log.split("/").pop()} |`,

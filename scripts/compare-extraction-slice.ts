@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 /**
  * Continuity evidence for one extraction slice (O32):
  *
@@ -20,6 +21,7 @@
  *     --live-root <live-root> [--evidence <dir>] [--baseline <file>] [--keep]
  */
 
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -29,7 +31,9 @@ import {
 	childEnv,
 	cloneSlot,
 	describeRan,
+	expectedVersionLine,
 	formatSnapshot,
+	guardEvidence,
 	guardWorkspace,
 	installFakes,
 	liveSnapshot,
@@ -40,8 +44,13 @@ import {
 	run,
 	sameSnapshot,
 	scratchDir,
+	versionProblem,
 	writeEvidence,
 } from "./extraction-continuity";
+
+function sha256(data: string | Uint8Array): string {
+	return createHash("sha256").update(data).digest("hex");
+}
 
 const USAGE =
 	"Usage: bun scripts/compare-extraction-slice.ts --base <rev> [--head <rev>] --live-root <dir> [--evidence <dir>] [--baseline <file>] [--keep]";
@@ -77,6 +86,7 @@ async function main(): Promise<number> {
 	const head = revParse(repo, args.head);
 	const scratch = scratchDir("compare-extraction-slice");
 	const evidence = args.evidence ?? join(scratch, "evidence");
+	guardEvidence(evidence, args.liveRoot);
 	const failures: string[] = [];
 	const summary: string[] = [
 		"# compare-extraction-slice",
@@ -100,7 +110,17 @@ async function main(): Promise<number> {
 		["base", base],
 		["head", head],
 	] as const) {
-		checkoutSlot(slot, rev);
+		const checkout = checkoutSlot(slot, rev);
+		writeEvidence(
+			evidence,
+			`install-${label}.log`,
+			checkout.runs.map(describeRan).join("\n"),
+		);
+		if (checkout.failed) {
+			throw new Error(
+				`${checkout.failed} failed at ${label}; see install-${label}.log`,
+			);
+		}
 		const out = join(scratch, "entries", label);
 		const script = join(scratch, `entries-${label}.ts`);
 		writeFileSync(script, driver(slot, out));
@@ -135,6 +155,17 @@ async function main(): Promise<number> {
 		}
 	}
 	writeEvidence(evidence, "entry-diff.txt", entryDiff.join("\n"));
+	const entryHashes: string[] = [];
+	for (const [label, names] of [
+		["base", baseNames],
+		["head", headNames],
+	] as const) {
+		for (const name of names) {
+			const bytes = readFileSync(join(entryDirs[label] as string, name));
+			entryHashes.push(`${label} ${sha256(bytes)} ${name}`);
+		}
+	}
+	writeEvidence(evidence, "entries-sha256.txt", `${entryHashes.join("\n")}\n`);
 	summary.push(
 		`## Entries (fixed provenance)`,
 		"",
@@ -156,6 +187,7 @@ async function main(): Promise<number> {
 		);
 		const env = childEnv({ PATH: `${fakes}:${process.env.PATH}` });
 		const lines: string[] = [];
+		const records: string[] = [];
 		for (const [name, cwd] of workspaces) {
 			for (const backend of BACKENDS) {
 				const argv = [
@@ -176,8 +208,15 @@ async function main(): Promise<number> {
 					live.code === candidate.code &&
 					live.stdout === candidate.stdout &&
 					live.stderr === candidate.stderr;
-				lines.push(
-					`${same ? "identical" : "DIFFERENT"} ${name} ${backend} exit=${live.code}/${candidate.code} stdout=${live.stdout.length}/${candidate.stdout.length}B`,
+				lines.push(`${same ? "identical" : "DIFFERENT"} ${name} ${backend}`);
+				records.push(
+					[
+						`${same ? "identical" : "DIFFERENT"} ${name} ${backend}`,
+						`  argv ${JSON.stringify(argv)}`,
+						`  cwd ${cwd}`,
+						`  live ${live.argv[0]} exit ${live.code} stdout sha256 ${sha256(live.stdout)} (${live.stdout.length} B) stderr sha256 ${sha256(live.stderr)} (${live.stderr.length} B)`,
+						`  candidate ${candidate.argv[0]} exit ${candidate.code} stdout sha256 ${sha256(candidate.stdout)} (${candidate.stdout.length} B) stderr sha256 ${sha256(candidate.stderr)} (${candidate.stderr.length} B)`,
+					].join("\n"),
 				);
 				if (!same) {
 					failures.push(`preview ${name} ${backend} differs`);
@@ -194,7 +233,7 @@ async function main(): Promise<number> {
 				}
 			}
 		}
-		writeEvidence(evidence, "previews.txt", `${lines.join("\n")}\n`);
+		writeEvidence(evidence, "previews.txt", `${records.join("\n\n")}\n`);
 		summary.push(
 			"## Previews (live vs candidate, fake backends first on PATH)",
 			"",
@@ -225,12 +264,19 @@ async function main(): Promise<number> {
 			env,
 		);
 		writeEvidence(evidence, "candidate-version.txt", describeRan(version));
+		const expected = expectedVersionLine(slot, head);
+		writeEvidence(evidence, "expected-version.log", describeRan(expected.ran));
+		const versionIssue = versionProblem(version.stdout, expected.line);
+		if (versionIssue) failures.push(versionIssue);
 		summary.push(
 			"## Candidate --version",
 			"",
 			"```",
 			version.stdout.trim(),
 			"```",
+			"",
+			`expected: ${expected.line ?? "unavailable"}`,
+			`matches: ${versionIssue === undefined}`,
 			"",
 		);
 	}
