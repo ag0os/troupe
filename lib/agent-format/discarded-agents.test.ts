@@ -12,13 +12,22 @@ function frameworkTests(dir: string): string[] {
 		.sort();
 }
 
-// O22: framework tests must load with discarded agent trees absent. A static
-// scan of each test's import closure stands in for deleting `agents/`.
+// O22: framework tests (lib/agent-format and the compiler tests in scripts/)
+// must load with discarded agent trees absent. A static scan of each test's
+// import closure stands in for deleting `agents/`. Runtime reads of the real
+// roster are outside a static scan (deferred to PR 2 and PR 3, C2).
 describe("framework tests reach no agent tree (O22)", () => {
-	const tests = frameworkTests("lib/agent-format");
+	const tests = [
+		...frameworkTests("lib/agent-format"),
+		...readdirSync(join(repo, "scripts"))
+			.filter((name) => name.endsWith(".test.ts"))
+			.map((name) => `scripts/${name}`)
+			.sort(),
+	];
 
-	test("the scan sees the framework tests", () => {
+	test("the scan sees the framework and compiler tests", () => {
 		expect(tests).toContain("lib/agent-format/execute.test.ts");
+		expect(tests).toContain("scripts/agent-compiler.test.ts");
 	});
 
 	for (const file of tests) {

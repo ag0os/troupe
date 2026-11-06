@@ -19,6 +19,36 @@ import {
 	TEMPORARY_MEMBERS,
 } from "./stage-troupe";
 
+/** The staged inventory, pinned: any change to it is a reviewed change. */
+const STAGED_MEMBERS = [
+	"lib/agent-format/adapters/claude.ts",
+	"lib/agent-format/adapters/codex.ts",
+	"lib/agent-format/adapters/index.ts",
+	"lib/agent-format/adapters/shared.ts",
+	"lib/agent-format/adapters/types.ts",
+	"lib/agent-format/binary-name.ts",
+	"lib/agent-format/cli.ts",
+	"lib/agent-format/command-text.ts",
+	"lib/agent-format/compiler.ts",
+	"lib/agent-format/errors.ts",
+	"lib/agent-format/fake-cli.ts",
+	"lib/agent-format/interpolate.ts",
+	"lib/agent-format/preview.ts",
+	"lib/agent-format/run.ts",
+	"lib/agent-format/schema.ts",
+	"lib/agent-format/template.ts",
+	"lib/agent-format/types.ts",
+	"lib/entries/cli.ts",
+	"lib/entries/compiler.ts",
+	"lib/entries/declaration.ts",
+	"lib/entries/provenance.ts",
+	"lib/entries/runtime.ts",
+	"lib/entries/testing.ts",
+	"lib/index.ts",
+	"lib/text-imports.d.ts",
+	"scripts/shepherd-source.ts",
+];
+
 // O1, O2, O5a, O17a: a consumer installs the staged folder as a `file:`
 // dependency, outside the checkout, and uses only the export map.
 
@@ -229,6 +259,8 @@ describe("staged distribution", () => {
 		);
 		const closure = relativeClosure(repo, entries).files;
 		expect(staged.members.map((member) => member.path)).toEqual(closure);
+		expect(closure).toEqual(STAGED_MEMBERS);
+		expect(STAGED_MEMBERS).toHaveLength(26);
 		expect(closure).toContain("lib/text-imports.d.ts");
 		expect(closure).toContain("lib/agent-format/run.ts");
 		expect(closure.some((path) => path.endsWith(".test.ts"))).toBe(false);
