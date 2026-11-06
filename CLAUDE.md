@@ -13,6 +13,8 @@ Troupe (formerly Claude Forge) is a collection of Markdown-declared agents compi
 - `bun run compile -- <roster-name | agents/path.md>` - Compile one roster agent to `bin/`
 - `bun run compile:all` - Rebuild every agent and prune orphaned binaries (`--dry-run`, `--no-prune`)
 - `bun run watch` - Watch `agents/` and `system-prompts/` and rebuild the roster
+- `bun scripts/stage-troupe.ts [--out <dir>]` - Stage the allowlisted distribution (default `extractions/.troupe-dist/troupe`)
+- `bun scripts/compare-extraction-slice.ts` and `bun scripts/check-extraction-commits.ts` - Extraction continuity evidence (`--base <rev> --live-root <dir>`)
 - `bun lint` - Format and fix code with Biome
 - `bun format` - Format code with Biome
 - `bun check` - Run Biome checks without fixes
@@ -22,10 +24,11 @@ Troupe (formerly Claude Forge) is a collection of Markdown-declared agents compi
 
 ### Directory Structure
 - `agents/` - Markdown declarations and optional same-stem TypeScript extensions, organized by namespace
-- `lib/agent-format/` - Strict schema, templates, CLI, runner, and backend adapters
+- `lib/agent-format/` - Strict schema, templates, CLI, runner, backend adapters, and the compiler (`compiler.ts`, `binary-name.ts`)
+- `lib/entries/` - Public entries named by the package export map (`lib/index.ts` is the root entry)
 - `lib/shepherd/` - Shepherd workspace, maintenance, session, and launch helpers
 - `system-prompts/` - Shared prompt fragments used by declarations and extensions
-- `scripts/` - Build and development utilities
+- `scripts/` - Build and development utilities; `agent-compiler.ts` and `binary-name.ts` are re-export wrappers
 - `bin/` - Compiled binaries (generated)
 - `docs/` - Documentation for framework features
 
@@ -64,4 +67,4 @@ Agents are namespaced via subdirectories. The directory structure determines the
 - This is a Bun project - use `bun` not `npm` or `yarn`
 - Biome excludes authored Markdown while checking TypeScript
 - The project uses TypeScript with module syntax
-- The strict compiler requires the fixed roster (`ROSTER` in `scripts/agent-compiler.ts`) and publishes standalone binaries through the shared compiler
+- The strict compiler requires the fixed roster (`ROSTER` in `lib/agent-format/compiler.ts`) and publishes standalone binaries through the shared compiler
