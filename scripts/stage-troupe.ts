@@ -29,6 +29,9 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { relativeClosure } from "./import-closure";
 
+/** The default stage, relative to the repository root. */
+export const DEFAULT_STAGE = "extractions/.troupe-dist/troupe";
+
 /** The marker and inventory written into every stage. */
 export const STAGE_MANIFEST = "troupe-stage.json";
 
@@ -277,7 +280,7 @@ export function stageTroupe(root: string, out: string): StageResult {
 if (import.meta.main) {
 	const root = resolve(import.meta.dir, "..");
 	const args = process.argv.slice(2);
-	let out = join(root, "extractions/.troupe-dist/troupe");
+	let out = join(root, DEFAULT_STAGE);
 	if (args[0] === "--out" && args[1] && args.length === 2) {
 		out = resolve(args[1]);
 	} else if (args.length > 0) {

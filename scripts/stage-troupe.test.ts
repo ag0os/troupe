@@ -12,9 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import ts from "typescript";
 import { relativeClosure } from "./import-closure";
 import { readSurface, surfaceModule } from "./stage-surface";
 import {
+	DEFAULT_STAGE,
 	STAGE_MANIFEST,
 	StageError,
 	stageTroupe,
@@ -560,6 +562,19 @@ describe("staged distribution", () => {
 		const again = stageTroupe(repo, dist);
 		expect(existsSync(join(dist, "lib/stale.ts"))).toBe(false);
 		expect(again.digest).toBe(staged.digest);
+	});
+});
+
+describe("root program", () => {
+	test("the root tsconfig excludes the default stage directory", () => {
+		const config = ts.readConfigFile(
+			join(repo, "tsconfig.json"),
+			ts.sys.readFile,
+		);
+		expect(config.error).toBeUndefined();
+		const exclude: string[] = config.config.exclude ?? [];
+		expect(exclude).toContain(dirname(DEFAULT_STAGE));
+		expect(DEFAULT_STAGE).toStartWith(`${dirname(DEFAULT_STAGE)}/`);
 	});
 });
 
