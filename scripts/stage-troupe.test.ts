@@ -132,10 +132,17 @@ const io = {
 	isDirectory: () => true as const,
 };
 const seen: string[] = [];
+const finished: number[] = [];
 const extension: AgentExtension = {
 	prepare: (ctx: PrepareContext) => {
 		seen.push(ctx.args.join(" "));
 		return {};
+	},
+	finish: (result) => {
+		finished.push(result.exitCode);
+		return result.exitCode === 0
+			? { stdout: result.stdout, exitCode: 0 }
+			: { stdout: \`ERROR: backend exit \${result.exitCode}\\n\`, exitCode: 5 };
 	},
 	dispatch: (argv) =>
 		argv[0] === "tool"
@@ -155,6 +162,26 @@ const previewOut = out.stdout;
 const runParsed = parseCli(spec, ["greet", "me"], { cwd: scratch });
 if (runParsed.kind !== "run") throw new Error("run parse");
 const executeCode = await executeAgent(spec, extension, runParsed.invocation, {
+	...io,
+	env: { PATH: \`\${bin}:\${process.env.PATH}\`, FAKE_RECORD: recordFile },
+	interpolate: async () => ({ mcp: {}, env: {} }),
+});
+const beforeFail = out.stdout.length;
+const failCode = await executeAgent(spec, extension, runParsed.invocation, {
+	...io,
+	env: {
+		PATH: \`\${bin}:\${process.env.PATH}\`,
+		FAKE_RECORD: recordFile,
+		FAKE_SCENARIO: "fail",
+	},
+	interpolate: async () => ({ mcp: {}, env: {} }),
+});
+const failStdout = out.stdout.slice(beforeFail);
+const codexParsed = parseCli(spec, ["--backend", "codex", "greet", "codex"], {
+	cwd: scratch,
+});
+if (codexParsed.kind !== "run") throw new Error("codex parse");
+const codexCode = await executeAgent(spec, extension, codexParsed.invocation, {
 	...io,
 	env: { PATH: \`\${bin}:\${process.env.PATH}\`, FAKE_RECORD: recordFile },
 	interpolate: async () => ({ mcp: {}, env: {} }),
@@ -185,7 +212,12 @@ console.log(
 		previewCode,
 		previewShowsPrompt: previewOut.includes("greet"),
 		executeCode,
+		failCode,
+		failStdout,
+		codexCode,
+		finished,
 		records: records.map((record) => record.name),
+		codexArgvHasPrompt: records.at(-1)?.argv.join(" ").includes("greet codex"),
 		seen,
 		dispatched,
 		passed: passed ?? "not dispatched",
@@ -312,8 +344,13 @@ describe("staged distribution", () => {
 			previewCode: 0,
 			previewShowsPrompt: true,
 			executeCode: 0,
-			records: ["claude"],
-			seen: ["greet", "greet me"],
+			failCode: 5,
+			failStdout: "ERROR: backend exit 3\n",
+			codexCode: 0,
+			finished: [0, 3, 0],
+			records: ["claude", "claude", "codex"],
+			codexArgvHasPrompt: true,
+			seen: ["greet", "greet me", "greet me", "greet codex"],
 			dispatched: 7,
 			passed: "not dispatched",
 		});
