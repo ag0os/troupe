@@ -18,9 +18,10 @@ const HISTORY =
 	"Role guard: history writes are off for this run; the host holds commits, pushes and pull requests. Leave the change uncommitted; the host commits after recheck.";
 const excludedReason = (p: string) =>
 	`Role guard: ${p} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
-// The denial for an operand that holds an excluded entry.
-const containsReason = (operand: string, entry: string) =>
-	`Role guard: ${operand} holds ${entry}, which is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
+// The denial for an operand that holds an excluded entry; a glob entry may
+// match nothing that exists.
+const containsReason = (operand: string, entry: string, glob = false) =>
+	`Role guard: ${operand} ${glob ? `may hold paths matching ${entry}, which are` : `holds ${entry}, which is`} excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
 const cannot = (why: string) =>
 	`Role guard could not run: ${why}. The call is refused until the host repairs the hooks.\n`;
 // The mark a wrapper sets on a log it checked; the launcher run directly
@@ -1423,7 +1424,7 @@ describe("fix round 2", () => {
 	// Pins (the review's item 4).
 	test("a ** exclusion holds every directory below its prefix", () => {
 		expect(reason("rm -rf app/models/x")).toBe(
-			containsReason("app/models/x", "app/**/secret_*.rb"),
+			containsReason("app/models/x", "app/**/secret_*.rb", true),
 		);
 	});
 

@@ -90,9 +90,19 @@ export function excludedReason(path: string): string {
 	return `Role guard: ${path} is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Record what you would change there in your report; the host presents it.`;
 }
 
-/** The denial for an operand that holds an excluded entry. */
-export function containsReason(operand: string, entry: string): string {
-	return `Role guard: ${operand} holds ${entry}, which is excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
+/**
+ * The denial for an operand that holds an excluded entry. A glob entry is
+ * matched by overlap, so no file it names need exist.
+ */
+export function containsReason(
+	operand: string,
+	entry: string,
+	glob = false,
+): string {
+	const held = glob
+		? `may hold paths matching ${entry}, which are`
+		: `holds ${entry}, which is`;
+	return `Role guard: ${operand} ${held} excluded from automated change in this repo (auth, data, deploy, or the gate's own definition). Name a narrower path that leaves it alone, or record what you would change there in your report; the host presents it.`;
 }
 
 const EDITS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -178,8 +188,11 @@ export function decide(
 				named: string,
 				why: string,
 				operand?: string,
+				glob = false,
 			): Decision => ({
-				deny: operand ? containsReason(operand, named) : excludedReason(named),
+				deny: operand
+					? containsReason(operand, named, glob)
+					: excludedReason(named),
 				tool,
 				target: "bash",
 				reason: `shell write ${shown} ${why}`,
@@ -198,8 +211,9 @@ export function decide(
 				const held = holdsExclusion(m.repo, path, m.excluded);
 				if (held) {
 					const entry = held.replace(/\/+$/, "");
-					const named = /[*?[]/.test(entry) ? entry : shownPath(m.repo, entry);
-					return deny(named, `contains ${named}`, shown);
+					const glob = /[*?[]/.test(entry);
+					const named = glob ? entry : shownPath(m.repo, entry);
+					return deny(named, `contains ${named}`, shown, glob);
 				}
 			}
 		}
