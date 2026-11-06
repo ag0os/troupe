@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { relativeClosure } from "./import-closure";
+import { readSurface, surfaceModule } from "./stage-surface";
 import {
 	STAGE_MANIFEST,
 	StageError,
@@ -49,6 +50,99 @@ const STAGED_MEMBERS = [
 	"lib/text-imports.d.ts",
 	"scripts/shepherd-source.ts",
 ];
+
+/** The PR 1 public surface per subpath (design.md section 2, E1 to E9). */
+const EXPECTED_SURFACE: Record<string, { values: string[]; types?: string[] }> =
+	{
+		troupe: {
+			values: [
+				"BACKENDS",
+				"PROMPT_MODES",
+				"AGENT_MODES",
+				"ACCESS_LEVELS",
+				"FRAMEWORK_OPTIONS",
+				"FRAMEWORK_SHORTS",
+				"forwardsPassthrough",
+				"EXTENSION_EXPORTS",
+			],
+		},
+		"troupe/declaration": {
+			values: [
+				"parseAgentMarkdown",
+				"materializeAgentSpec",
+				"PROMPT_SEPARATOR",
+				"AgentSourceError",
+				"formatIssue",
+			],
+			types: ["ParsedAgent", "IncludeText", "SourceIssue"],
+		},
+		"troupe/cli": {
+			values: [
+				"parseCli",
+				"resolveCli",
+				"resolveVersion",
+				"formatHelp",
+				"CliError",
+			],
+			types: ["ParsedInvocation", "CliOutcome", "CliIo"],
+		},
+		"troupe/runtime": {
+			values: [
+				"previewAgent",
+				"executeAgent",
+				"runDispatch",
+				"previewAndExit",
+				"runAndExit",
+				"dispatchAndExit",
+			],
+			types: [
+				"AgentExtension",
+				"PreviewIo",
+				"ExecuteIo",
+				"DispatchIo",
+				"SignalSource",
+				"RunnerSignal",
+			],
+		},
+		"troupe/compiler": {
+			values: [
+				"loadAgentDefinition",
+				"inspectExtension",
+				"resolveAgentName",
+				"planBuild",
+				"generateEntry",
+				"compileAgent",
+				"publish",
+				"preflightPublish",
+				"describePublishFailure",
+				"PartialPublishError",
+				"PruneError",
+				"startWatcher",
+				"abortOnSignals",
+			],
+			types: [
+				"LoadedAgent",
+				"ExtensionInspection",
+				"InspectOptions",
+				"CompilerOptions",
+				"BuildEntry",
+				"BuildPlan",
+				"BuildRequest",
+				"Builder",
+				"PublishOptions",
+				"PublishResult",
+				"WatcherOptions",
+			],
+		},
+		"troupe/provenance": {
+			values: ["compareUtf8", "framedDigest", "sameSource", "createGitRunner"],
+			types: ["SourceFile", "ManifestEntry", "SourceManifest", "GitRunner"],
+		},
+		"troupe/testing": {
+			values: ["installFakeClis", "readRecords"],
+			types: ["FakeScenario", "FakeRecord"],
+		},
+	};
 
 // O1, O2, O5a, O17a: a consumer installs the staged folder as a `file:`
 // dependency, outside the checkout, and uses only the export map.
@@ -236,6 +330,10 @@ Say hello.
 `;
 
 describe("staged distribution", () => {
+	const surfaces = readSurface(
+		repo,
+		JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).exports,
+	);
 	let staged: ReturnType<typeof stageTroupe>;
 	let install: ReturnType<typeof run>;
 	staged = stageTroupe(repo, dist);
@@ -270,12 +368,18 @@ describe("staged distribution", () => {
 				// stage; without this tsc resolves its imports from the stage.
 				preserveSymlinks: true,
 			},
-			include: ["*.ts"],
+			include: ["main.ts", "surface.ts"],
 		}),
 	);
 	put(consumer, "agents/hello.md", DECLARATION);
 	put(consumer, "guide.md", "Guide text.\n");
 	put(consumer, "main.ts", MAIN);
+	put(consumer, "surface.ts", surfaceModule(surfaces));
+	put(
+		consumer,
+		"tsconfig.private.json",
+		JSON.stringify({ extends: "./tsconfig.json", include: ["private.ts"] }),
+	);
 	put(
 		consumer,
 		"private.ts",
@@ -356,12 +460,70 @@ describe("staged distribution", () => {
 		});
 	}, 60_000);
 
+	test("every subpath exports exactly its named surface", () => {
+		const byPath = Object.fromEntries(
+			surfaces.map((surface) => [surface.subpath, surface]),
+		);
+		expect(Object.keys(byPath)).toEqual(Object.keys(EXPECTED_SURFACE));
+		for (const [subpath, expected] of Object.entries(EXPECTED_SURFACE)) {
+			const actual = byPath[subpath];
+			expect({ subpath, values: actual?.values }).toEqual({
+				subpath,
+				values: [...expected.values].sort(),
+			});
+			if (expected.types) {
+				expect({ subpath, types: actual?.types }).toEqual({
+					subpath,
+					types: [...expected.types].sort(),
+				});
+			}
+		}
+		// E1's types: every type of the agent-format types and the adapter types.
+		const rootTypes = byPath.troupe?.types ?? [];
+		for (const name of [
+			"AgentSpec",
+			"PrepareContext",
+			"FinishResult",
+			"RunResult",
+			"DispatchResult",
+			"BackendAdapter",
+			"StreamDecoder",
+		]) {
+			expect(rootTypes).toContain(name);
+		}
+	});
+
+	test("an installed consumer imports every member and each value is defined", () => {
+		const result = run([process.execPath, "surface.ts"], consumer);
+		expect(result.stderr).toBe("");
+		expect(result.code).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			defined: Object.values(EXPECTED_SURFACE).reduce(
+				(sum, surface) => sum + surface.values.length,
+				0,
+			),
+		});
+	});
+
 	test("the consumer typechecks, Markdown imports included", () => {
 		const tsc = run(
 			[process.execPath, "node_modules/typescript/bin/tsc", "-p", "."],
 			consumer,
 		);
-		// Only the deliberate private import fails.
+		expect(tsc.stdout).toBe("");
+		expect(tsc.code).toBe(0);
+	}, 60_000);
+
+	test("the private queue factory is not part of the typed surface", () => {
+		const tsc = run(
+			[
+				process.execPath,
+				"node_modules/typescript/bin/tsc",
+				"-p",
+				"tsconfig.private.json",
+			],
+			consumer,
+		);
 		const errors = tsc.stdout
 			.split("\n")
 			.filter((line) => line.includes("error TS"));
