@@ -4,6 +4,7 @@
     "": {
       "name": "claude-workshop-live",
       "dependencies": {
+        "typescript": "^5.6.2",
         "yaml": "^2",
         "zod": "^4",
       },
@@ -11,10 +12,6 @@
         "@biomejs/biome": "^2.1.2",
         "@types/bun": "latest",
         "husky": "^9.1.6",
-        "typescript": "^5.6.2",
-      },
-      "peerDependencies": {
-        "typescript": "^5",
       },
     },
   },
