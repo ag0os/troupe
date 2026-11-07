@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
- * Watch the package's agents/ and system-prompts/ and rebuild Shepherd into
- * bin/ through Troupe's compiler on any change, one rebuild at a time.
+ * Watch the package's compile and identity inputs (WATCH_ROOTS in
+ * shepherd-definition.ts) and rebuild Shepherd into bin/ through Troupe's
+ * compiler on any change, one rebuild at a time.
  */
 
 import { startWatcher } from "troupe/compiler";

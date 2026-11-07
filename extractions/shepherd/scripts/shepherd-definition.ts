@@ -85,6 +85,15 @@ export function packageStamp(
 	};
 }
 
+/** The directories the package's watcher rebuilds on. */
+export const WATCH_ROOTS = [
+	"agents",
+	"system-prompts",
+	"lib/shepherd",
+	"packages",
+	"scripts",
+];
+
 export function shepherdDefinition(
 	root: string = PACKAGE_ROOT,
 	options: { outDir?: string; stamp?: BuildStampPolicy } = {},
@@ -98,7 +107,11 @@ export function shepherdDefinition(
 		extensionTextRoots: ["system-prompts"],
 		roster: [SHEPHERD_ID],
 		outDir: resolve(options.outDir ?? join(consumerRoot, "bin")),
-		watchRoots: ["agents", "system-prompts"],
+		// The compile and identity inputs. The watcher takes directories, so
+		// the metadata files at the root (package.json, bun.lock,
+		// tsconfig.json) are not watched; bin/, node_modules and eval
+		// evidence never are.
+		watchRoots: WATCH_ROOTS,
 		stamps: { [SHEPHERD_ID]: options.stamp ?? packageStamp(consumerRoot) },
 	};
 }
