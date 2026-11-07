@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
@@ -119,6 +120,25 @@ describe("package-relative membership table (O15)", () => {
 	test("capture succeeds on the miniature package", async () => {
 		const captured = await shepherdStampV2(layout).capture(context());
 		expect(captured.manifest.source).toMatch(/^sha256:[0-9a-f]{64}$/);
+	});
+
+	test("capture succeeds with no v1 adapter or legacy wrapper present (R1)", async () => {
+		const legacy = [
+			"scripts/shepherd-source.ts",
+			"scripts/watch-agents.ts",
+			"scripts/agent-compiler.ts",
+		];
+		for (const path of legacy) rmSync(join(layout.packageRoot, path));
+		for (const path of legacy) {
+			expect(existsSync(join(layout.packageRoot, path))).toBe(false);
+		}
+		const captured = await shepherdStampV2(layout).capture(context());
+		expect(captured.manifest.source).toMatch(/^sha256:[0-9a-f]{64}$/);
+		expect(
+			captured.manifest.entries.some((entry) =>
+				legacy.some((path) => entry.path.endsWith(path)),
+			),
+		).toBe(false);
 	});
 
 	for (const [path, selected, why] of ROWS) {
