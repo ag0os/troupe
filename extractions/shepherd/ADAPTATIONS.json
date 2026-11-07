@@ -173,6 +173,7 @@
 		"scripts/eval-source-fixture.ts",
 		"scripts/eval-source.test.ts",
 		"scripts/eval-source.ts",
+		"scripts/resolution.ts",
 		"scripts/shepherd-definition.ts",
 		"scripts/watch.ts",
 		"tsconfig.json"

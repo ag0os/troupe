@@ -14,6 +14,17 @@
  * install with an unchanged lockfile); if the installed tree still differs,
  * the installed `troupe` is removed and installed afresh.
  *
+ * Bun 1.2.22 resolves a per-file symlinked module from its real path, the
+ * stage, whose imports (`typescript`, `yaml`, `zod`) would otherwise walk up
+ * to this checkout's own `node_modules` before `NODE_PATH` is consulted
+ * (C9). Setup links the stage's parent `node_modules` to the package's, so
+ * the walk stops there, then runs the package's `scripts/resolution.ts`
+ * with `--no-install` and `NODE_PATH=<package>/node_modules`: it records in
+ * `node_modules/.troupe-resolution.json` where each runtime dependency
+ * resolves under the runtime, `bun test`, `bun build` and `tsc`, and setup
+ * fails unless every one is the package's own copy at its `bun.lock`
+ * version.
+ *
  * Usage:
  *   bun scripts/setup-extractions.ts
  */
@@ -21,12 +32,15 @@
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,
+	lstatSync,
 	readdirSync,
 	readFileSync,
+	readlinkSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { DEFAULT_STAGE, STAGE_MANIFEST, stageTroupe } from "./stage-troupe";
 
 /** The extracted packages that install the staged distribution. */
@@ -34,6 +48,12 @@ export const PACKAGES = ["extractions/shepherd"] as const;
 
 /** Where an install records the inventory it linked, inside `node_modules`. */
 export const INVENTORY_FILE = "node_modules/.troupe-stage-inventory.json";
+
+/** Where setup records the package's runtime dependency resolutions. */
+export const RESOLUTION_FILE = "node_modules/.troupe-resolution.json";
+
+/** The package script that probes and checks those resolutions. */
+export const RESOLUTION_SCRIPT = "scripts/resolution.ts";
 
 export interface SetupOptions {
 	/** The Troupe checkout to stage from. */
@@ -53,6 +73,60 @@ export interface PackageSetup {
 	reason: "fresh" | "inventory" | "frozen";
 	/** True when the installed tree still differed and `troupe` was reinstalled from scratch. */
 	relinked: boolean;
+	/** Where each runtime dependency resolved, per tool, as the package's guard reported it. */
+	resolutions: { tool: string; name: string; dir: string; version: string }[];
+}
+
+/**
+ * Point `<stage parent>/node_modules` at the package's `node_modules`,
+ * replacing an older link; refuse anything that is not a link.
+ */
+function linkStageParent(stage: string, pkg: string): void {
+	const link = join(dirname(stage), "node_modules");
+	const target = relative(dirname(link), join(pkg, "node_modules"));
+	const stat = lstatSync(link, { throwIfNoEntry: false });
+	if (stat !== undefined) {
+		if (!stat.isSymbolicLink()) {
+			throw new Error(`${link} exists and is not a symlink; remove it`);
+		}
+		if (readlinkSync(link) === target) return;
+		rmSync(link);
+	}
+	symlinkSync(target, link);
+}
+
+/**
+ * Run the package's resolution guard as an installed consumer would:
+ * `--no-install`, `NODE_PATH=<package>/node_modules`, cwd the package.
+ */
+function checkResolution(
+	bun: string,
+	dir: string,
+): PackageSetup["resolutions"] {
+	const result = spawnSync(bun, ["--no-install", RESOLUTION_SCRIPT, "--json"], {
+		cwd: dir,
+		stdio: ["ignore", "pipe", "pipe"],
+		env: { ...process.env, NODE_PATH: join(dir, "node_modules") },
+		encoding: "utf8",
+	});
+	let report: { resolutions: PackageSetup["resolutions"]; problems: string[] };
+	try {
+		report = JSON.parse(result.stdout);
+	} catch {
+		throw new Error(
+			`${RESOLUTION_SCRIPT} failed in ${dir} (exit ${result.status}):\n${result.stdout}${result.stderr}`,
+		);
+	}
+	writeFileSync(
+		join(dir, RESOLUTION_FILE),
+		`${JSON.stringify(report.resolutions, null, "\t")}\n`,
+	);
+	if (result.status !== 0 || report.problems.length > 0) {
+		throw new Error(
+			`${dir}: the installed troupe's runtime imports do not resolve to the package's own dependencies:\n${report.problems.join("\n")}`,
+		);
+	}
+	return report.resolutions;
 }
 
 /** Every file path the stage holds, sorted: its members plus metadata. */
@@ -121,9 +195,16 @@ export function setupExtractions(options: SetupOptions): PackageSetup[] {
 		`staged ${staged.members.length} members into ${relative(root, stage) || stage}`,
 	);
 	const inventory = stagedInventory(stage);
+	const packages = (options.packages ?? PACKAGES).map((entry) =>
+		resolve(root, entry),
+	);
+	if (packages.length !== 1) {
+		throw new Error(
+			"setup links the stage's parent node_modules to one package; stage each package separately",
+		);
+	}
 	const results: PackageSetup[] = [];
-	for (const entry of options.packages ?? PACKAGES) {
-		const dir = resolve(root, entry);
+	for (const dir of packages) {
 		const recorded = readRecorded(dir);
 		const reason: PackageSetup["reason"] =
 			recorded === undefined
@@ -153,7 +234,14 @@ export function setupExtractions(options: SetupOptions): PackageSetup[] {
 		log(
 			`${relative(root, dir)}: frozen install (${reason}${relinked ? ", relinked" : ""})`,
 		);
-		results.push({ dir, reason, relinked });
+		linkStageParent(stage, dir);
+		const resolutions = checkResolution(bun, dir);
+		for (const entry of resolutions) {
+			log(
+				`${relative(root, dir)}: ${entry.tool} ${entry.name}@${entry.version} ${relative(root, entry.dir) || entry.dir}`,
+			);
+		}
+		results.push({ dir, reason, relinked, resolutions });
 	}
 	return results;
 }
