@@ -214,11 +214,13 @@
 	"excluded": [
 		{
 			"path": "evals/shepherd/results/",
-			"reason": "committed eval results are evidence keyed by the v1 source hash of the original layout and say nothing about the package; the package starts without results"
+			"reason": "committed eval results are evidence keyed by the v1 source hash of the original layout and say nothing about the package; the package starts without results",
+			"packageNames": "^([0-9a-f]{64}\\.(json|md)|\\.gitkeep)$"
 		},
 		{
 			"path": "evals/shepherd/artifacts/",
-			"reason": "archived trial evidence of the committed results; it belongs with those results in the original layout"
+			"reason": "archived trial evidence of the committed results; it belongs with those results in the original layout",
+			"packageNames": "^([0-9a-f]{64}/.+|\\.gitkeep)$"
 		}
 	]
 }
