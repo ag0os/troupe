@@ -5,7 +5,7 @@
 	"private": true,
 	"description": "Shepherd, a Troupe agent package (extracted copy; see ADAPTATIONS.json).",
 	"scripts": {
-		"compile": "bun scripts/build.ts shepherd",
+		"compile": "bun scripts/build.ts",
 		"compile:all": "bun scripts/build.ts --all",
 		"watch": "bun scripts/watch.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit",

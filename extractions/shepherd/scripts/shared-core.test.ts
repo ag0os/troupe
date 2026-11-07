@@ -162,8 +162,9 @@ describe("one moved core feeds composition and charter checking (O20)", () => {
 	});
 
 	test("the bundled binary carries the mutated core, with core.md gone", () => {
+		// The documented command (docs/SHEPHERD.md), run in the scratch copy.
 		const build = Bun.spawnSync(
-			[process.execPath, "--no-install", "scripts/build.ts", "shepherd"],
+			[process.execPath, "run", "compile", "--", "shepherd"],
 			{ cwd: copy, env, stdout: "pipe", stderr: "pipe" },
 		);
 		expect({
