@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { isWithin } from "./path-within";
 
 export interface Ran {
 	argv: string[];
@@ -123,7 +124,7 @@ export function repoRoot(): string {
  */
 export function guardWorkspace(repo: string, liveRoot: string): void {
 	const live = realpathSync(liveRoot);
-	if (repo === live || !relative(live, repo).startsWith("..")) {
+	if (isWithin(live, repo)) {
 		throw new Error(
 			`refusing to run inside the live installation ${live}; use a separate worktree`,
 		);
@@ -139,7 +140,7 @@ export function guardWorkspace(repo: string, liveRoot: string): void {
 export function scratchDir(label: string): string {
 	const dir = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
 	const shepherds = join(homedir(), "shepherds");
-	if (!relative(shepherds, dir).startsWith("..")) {
+	if (isWithin(shepherds, dir)) {
 		throw new Error(`scratch ${dir} lies under ${shepherds}`);
 	}
 	if (run(["git", "rev-parse", "--git-dir"], dir).code === 0) {
@@ -239,7 +240,7 @@ export function guardEvidence(evidence: string, liveRoot: string): void {
 	let probe = resolve(evidence);
 	while (!existsSync(probe)) probe = dirname(probe);
 	const real = realpathSync(probe);
-	if (real === live || !relative(live, real).startsWith("..")) {
+	if (isWithin(live, real)) {
 		throw new Error(
 			`refusing evidence directory ${evidence}: it resolves inside the live root ${live}`,
 		);

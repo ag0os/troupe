@@ -30,6 +30,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { relativeClosure } from "./import-closure";
+import { isWithin } from "./path-within";
 
 /** The default stage, relative to the repository root. */
 export const DEFAULT_STAGE = "extractions/.troupe-dist/troupe";
@@ -140,7 +141,7 @@ export function planStage(root: string): {
 		}
 	}
 	for (const path of closure.files) {
-		if (path.startsWith("..") || isAbsolute(path)) {
+		if (!isWithin(root, join(root, path))) {
 			problems.push(`closure leaves the root: ${path}`);
 			continue;
 		}
@@ -215,7 +216,7 @@ function checkDestination(root: string, out: string): void {
 	let probe = out;
 	while (!existsSync(probe)) probe = dirname(probe);
 	const realOut = join(realpathSync(probe), relative(probe, out));
-	if (realOut === realRoot || !relative(realOut, realRoot).startsWith("..")) {
+	if (isWithin(realOut, realRoot)) {
 		throw new StageError([`destination ${out} contains the source root`]);
 	}
 	const links = symlinksIn(out);

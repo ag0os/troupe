@@ -106,6 +106,42 @@ describe("evidence destination", () => {
 		expect(sameSnapshot(before, liveSnapshot(live))).toBe(true);
 	});
 
+	test("refuses an existing live-root entry whose name starts with two dots", () => {
+		const live = makeLive();
+		mkdirSync(join(live, "..evidence"));
+		const before = liveSnapshot(live);
+		for (const target of [
+			join(live, "..evidence"),
+			join(live, "..evidence/round-2"),
+		]) {
+			expect(() => guardEvidence(target, live)).toThrow("inside the live root");
+		}
+		expect(existsSync(join(live, "..evidence/round-2"))).toBe(false);
+		expect(sameSnapshot(before, liveSnapshot(live))).toBe(true);
+	});
+
+	test("refuses a symlink into a two-dot entry of the live root", () => {
+		const live = makeLive();
+		mkdirSync(join(live, "..evidence"));
+		const before = liveSnapshot(live);
+		const link = join(root, `dotdot-link-${lives}`);
+		symlinkSync(join(live, "..evidence"), link);
+		expect(() => guardEvidence(link, live)).toThrow("inside the live root");
+		expect(() => guardEvidence(join(link, "round-2"), live)).toThrow(
+			"inside the live root",
+		);
+		expect(existsSync(join(live, "..evidence/round-2"))).toBe(false);
+		expect(sameSnapshot(before, liveSnapshot(live))).toBe(true);
+	});
+
+	test("refuses a worktree in a two-dot entry of the live root", () => {
+		const live = makeLive();
+		mkdirSync(join(live, "..worktree/.husky/_"), { recursive: true });
+		expect(() => guardWorkspace(join(live, "..worktree"), live)).toThrow(
+			"live installation",
+		);
+	});
+
 	test("accepts a directory outside the live root", () => {
 		const live = makeLive();
 		expect(() =>
