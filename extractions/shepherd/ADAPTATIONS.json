@@ -170,6 +170,7 @@
 		"docs/STAMPS.md",
 		"package.json",
 		"scripts/build.ts",
+		"scripts/connector-parity.test.ts",
 		"scripts/eval-source-fixture.ts",
 		"scripts/eval-source.test.ts",
 		"scripts/eval-source.ts",
