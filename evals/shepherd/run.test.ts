@@ -268,7 +268,7 @@ describe("the run executes the harness it identifies (A4)", () => {
 		);
 		const stderr = run.stderr.toString();
 		expect([run.exitCode, stderr]).toEqual([
-			1,
+			2,
 			expect.stringContaining(
 				`Refusing to run: the layout's evals directory ${join(other, "evals/shepherd")} is not the harness that would run, ${EVALS_DIR}`,
 			),

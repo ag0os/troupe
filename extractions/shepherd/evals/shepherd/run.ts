@@ -693,7 +693,12 @@ async function main(): Promise<number> {
 		for (const line of trendLines(layout)) console.log(line);
 		return 0;
 	}
-	requireExecutedHarness(layout);
+	try {
+		requireExecutedHarness(layout);
+	} catch (error) {
+		console.error((error as Error).message);
+		return 2;
+	}
 	const controller = new AbortController();
 	let interrupted = 0;
 	for (const [name, code] of [
