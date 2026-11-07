@@ -669,6 +669,49 @@ describe("verification (7.4)", () => {
 		}
 	});
 
+	test("a recorded entry's executable status must be the identity's: v2 on every entry, v1 on none", () => {
+		const entries = readWorktreeSource(root, { git: testGit }).entries;
+		const framed = entries.every((entry) => "executable" in entry);
+		expect(framed || entries.every((entry) => !("executable" in entry))).toBe(
+			true,
+		);
+		const path = entries[0]?.path ?? "";
+		const edits: [string, (entry: Record<string, unknown>) => void, string][] =
+			framed
+				? [
+						[
+							"flipped",
+							(entry) => {
+								entry.executable = !entry.executable;
+							},
+							`manifest: ${path}: executable status differs at head`,
+						],
+						[
+							"removed",
+							(entry) => {
+								delete entry.executable;
+							},
+							`manifest: ${path}: records no executable status, which this identity frames`,
+						],
+					]
+				: [
+						[
+							"added",
+							(entry) => {
+								entry.executable = false;
+							},
+							`manifest: ${path}: records an executable status this identity does not frame`,
+						],
+					];
+		for (const [name, edit, problem] of edits) {
+			writeResult((value) => {
+				const entry = value.source.manifest.find((e) => e.path === path);
+				if (entry) edit(entry as Record<string, unknown>);
+			});
+			expect([name, verify().problems]).toEqual([name, [problem]]);
+		}
+	});
+
 	test("a recorded rubric hash, policy or scorer that differs from the tree fails", () => {
 		writeResult((value) => {
 			value.evaluation.rubricSha256 = `sha256:${"1".repeat(64)}`;

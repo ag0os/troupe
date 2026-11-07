@@ -247,20 +247,31 @@ export interface VerifyOptions {
 const sha256 = (data: Uint8Array) =>
 	createHash("sha256").update(data).digest("hex");
 
-/** Differences on path and content SHA-256 only; `untracked` is reported (R3). */
+/**
+ * Differences on path, content SHA-256 and recorded mode; `untracked` is
+ * reported (R3). An identity that frames executable status (v2) records it
+ * on every entry; one that does not (v1) records it on none.
+ */
 function manifestDifferences(
 	recorded: Result["source"]["manifest"],
 	current: SourceManifest,
 ): string[] {
-	const now = new Map(
-		current.entries.map((entry) => [entry.path, entry.sha256]),
-	);
-	const then = new Map(recorded.map((entry) => [entry.path, entry.sha256]));
+	const now = new Map(current.entries.map((entry) => [entry.path, entry]));
+	const then = new Map(recorded.map((entry) => [entry.path, entry]));
 	const differences: string[] = [];
-	for (const [path, hash] of then) {
-		if (!now.has(path)) differences.push(`${path}: evaluated, absent at head`);
-		else if (now.get(path) !== hash)
+	for (const [path, entry] of then) {
+		const head = now.get(path);
+		if (!head) differences.push(`${path}: evaluated, absent at head`);
+		else if (head.sha256 !== entry.sha256)
 			differences.push(`${path}: content differs at head`);
+		else if ("executable" in head !== "executable" in entry)
+			differences.push(
+				"executable" in head
+					? `${path}: records no executable status, which this identity frames`
+					: `${path}: records an executable status this identity does not frame`,
+			);
+		else if (head.executable !== entry.executable)
+			differences.push(`${path}: executable status differs at head`);
 	}
 	for (const path of now.keys()) {
 		if (!then.has(path)) differences.push(`${path}: at head, not evaluated`);
