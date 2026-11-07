@@ -175,3 +175,81 @@ describe("C11: a declaration that is itself a symlink is refused", () => {
 		expect(plan.entries.map((entry) => entry.id)).toEqual(["a"]);
 	});
 });
+
+describe("C13 fix 1: every module load form is seen", () => {
+	const outside = "resolves outside lib/";
+	for (const [form, line] of [
+		[
+			"import x = require()",
+			'import o = require("../outside/o");\nexport const h = o;\n',
+		],
+		["(require)()", 'export const h = (require)("../outside/o");\n'],
+	] as const) {
+		test(`${form} reaching outside the code roots is refused`, async () => {
+			withHelper(line);
+			write("outside/o.ts", "export const o = 1;\n");
+			expect(await messages(load())).toEqual([
+				`lib/h.ts: value import "../outside/o" ${outside}`,
+			]);
+		});
+
+		test(`${form} inside a code root is accepted`, async () => {
+			withHelper(line.replace("../outside/o", "./inside"));
+			write("lib/inside.ts", "export const o = 1;\n");
+			expect(await messages(load())).toEqual([]);
+		});
+	}
+
+	test("(require)(name) is a dynamic load that cannot be established", async () => {
+		withHelper('const name = "./x";\nexport const h = (require)(name);\n');
+		expect(await messages(load())).toEqual([
+			"lib/h.ts:2: a dynamic load whose module cannot be established",
+		]);
+	});
+});
+
+describe("C13 fix 2: a helper's attributed imports follow the text-import rules", () => {
+	const cases: [string, string, string][] = [
+		[
+			".txt under a text root",
+			'import t from "../prompts/t.txt" with { type: "text" };',
+			'text import "../prompts/t.txt" must name a .md file under prompts/',
+		],
+		[
+			"an extra attribute",
+			'import t from "../prompts/t.md" with { type: "text", x: "y" };',
+			'import attributes on "../prompts/t.md" must be exactly with { type: "text" }',
+		],
+		[
+			"a named binding",
+			'import { a as t } from "../prompts/t.md" with { type: "text" };',
+			'text import "../prompts/t.md" must be a single default import',
+		],
+		[
+			"a json attribute",
+			'import t from "../prompts/t.md" with { type: "json" };',
+			'import attributes on "../prompts/t.md" must be exactly with { type: "text" }',
+		],
+		[
+			"a bare specifier",
+			'import t from "pkg/body.md" with { type: "text" };',
+			'text import "pkg/body.md" must be a relative path into prompts/',
+		],
+	];
+	for (const [what, statement, message] of cases) {
+		test(`${what} is refused`, async () => {
+			write("prompts/t.md", "text\n");
+			write("prompts/t.txt", "text\n");
+			withHelper(`${statement}\nexport const h = t;\n`);
+			expect(await messages(load())).toEqual([`lib/h.ts: ${message}`]);
+		});
+	}
+
+	test("a valid .md default import is accepted", async () => {
+		write("prompts/t.md", "text\n");
+		withHelper(
+			'import t from "../prompts/t.md" with { type: "text" };\nexport const h = t;\n',
+		);
+		expect(await messages(load())).toEqual([]);
+	});
+});

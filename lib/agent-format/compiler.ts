@@ -706,21 +706,38 @@ function unestablishedModule(path: string): string | undefined {
  * `import()` or `require()`. A dynamic load whose specifier is not a
  * string literal cannot be established and is reported in `opaque`.
  */
+interface ModuleLoad {
+	specifier: string;
+	/** The import, when it carries attributes: judged as a text import. */
+	attributed?: ts.ImportDeclaration;
+}
+
+/** The callee with parentheses, type assertions and `!` removed. */
+function bareCallee(expression: ts.Expression): ts.Expression {
+	let current = expression;
+	while (
+		ts.isParenthesizedExpression(current) ||
+		ts.isAsExpression(current) ||
+		ts.isTypeAssertionExpression(current) ||
+		ts.isNonNullExpression(current) ||
+		ts.isSatisfiesExpression(current)
+	) {
+		current = current.expression;
+	}
+	return current;
+}
+
 function relativeLoads(
 	file: string,
 	text: string,
-): { loads: { specifier: string; text: boolean }[]; opaque: string[] } {
+): { loads: ModuleLoad[]; opaque: string[] } {
 	const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-	const loads: { specifier: string; text: boolean }[] = [];
+	const loads: ModuleLoad[] = [];
 	const opaque: string[] = [];
-	const isText = (attributes: ts.ImportAttributes | undefined) =>
-		attributes?.elements.some(
-			(element) =>
-				element.name.getText(source).replace(/["']/g, "") === "type" &&
-				ts.isStringLiteral(element.value) &&
-				element.value.text === "text",
-		) ?? false;
 	const visit = (node: ts.Node) => {
+		const callee = ts.isCallExpression(node)
+			? bareCallee(node.expression)
+			: undefined;
 		if (
 			ts.isImportDeclaration(node) &&
 			ts.isStringLiteral(node.moduleSpecifier) &&
@@ -728,24 +745,31 @@ function relativeLoads(
 		) {
 			loads.push({
 				specifier: node.moduleSpecifier.text,
-				text: isText(node.attributes),
+				...(node.attributes ? { attributed: node } : {}),
 			});
+		} else if (
+			ts.isImportEqualsDeclaration(node) &&
+			!node.isTypeOnly &&
+			ts.isExternalModuleReference(node.moduleReference) &&
+			ts.isStringLiteralLike(node.moduleReference.expression)
+		) {
+			loads.push({ specifier: node.moduleReference.expression.text });
 		} else if (
 			ts.isExportDeclaration(node) &&
 			node.moduleSpecifier &&
 			ts.isStringLiteral(node.moduleSpecifier) &&
 			!node.isTypeOnly
 		) {
-			loads.push({ specifier: node.moduleSpecifier.text, text: false });
+			loads.push({ specifier: node.moduleSpecifier.text });
 		} else if (
 			ts.isCallExpression(node) &&
-			(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-				(ts.isIdentifier(node.expression) &&
-					node.expression.text === "require"))
+			callee &&
+			(callee.kind === ts.SyntaxKind.ImportKeyword ||
+				(ts.isIdentifier(callee) && callee.text === "require"))
 		) {
 			const [first] = node.arguments;
 			if (first && ts.isStringLiteralLike(first)) {
-				loads.push({ specifier: first.text, text: false });
+				loads.push({ specifier: first.text });
 			} else {
 				const { line } = source.getLineAndCharacterOfPosition(node.getStart());
 				opaque.push(`${file}:${line + 1}`);
@@ -755,8 +779,11 @@ function relativeLoads(
 	};
 	visit(source);
 	return {
+		// Attributed imports are judged whatever their specifier, so a bare
+		// text specifier is refused rather than dropped.
 		loads: loads.filter(
 			(load) =>
+				load.attributed !== undefined ||
 				load.specifier.startsWith("./") ||
 				load.specifier.startsWith("../") ||
 				load.specifier.startsWith("/") ||
@@ -775,6 +802,15 @@ function relativeLoads(
  * specifiers and non-literal dynamic loads cannot be established and are
  * refused. Bare package imports are not checked.
  */
+/** Inspection rules a helper's text import does not consult. */
+const HELPER_RULES: ImportRules = {
+	isFrameworkImport: () => false,
+	textImportProblem: () => undefined,
+	importProblem: () => undefined,
+	codeRoots: [],
+	textRoots: [],
+};
+
 function helperClosureProblems(
 	definition: ResolvedDefinition,
 	repoRoot: string,
@@ -796,22 +832,26 @@ function helperClosureProblems(
 		}
 		for (const load of loads) {
 			const from = label(file);
+			if (load.attributed) {
+				// The extension's own text imports were judged by inspection.
+				if (file === extension) continue;
+				const text = load.attributed.importClause
+					? textImportShapeProblem(load.attributed, load.specifier, {
+							...HELPER_RULES,
+							textRoots: definition.extensionTextRoots.map(
+								(entry) => entry.label,
+							),
+							textImportProblem: (specifier) =>
+								textImportProblem(definition, repoRoot, base, specifier),
+						})
+					: `text import "${load.specifier}" must be a single default import`;
+				if (text) problems.push(`${from}: ${text}`);
+				continue;
+			}
 			if (!load.specifier.startsWith(".")) {
 				problems.push(
 					`${from}: import "${load.specifier}" names an absolute location; use a relative path`,
 				);
-				continue;
-			}
-			if (load.text) {
-				// The extension's own text imports were judged by inspection.
-				if (file === extension) continue;
-				const text = textImportProblem(
-					definition,
-					repoRoot,
-					base,
-					load.specifier,
-				);
-				if (text) problems.push(`${from}: ${text}`);
 				continue;
 			}
 			const target = resolve(base, load.specifier);
