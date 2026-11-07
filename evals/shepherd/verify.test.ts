@@ -35,7 +35,7 @@ import {
 	type GatedPathPolicy,
 	isGatedPath,
 } from "./gated-paths";
-import { evaluationIdentity } from "./identity";
+import { EVALUATION_MODULES, evaluationIdentity } from "./identity";
 import {
 	type Attempt,
 	loadRubric,
@@ -651,6 +651,22 @@ describe("verification (7.4)", () => {
 		expect(outcome.stale?.current).toBe(
 			evaluationIdentity(root, { git: testGit }).hash,
 		);
+	});
+
+	test("a gated module the build identity does not select makes the result stale", () => {
+		for (const path of EVALUATION_MODULES) {
+			writeAt(root, path, "export const seam = 1;\n");
+			commitAll(`add ${path}`);
+			const { value } = writeResult();
+			writeAt(root, path, "export const seam = 2;\n");
+			const outcome = verify();
+			expect([path, outcome.found, outcome.problems]).toEqual([path, true, []]);
+			expect(outcome.stale).toMatchObject({
+				recorded: value.evaluation.hash,
+				current: evaluationIdentity(root, { git: testGit }).hash,
+			});
+			expect(outcome.stale?.recorded).not.toBe(outcome.stale?.current);
+		}
 	});
 
 	test("a recorded rubric hash, policy or scorer that differs from the tree fails", () => {

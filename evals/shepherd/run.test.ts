@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Builder } from "./build-source";
 import { gitStamp, versionLine } from "./build-source";
+import { EVALUATION_MODULES } from "./identity";
 import { defaultLayout } from "./layout";
 import {
 	buildSubject,
@@ -338,6 +339,19 @@ describe("frozen inputs (2.5)", () => {
 		expect(reasons.join("\n")).toMatch(/binary/);
 		expect(reasons.join("\n")).toMatch(/source/);
 		expect(reasons.join("\n")).toMatch(/evaluation/);
+	});
+
+	test("a gated module the build identity does not select invalidates the run", async () => {
+		for (const path of EVALUATION_MODULES) {
+			const { root, frozen } = await frozenRun();
+			writeAt(root, path, `// changed ${path}\n`);
+			expect([path, recheck(frozen, { root, git: testGit })]).toEqual([
+				path,
+				[expect.stringMatching(/^evaluation identity changed/)],
+			]);
+			rmSync(scratch, { recursive: true, force: true });
+			mkdirSync(scratch);
+		}
 	});
 
 	test("results and artifacts written during the run change nothing", async () => {
