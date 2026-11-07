@@ -2,7 +2,7 @@
 
 Troupe agents are strict Markdown declarations under `agents/`. The path becomes the binary name: `agents/design/diagram/all.md` builds `bin/design:diagram:all`. A declaration may have a same-stem TypeScript extension that exports `prepare`, `finish` or `dispatch`. The shared runner validates the declaration, composes prompts, selects a backend adapter, and owns execution and cleanup.
 
-The compiler accepts only the fixed roster, the `ROSTER` list in `lib/agent-format/compiler.ts` (re-exported by `scripts/agent-compiler.ts`). This repository is not a registry for arbitrary extra binaries.
+The compiler accepts only the fixed roster, the `ROSTER` list in `lib/agent-format/compiler.ts` (re-exported by `scripts/agent-compiler.ts`). This repository is not a registry for arbitrary extra binaries. The paths and roster in this document are this repository's configuration; another package configures its own through a build definition (see [Building from another package](#building-from-another-package)).
 
 ## Declaration schema
 
@@ -202,6 +202,24 @@ bun run watch
 `compile`, `compile:all`, and the watcher share one compiler. A full build validates all sources, builds every binary serially in a temporary directory on the same filesystem as `bin/`, verifies outputs, then renames them into place. A failure before publication leaves `bin/` untouched. A failure after renaming begins is reported as a partial update. A successful full build prunes binaries outside the roster unless `--no-prune` is used. `--dry-run` validates and reports without writing.
 
 The watcher observes exactly `agents/` and `system-prompts/` and rebuilds the full roster after a change. Generated files in `bin/` are never edited by hand.
+
+### Building from another package
+
+`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it; a root outside it is refused with a diagnostic naming the root.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `consumerRoot` | required | The package root |
+| `declarationRoot` | `agents` | Declarations and their same-stem extensions; nested paths give colon names, and its `local/` is never compiled |
+| `includeRoots` | the declaration root and `system-prompts` | Roots an include's realpath must stay under |
+| `extensionCodeRoots` | none | Roots whose modules an extension may import by relative path |
+| `extensionTextRoots` | `system-prompts` | Roots whose `.md` files an extension may import as text |
+| `roster` | required for `planBuild`, `publish` and `startWatcher` | The exact names a full build publishes |
+| `outDir` | `bin` | Output directory |
+| `protectedOutputs` | none | Names in `outDir` that pruning never removes |
+| `watchRoots` | every root above except `outDir` | Directories the watcher watches |
+
+`compileAgent` builds one declaration under the declaration root and needs no roster. The watcher ignores its own writes to `outDir` and the temporary build directories beside it. Generated entries import the CLI and runner from the compiler's installed distribution and fail before building when either file is missing. This repository's wrappers in `scripts/` supply its definition: the roots and roster above, `lib/agent-format/` and `lib/shepherd/` as code roots, outputs of other `compile:*` scripts protected, and `agents/` and `system-prompts/` watched.
 
 ## Authoring checklist
 
