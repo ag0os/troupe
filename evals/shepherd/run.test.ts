@@ -13,7 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type Builder, gitStamp, versionLine } from "./build-source";
+import type { Builder } from "./build-source";
+import { gitStamp, versionLine } from "./build-source";
+import { defaultLayout } from "./layout";
 import {
 	buildSubject,
 	claimArtifactRoot,
@@ -24,7 +26,6 @@ import {
 	loadPolicy,
 	parseOptions,
 	prepareRun,
-	REPO_ROOT,
 	readVersion,
 	recheck,
 	runTrials,
@@ -70,11 +71,12 @@ function alive(pid: number): boolean {
 
 describe("parameters and build destination (2.3)", () => {
 	test("the package script runs the TypeScript wrapper", () => {
+		const { packageRoot, evalsDir } = defaultLayout();
 		const pkg = JSON.parse(
-			readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
+			readFileSync(join(packageRoot, "package.json"), "utf8"),
 		);
 		expect(pkg.scripts["evals:shepherd"]).toBe("bun evals/shepherd/run.ts");
-		expect(EVALS_DIR).toBe(join(REPO_ROOT, "evals/shepherd"));
+		expect(EVALS_DIR).toBe(evalsDir);
 	});
 
 	test("harness sources name no fixed binary, scratch or artifact paths", () => {

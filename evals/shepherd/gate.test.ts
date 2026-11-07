@@ -34,6 +34,7 @@ import {
 	summary,
 } from "./gate";
 import { evaluationIdentity } from "./identity";
+import { toLayout } from "./layout";
 import {
 	deriveAggregate,
 	deriveTrial,
@@ -301,7 +302,7 @@ function options(
 	mkdirSync(artifactRoot, { recursive: true });
 	const runId = `20261013T15000${Object.keys(plan).length}Z-${run.slice(-6)}`;
 	return {
-		evalsDir,
+		layout: toLayout(dirname(dirname(evalsDir))),
 		sourceHash: `sha256:${HEX}`,
 		manifest: [
 			{ path: "agents/shepherd.md", bytes: 1, sha256: HEX, untracked: false },

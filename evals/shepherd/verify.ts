@@ -12,9 +12,11 @@
  * not verify, or a check that cannot be decided, fails the job; a verified
  * result's outcome, blocked included, is reported. Revision and both dirty flags are reported, never rejected. It
  * never reads `validation/`, reads other results only to name the newest,
- * runs no model and needs no model credentials.
+ * runs no model and needs no model credentials. The package, its repository
+ * and its prefix come from an explicit layout; outside Git it refuses.
  *
  *   bun evals/shepherd/verify.ts --base <revision> --head <revision>
+ *     [--package-root <dir>] [--git-root <dir>]
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -27,8 +29,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { join } from "node:path";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
 	type GitRunner,
 	IDENTITY_MODULE,
@@ -51,6 +53,15 @@ import {
 	type EvaluationIdentity,
 	evaluationIdentity,
 } from "./identity";
+import {
+	defaultLayout,
+	type EvalLayout,
+	packagePath,
+	repositoryPath,
+	requireGitRoot,
+	sourceLayout,
+	toLayout,
+} from "./layout";
 import {
 	type AggregateOutcome,
 	type Attempt,
@@ -78,8 +89,8 @@ import {
  * verified. A change to any of them always needs a result, whatever the
  * path policy says, so a broken predicate cannot exempt its own change. All
  * four are in the adopted set already. This guards honest mistakes only:
- * the job, the verifier and the policy all run from the PR head. The
- * identity module is whichever the build seam names.
+ * the job, the verifier and the policy all run from the PR head. Paths are
+ * package paths; the identity module is whichever the build seam names.
  */
 export const ALWAYS_GATED: readonly string[] = [
 	"evals/shepherd/gated-paths.ts",
@@ -137,15 +148,17 @@ function resolveCommit(
 /**
  * Paths changed between the merge base of `base` and `head`, and `head`,
  * from a NUL-delimited diff without rename detection, so a rename lists
- * both sides. Any Git failure throws.
+ * both sides. Paths are as Git names them from the repository's top level.
+ * Any Git failure throws.
  */
 export function changedPaths(
-	root: string,
+	at: string | EvalLayout,
 	base: string,
 	head: string,
 	options: { git?: GitRunner } = {},
 ): ChangedPaths {
 	const git = options.git ?? runGit;
+	const root = toLayout(at).gitRoot;
 	const baseCommit = resolveCommit(git, root, base, "base");
 	const headCommit = resolveCommit(git, root, head, "head");
 	const merge = git(["merge-base", baseCommit, headCommit], root);
@@ -797,13 +810,15 @@ function checkUnreadable(
 		report(`${resultPath} lists no attempt with evidence to check`);
 }
 
-/** Verify the checked-out tree at `root` against its committed result (7.4). */
+/** Verify the checked-out package of the layout against its committed result (7.4). */
 export function verifyResults(
-	root: string,
+	at: string | EvalLayout,
 	options: VerifyOptions = {},
 ): Verification {
 	const git = options.git ?? runGit;
-	const evalsDir = join(root, EVALUATION_DIR);
+	const layout = toLayout(at);
+	const root = layout.packageRoot;
+	const evalsDir = layout.evalsDir;
 	const checks =
 		options.checks ??
 		((trial: string, dir: string) =>
@@ -826,8 +841,10 @@ export function verifyResults(
 	let rubric: Rubric;
 	let policy: PolicyFile;
 	try {
-		source = readWorktreeSource(root, { git });
-		identity = evaluationIdentity(root, { git });
+		requireGitRoot(layout, git);
+		const located = { git, layout: sourceLayout(layout) };
+		source = readWorktreeSource(root, located);
+		identity = evaluationIdentity(root, located);
 		rubric = loadRubric(join(evalsDir, "rubric.json"));
 		policy = JSON.parse(readFileSync(join(evalsDir, "policy.json"), "utf8"));
 	} catch (error) {
@@ -1019,10 +1036,12 @@ export const RESULT_FILE = new RegExp(
  * one it records; neither is verified.
  */
 export function newestCommittedResult(
-	root: string,
+	at: string | EvalLayout,
 	options: { git?: GitRunner } = {},
 ): string {
 	const git = options.git ?? runGit;
+	const layout = toLayout(at);
+	const root = layout.gitRoot;
 	const log = git(
 		[
 			"log",
@@ -1032,7 +1051,7 @@ export function newestCommittedResult(
 			"--format=%x00%ct",
 			"HEAD",
 			"--",
-			`${EVALUATION_DIR}/results/`,
+			repositoryPath(layout, `${EVALUATION_DIR}/results/`),
 		],
 		root,
 	);
@@ -1042,7 +1061,7 @@ export function newestCommittedResult(
 	for (const commit of decode(log.stdout).split("\0").slice(1)) {
 		const [time = "", ...paths] = commit.split("\n");
 		for (const path of paths) {
-			if (!RESULT_FILE.test(path)) continue;
+			if (!RESULT_FILE.test(packagePath(layout, path) ?? "")) continue;
 			latest.set(path, Math.max(latest.get(path) ?? 0, Number(time)));
 		}
 	}
@@ -1051,7 +1070,7 @@ export function newestCommittedResult(
 	for (const [path] of candidates) {
 		const shown = git(["show", `HEAD:${path}`], root);
 		if (shown.code !== 0) continue;
-		const name = `Newest committed result: ${path}`;
+		const name = `Newest committed result: ${packagePath(layout, path)}`;
 		try {
 			const value = JSON.parse(decode(shown.stdout));
 			const revision =
@@ -1139,7 +1158,7 @@ export function checkOutcome(
  * source hash does not verify.
  */
 export function ciGate(
-	root: string,
+	at: string | EvalLayout,
 	base: string,
 	head: string,
 	options: VerifyOptions = {},
@@ -1153,7 +1172,10 @@ export function ciGate(
 		notice?: string,
 	): CheckOutcome => checkOutcome(lines, code, headline, detail, notice);
 	try {
-		const changed = changedPaths(root, base, head, { git });
+		const layout = toLayout(at);
+		requireGitRoot(layout, git);
+		const root = layout.gitRoot;
+		const changed = changedPaths(layout, base, head, { git });
 		const checkedOut = resolveCommit(git, root, "HEAD", "checked-out");
 		if (checkedOut !== changed.head) {
 			return finish(
@@ -1164,9 +1186,10 @@ export function ciGate(
 		}
 		const compared = `Compared head ${changed.head} with ${changed.mergeBase}, the merge base with base ${changed.base}.`;
 		const isGated = options.isGated ?? isGatedPath;
-		const gated = changed.paths.filter(
-			(path) => isGated(path) || ALWAYS_GATED.includes(path),
-		);
+		// Only the package's own paths, as package paths, can be gated.
+		const gated = changed.paths
+			.flatMap((path) => packagePath(layout, path) ?? [])
+			.filter((path) => isGated(path) || ALWAYS_GATED.includes(path));
 		if (gated.length === 0) {
 			return finish(
 				0,
@@ -1179,7 +1202,7 @@ export function ciGate(
 			`Gated paths changed (${ADOPTED_GATED_PATHS} policy):`,
 			...gated.map((path) => `  ${path}`),
 		);
-		const verification = verifyResults(root, options);
+		const verification = verifyResults(layout, options);
 		if (verification.problems.length > 0) {
 			const headline = verification.found
 				? "Shepherd evals result does not verify:"
@@ -1199,7 +1222,7 @@ export function ciGate(
 		}
 		if (!verification.outcome) {
 			const missing = verification.notes.at(-1) ?? "No result.";
-			const newest = newestCommittedResult(root, { git });
+			const newest = newestCommittedResult(layout, { git });
 			return finish(
 				0,
 				"Shepherd evals: no result for this source; the check is informational and the suite runs on demand (docs/SHEPHERD-EVALS.md).",
@@ -1250,21 +1273,60 @@ export function githubReport(
 	];
 }
 
-if (import.meta.main) {
-	const args = process.argv.slice(2);
-	const value = (flag: string) => {
-		const at = args.indexOf(flag);
-		return at >= 0 ? args[at + 1] : undefined;
+/** The command line's options; undefined when it is not a valid one. */
+export function parseVerifyArgs(args: string[]):
+	| {
+			base: string;
+			head: string;
+			packageRoot?: string;
+			gitRoot?: string;
+	  }
+	| undefined {
+	let values: Record<string, string | undefined>;
+	try {
+		values = parseArgs({
+			args,
+			options: {
+				base: { type: "string" },
+				head: { type: "string" },
+				"package-root": { type: "string" },
+				"git-root": { type: "string" },
+			},
+			strict: true,
+			allowPositionals: false,
+		}).values;
+	} catch {
+		return undefined;
+	}
+	const { base, head } = values;
+	if (!base || !head) return undefined;
+	return {
+		base,
+		head,
+		packageRoot: values["package-root"],
+		gitRoot: values["git-root"],
 	};
-	const base = value("--base");
-	const head = value("--head");
-	if (!base || !head || args.length !== 4) {
+}
+
+if (import.meta.main) {
+	const parsed = parseVerifyArgs(process.argv.slice(2));
+	if (!parsed) {
 		console.error(
-			"usage: bun evals/shepherd/verify.ts --base <revision> --head <revision>",
+			"usage: bun evals/shepherd/verify.ts --base <revision> --head <revision> [--package-root <dir>] [--git-root <dir>]",
 		);
 		process.exit(2);
 	}
-	const outcome = ciGate(resolve(import.meta.dir, "../.."), base, head);
+	let layout: EvalLayout;
+	try {
+		layout = defaultLayout({
+			packageRoot: parsed.packageRoot,
+			gitRoot: parsed.gitRoot,
+		});
+	} catch (error) {
+		console.error((error as Error).message);
+		process.exit(1);
+	}
+	const outcome = ciGate(layout, parsed.base, parsed.head);
 	for (const line of githubReport(outcome, process.env)) console.log(line);
 	process.exit(outcome.code);
 }

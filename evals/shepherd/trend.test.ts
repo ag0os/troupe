@@ -13,7 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createGitRunner } from "./build-source";
-import { parseOptions, REPO_ROOT } from "./run";
+import { defaultLayout } from "./layout";
+import { parseOptions } from "./run";
 import type { Result } from "./schema";
 import { git, TEST_GIT_ENV, testGit, writeAt } from "./source-fixture";
 import { behavioral, result } from "./testing";
@@ -250,6 +251,8 @@ describe("the trend view (H2)", () => {
 	});
 });
 
+const PACKAGE_ROOT = defaultLayout().packageRoot;
+
 describe("the --trend flag", () => {
 	test("fix round 1, nit 1: the entry prints the trend and never falls through to a run", () => {
 		// A copy of this tree in a fixture repository, so the entry reads
@@ -261,7 +264,7 @@ describe("the --trend flag", () => {
 				.decode(
 					testGit(
 						["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-						REPO_ROOT,
+						PACKAGE_ROOT,
 					).stdout,
 				)
 				.split("\0")
@@ -270,13 +273,16 @@ describe("the --trend flag", () => {
 						path &&
 						!path.startsWith("evals/shepherd/results/") &&
 						!path.startsWith("evals/shepherd/artifacts/") &&
-						existsSync(join(REPO_ROOT, path)),
+						existsSync(join(PACKAGE_ROOT, path)),
 				);
 			for (const path of listed) {
 				mkdirSync(dirname(join(copy, path)), { recursive: true });
-				copyFileSync(join(REPO_ROOT, path), join(copy, path));
+				copyFileSync(join(PACKAGE_ROOT, path), join(copy, path));
 			}
-			symlinkSync(join(REPO_ROOT, "node_modules"), join(copy, "node_modules"));
+			symlinkSync(
+				join(PACKAGE_ROOT, "node_modules"),
+				join(copy, "node_modules"),
+			);
 			git(copy, "init", "-q", "-b", "main");
 			git(copy, "add", "-A");
 			git(copy, "commit", "-q", "-m", "the tree");
