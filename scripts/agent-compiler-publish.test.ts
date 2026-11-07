@@ -585,6 +585,31 @@ describe("single compile (D-011)", () => {
 });
 
 describe("agents/local/ (D-011)", () => {
+	test("an include from a symlinked agents/local/'s target is refused", async () => {
+		// Base built a with team/p.txt and rebuilt on its edits; the watcher
+		// now ignores the canonical local/ target, so the include is refused.
+		write("agents/team/p.txt", "Team fragment\n");
+		symlinkSync(join(root, "agents/team"), join(root, "agents/local"));
+		write("agents/a.md", `${header}includes: [team/p.txt]\n---\nA body\n`);
+		const issues = await issuesOf(planBuild(opts({ roster: ["a"] })));
+		expect(issues).toEqual([
+			{
+				file: "agents/a.md",
+				line: 4,
+				field: "includes[0]",
+				message:
+					'"team/p.txt" lies inside agents/local/, a symlink whose target is never watched',
+			},
+		]);
+	});
+
+	test("an ordinary agents/local/ include is still accepted", async () => {
+		write("agents/local/p.md", "Private fragment\n");
+		write("agents/a.md", `${header}includes: [local/p.md]\n---\nA body\n`);
+		const plan = await planBuild(opts({ roster: ["a"] }));
+		expect(plan.entries.map((entry) => entry.id)).toEqual(["a"]);
+	});
+
 	test("a symlinked agents/local/ excludes its real target from discovery and compilation", async () => {
 		// Base walked agents/team/ and compiled it while the watcher saw its
 		// edits; the canonical exclusion now covers the link's target.

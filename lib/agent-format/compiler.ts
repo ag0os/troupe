@@ -455,6 +455,10 @@ async function loadResolved(
 			textImportProblem: (specifier) =>
 				textImportProblem(definition, repoRoot, importBase, specifier),
 			importProblem: (specifier) => {
+				const unknown = unestablishedModule(resolve(importBase, specifier));
+				if (unknown) {
+					return `value import "${specifier}": its selected module cannot be established (${unknown}); name the file explicitly`;
+				}
 				const file = moduleFile(resolve(importBase, specifier));
 				const owned = file && ownedProblem(definition.owned, file);
 				return owned ? `value import "${specifier}" ${owned}` : undefined;
@@ -493,6 +497,8 @@ async function readIncludes(
 	parsed: ReturnType<typeof parseAgentMarkdown>,
 ): Promise<IncludeText[]> {
 	const roots = realRoots(repoRoot, definition.includeRoots);
+	const localIsLink =
+		definition.realLocal !== join(definition.declarationRoot.real, "local");
 	const issues: SourceIssue[] = [];
 	const texts: IncludeText[] = [];
 
@@ -526,6 +532,15 @@ async function readIncludes(
 		const owned = ownedProblem(definition.owned, real);
 		if (owned) {
 			issue(`"${include}" ${owned}`);
+			continue;
+		}
+		// A symlinked local/ is excluded at its target, so an include there
+		// would build but never rebuild. The ordinary local/ directory keeps
+		// its legacy exception.
+		if (localIsLink && isWithin(definition.realLocal, real)) {
+			issue(
+				`"${include}" lies inside ${definition.declarationRoot.label}/local/, a symlink whose target is never watched`,
+			);
 			continue;
 		}
 		try {
@@ -594,6 +609,28 @@ function moduleFile(path: string): string | undefined {
 		}
 	}
 	return undefined;
+}
+
+/**
+ * Why the module a relative value import selects cannot be established by
+ * `moduleFile`'s search, or undefined when it can: the path is a file, or
+ * `<path>.ts` is, or the path is a directory holding `index.ts` and no
+ * `package.json`. Bun would follow a directory's `package.json` entry, or
+ * other extensions, to a file the checks never see, so those are refused.
+ */
+function unestablishedModule(path: string): string | undefined {
+	const stat = (candidate: string) =>
+		statSync(candidate, { throwIfNoEntry: false });
+	if (stat(path)?.isFile() || stat(`${path}.ts`)?.isFile()) return undefined;
+	if (!stat(path)?.isDirectory()) {
+		return "no such file, .ts file or directory";
+	}
+	if (existsSync(join(path, "package.json"))) {
+		return "the directory has a package.json";
+	}
+	return stat(join(path, "index.ts"))?.isFile()
+		? undefined
+		: "the directory has no index.ts";
 }
 
 /** Strictly beneath `dir`; `dir` itself is not inside. */

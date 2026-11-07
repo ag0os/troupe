@@ -1519,6 +1519,45 @@ describe("resolved module files and the sibling (fix 3, R1)", () => {
 		]);
 	});
 
+	test("a directory import with a package.json entry is refused, even beside a safe index", async () => {
+		write("tools/helper/index.ts", "export const greeting = 'safe';\n");
+		write(
+			"tools/helper/package.json",
+			'{ "main": "./entry.ts", "module": "./entry.ts" }\n',
+		);
+		write("tools/gen/h.ts", "export const greeting = 'owned';\n");
+		symlinkSync(
+			join(root, "tools/gen/h.ts"),
+			join(root, "tools/helper/entry.ts"),
+		);
+		addAgent("defs/a.md");
+		write("defs/a.ts", importing("../tools/helper"));
+		const issues = await issuesOf(
+			loadAgentDefinition(
+				definition({ extensionCodeRoots: ["tools"], outDir: "tools/gen" }),
+				"defs/a.md",
+			),
+		);
+		expect(issues.map((issue) => issue.message)).toEqual([
+			'value import "../tools/helper": its selected module cannot be established (the directory has a package.json); name the file explicitly; extensions must not run code on import',
+		]);
+	});
+
+	test("an import Bun would satisfy with another extension is refused", async () => {
+		write("tools/h.js", "export const greeting = 'hi';\n");
+		addAgent("defs/a.md");
+		write("defs/a.ts", importing("../tools/h"));
+		const issues = await issuesOf(
+			loadAgentDefinition(
+				definition({ extensionCodeRoots: ["tools"] }),
+				"defs/a.md",
+			),
+		);
+		expect(issues[0]?.message).toBe(
+			'value import "../tools/h": its selected module cannot be established (no such file, .ts file or directory); name the file explicitly; extensions must not run code on import',
+		);
+	});
+
 	test("a directory import is judged by its index file, not the directory", async () => {
 		write("tools/helper/index.ts", "export const greeting = 'hi';\n");
 		write("elsewhere/h.ts", "export const greeting = 'hi';\n");
@@ -1532,8 +1571,8 @@ describe("resolved module files and the sibling (fix 3, R1)", () => {
 		// A directory under the root with no index loads nothing from it.
 		write("defs/a.ts", importing("../tools/empty"));
 		const issues = await issuesOf(loadAgentDefinition(def, "defs/a.md"));
-		expect(issues[0]?.message).toStartWith(
-			'value import from "../tools/empty"',
+		expect(issues[0]?.message).toBe(
+			'value import "../tools/empty": its selected module cannot be established (the directory has no index.ts); name the file explicitly; extensions must not run code on import',
 		);
 	});
 
@@ -1583,6 +1622,25 @@ describe("canonical local/ target (fix 3, R4)", () => {
 			},
 		]);
 		expect(existsSync(join(root, "team"))).toBe(false);
+	});
+
+	test("an include under a symlinked local/'s target is refused", async () => {
+		write("defs/team/p.txt", "Team fragment\n");
+		symlinkSync(join(root, "defs/team"), join(root, "defs/local"));
+		addAgent("defs/a.md", "includes: [team/p.txt, local/p.txt]\n");
+		const issues = await issuesOf(
+			loadAgentDefinition(definition(), "defs/a.md"),
+		);
+		expect(issues.map((issue) => [issue.field, issue.message])).toEqual([
+			[
+				"includes[0]",
+				'"team/p.txt" lies inside defs/local/, a symlink whose target is never watched',
+			],
+			[
+				"includes[1]",
+				'"local/p.txt" lies inside defs/local/, a symlink whose target is never watched',
+			],
+		]);
 	});
 
 	test("an ordinary local/ include through the declaration root stays accepted", async () => {
