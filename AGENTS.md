@@ -26,7 +26,7 @@ Troupe is a Bun + strict TypeScript repository for Markdown-declared CLI agents,
 - `bun test` — Run all tests.
 - `bun run typecheck` — Run strict TypeScript checks without emitting files.
 - `bun run check` — Run non-mutating Biome checks.
-- `bun run check:all` — Run typecheck and Biome; used by CI and pre-commit hooks. The hook runs nothing else, so it does not install or stage.
+- `bun run check:all`: run typecheck and Biome; used by CI and pre-commit hooks. The hook runs nothing else, so it does not install or stage.
 - `bun scripts/check-extraction-gates.ts`: Prove each root and package gate fails on a planted type, lint and test error in a disposable copy.
 - `bun test ./scripts/shepherd-copy.test.ts`: Check the extracted package against the original layout. Root `bun test <path>` filters by substring, so prefix root paths with `./`.
 - Inside `extractions/shepherd/`: `bun run typecheck`, `bun run check`, `bun test`, the package's own gates, which CI runs after the root ones.
