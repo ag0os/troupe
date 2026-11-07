@@ -10,12 +10,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeRunResult } from "../../agents/tools/webfetch";
-import { inspectExtension } from "../../scripts/agent-compiler";
+import { errorLineFinish } from "./__fixtures__/error-finish";
 import { claudeAdapter } from "./adapters/claude";
 import { spec as fixtureSpec } from "./adapters/test-fixtures";
 import type { BackendAdapter, StreamDecoder } from "./adapters/types";
 import { parseCli } from "./cli";
+import { inspectExtension } from "./compiler";
 import {
 	type FakeScenario,
 	installFakeClis,
@@ -34,8 +34,8 @@ import {
 	type Interpolate,
 	interpolateMcp,
 	previewAgent,
-	RunScope,
 	type RunnerSignal,
+	RunScope,
 	runPrepare,
 	type SignalSource,
 } from "./run";
@@ -877,11 +877,20 @@ describe("stream decoders (AC #5; B-006, D-010)", () => {
 		const encode = (text: string) => new TextEncoder().encode(text);
 		const cases: [string[], string[]][] = [
 			// CRLF, including a CR and LF split across chunks.
-			[["one\r", "\ntwo\r\n"], ["one", "two"]],
+			[
+				["one\r", "\ntwo\r\n"],
+				["one", "two"],
+			],
 			// An empty final line before the end of the stream.
-			[["one\n", "\n"], ["one", ""]],
+			[
+				["one\n", "\n"],
+				["one", ""],
+			],
 			// A valid final line without a newline.
-			[["one\ntw", "o"], ["one", "two"]],
+			[
+				["one\ntw", "o"],
+				["one", "two"],
+			],
 			// A trailing CR on an unterminated final line is kept as data.
 			[["one\r\nlast"], ["one", "last"]],
 		];
@@ -1386,9 +1395,9 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 		});
 	}
 
-	describe("Webfetch-style finish (Design §5)", () => {
-		const webfetch = fixtureSpec({
-			id: "tools:webfetch",
+	describe("ERROR-line finish (Design §5)", () => {
+		const errorLineAgent = fixtureSpec({
+			id: "tools:fetch-fixture",
 			backends: ["claude"],
 			mode: "print",
 			flags: { url: { type: "string", description: "URL" } },
@@ -1399,17 +1408,17 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 					? {
 							exit: {
 								message:
-									"ERROR: missing URL. Run `tools:webfetch --describe` for usage.\n",
+									"ERROR: missing URL. Run `tools:fetch-fixture --describe` for usage.\n",
 								code: 64,
 								stream: "stdout",
 							},
 						}
 					: {},
-			finish: (result) => normalizeRunResult(result),
+			finish: (result) => errorLineFinish(result),
 		};
 
 		test("a missing backend binary yields stdout ERROR:", async () => {
-			const result = await run(webfetch, ["https://x.test"], extension, {
+			const result = await run(errorLineAgent, ["https://x.test"], extension, {
 				path: "/nonexistent",
 			});
 			expect(result.code).toBe(1);
@@ -1421,7 +1430,7 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 
 		test("a failing ${cmd:...} yields stdout ERROR:", async () => {
 			const withMcp = {
-				...webfetch,
+				...errorLineAgent,
 				mcp: {
 					api: {
 						url: "https://x.test",
@@ -1449,9 +1458,9 @@ describe("interpolation, adapter and spawn failures (AC #9; B-006)", () => {
 		});
 
 		test("success keeps the payload; a missing URL keeps its own early exit", async () => {
-			const ok = await run(webfetch, ["https://x.test"], extension);
+			const ok = await run(errorLineAgent, ["https://x.test"], extension);
 			expect(ok).toMatchObject({ code: 0, stdout: "claude result\n" });
-			const usage = await run(webfetch, [], extension);
+			const usage = await run(errorLineAgent, [], extension);
 			expect(usage.code).toBe(64);
 			expect(usage.stdout).toStartWith("ERROR: missing URL.");
 		});

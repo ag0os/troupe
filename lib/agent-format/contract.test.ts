@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spec as fixtureSpec } from "./adapters/test-fixtures";
 import { parseCli } from "./cli";
 import { installFakeClis, readRecords } from "./fake-cli";
-import {
-	type AgentExtension,
-	executeAgent,
-	previewAgent,
-} from "./run";
-import type { AgentSpec, PrepareContext } from "./types";
+import { type AgentExtension, executeAgent, previewAgent } from "./run";
+import type { AgentSpec } from "./types";
 
 let root: string;
 let workspace: string;
@@ -103,7 +105,8 @@ describe("contract 1b: PrepareContext.passthrough", () => {
 		});
 		expect(result.code).toBe(0);
 		expect(seen).toEqual(tail);
-		for (const token of tail) expect(previewArgv(result.stdout)).toContain(token);
+		for (const token of tail)
+			expect(previewArgv(result.stdout)).toContain(token);
 		expect(previewArgv(result.stdout).slice(-tail.length)).toEqual(tail);
 	});
 });
@@ -230,9 +233,7 @@ describe("contract 1d: PrepareResult.model", () => {
 			);
 			expect(flagged).toEqual({ code: 0, stderr: "" });
 			const flaggedArgv = readRecords(recordFile).at(-1)?.argv ?? [];
-			expect(flaggedArgv[flaggedArgv.indexOf(modelFlag) + 1]).toBe(
-				"from-flag",
-			);
+			expect(flaggedArgv[flaggedArgv.indexOf(modelFlag) + 1]).toBe("from-flag");
 			expect(flaggedArgv).not.toContain("from-prepare");
 		}
 	});
@@ -322,11 +323,9 @@ describe("contract 1f: PrepareResult.codexHome", () => {
 		expect(claude.code).toBe(1);
 		expect(claude.stderr).toContain("only for Codex");
 
-		const relative = await preview(
-			fixtureSpec(),
-			["--backend", "codex"],
-			{ prepare: () => ({ codexHome: "relative/home" }) },
-		);
+		const relative = await preview(fixtureSpec(), ["--backend", "codex"], {
+			prepare: () => ({ codexHome: "relative/home" }),
+		});
 		expect(relative.code).toBe(1);
 		expect(relative.stderr).toContain("absolute path");
 

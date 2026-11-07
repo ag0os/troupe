@@ -1,4 +1,1 @@
-declare module "*.md" {
-    const content: string;
-    export default content;
-} 
+/// <reference path="./lib/text-imports.d.ts" />

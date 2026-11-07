@@ -824,17 +824,21 @@ describe("withStdoutAbsorbed", () => {
 	});
 });
 
-
 test("prepare context exposes the resolved framework or declaration model", () => {
 	for (const [args, declared, expected] of [
 		[["--model", "launch"], "declared", "launch"],
 		[[], "declared", "declared"],
 		[[], undefined, undefined],
 	] as [string[], string | undefined, string | undefined][]) {
-		const agent = { ...fixtureSpec(), model: declared ? { claude: declared } : undefined };
+		const agent = {
+			...fixtureSpec(),
+			model: declared ? { claude: declared } : undefined,
+		};
 		const outcome = parseCli(agent, args, { cwd: "/tmp" });
 		if (outcome.kind !== "run") throw new Error("expected run");
-		const ctx = createPrepareContext(agent, outcome.invocation, { signal: new AbortController().signal });
+		const ctx = createPrepareContext(agent, outcome.invocation, {
+			signal: new AbortController().signal,
+		});
 		expect({ model: ctx.model }).toEqual({ model: expected });
 	}
 });

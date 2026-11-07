@@ -132,7 +132,9 @@ describe("runDispatch (O12, D1)", () => {
 				dispatchIo,
 			);
 			expect(code).toBe(1);
-			expect(out.stderr).toContain("fixture: dispatch returned an invalid result");
+			expect(out.stderr).toContain(
+				"fixture: dispatch returned an invalid result",
+			);
 		}
 		expect(existsSync(marker)).toBe(false);
 	});

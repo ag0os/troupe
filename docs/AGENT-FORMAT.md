@@ -2,7 +2,7 @@
 
 Troupe agents are strict Markdown declarations under `agents/`. The path becomes the binary name: `agents/design/diagram/all.md` builds `bin/design:diagram:all`. A declaration may have a same-stem TypeScript extension that exports `prepare`, `finish` or `dispatch`. The shared runner validates the declaration, composes prompts, selects a backend adapter, and owns execution and cleanup.
 
-The compiler accepts only the fixed roster, the `ROSTER` list in `scripts/agent-compiler.ts`. This repository is not a registry for arbitrary extra binaries.
+The compiler accepts only the fixed roster, the `ROSTER` list in `lib/agent-format/compiler.ts` (re-exported by `scripts/agent-compiler.ts`). This repository is not a registry for arbitrary extra binaries.
 
 ## Declaration schema
 

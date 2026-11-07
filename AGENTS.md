@@ -7,10 +7,11 @@ Troupe is a Bun + strict TypeScript repository for Markdown-declared CLI agents,
 ## Project Structure & Module Organization
 
 - `agents/`: Markdown declarations and optional same-stem TypeScript extensions; subdirectories determine colon-delimited binary names.
-- `lib/agent-format/`: Schema, CLI, runner, and Claude and Codex adapters.
+- `lib/agent-format/`: Schema, CLI, runner, Claude and Codex adapters, and the compiler (`compiler.ts`, `binary-name.ts`).
+- `lib/entries/`, `lib/index.ts`: The package export map's public entries (`troupe`, `troupe/declaration`, `troupe/cli`, `troupe/runtime`, `troupe/compiler`, `troupe/provenance`, `troupe/testing`, `troupe/text-imports`).
 - `lib/shepherd/`: Shepherd workspace, maintenance, session, and launch helpers.
 - `system-prompts/`: Shared prompt fragments used by declarations and extensions.
-- `scripts/` — Build/watch utilities.
+- `scripts/`: Build/watch utilities; `agent-compiler.ts` and `binary-name.ts` re-export the compiler; `stage-troupe.ts` stages the distribution.
 - `bin/` — Generated binaries (do not edit manually).
 - `docs/`: Documentation.
 

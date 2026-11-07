@@ -252,7 +252,10 @@ const PREPARE_RESULT = z.union([
 			.optional(),
 		sessionName: z.string().optional(),
 		model: z.string().optional(),
-		effort: z.string().regex(/^[a-z]+$/).optional(),
+		effort: z
+			.string()
+			.regex(/^[a-z]+$/)
+			.optional(),
 		codexHome: z.string().optional(),
 		cwd: z.string().min(1).optional(),
 		env: envVariables.optional(),
@@ -494,8 +497,7 @@ async function previewInScope(
 	};
 	const signal = scope.signal;
 	const runCommand =
-		io.runCommand ??
-		createRunCommand({ cwd: invocation.cwd, signal, scope });
+		io.runCommand ?? createRunCommand({ cwd: invocation.cwd, signal, scope });
 	const ctx = createPrepareContext(
 		spec,
 		{ ...invocation, showPrompt: true },
@@ -680,10 +682,7 @@ export class RunScope {
 	 */
 	terminalChild = false;
 
-	constructor(
-		signals?: SignalSource,
-		options: { killGraceMs?: number } = {},
-	) {
+	constructor(signals?: SignalSource, options: { killGraceMs?: number } = {}) {
 		this.#killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 		this.#unsubscribe = signals
 			? signals((signal) => this.receive(signal))

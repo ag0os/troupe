@@ -315,7 +315,10 @@ describe("extension text imports", () => {
 		write("agents/a.md", `${header}---\nBody\n`);
 		write("agents/a.ts", text);
 		const issues = await issuesOf("agents/a.md");
-		expect(issues[0]).toMatchObject({ file: "agents/a.ts", field: "top-level" });
+		expect(issues[0]).toMatchObject({
+			file: "agents/a.ts",
+			field: "top-level",
+		});
 		return issues[0];
 	}
 
@@ -362,20 +365,17 @@ describe("extension text imports", () => {
 		expect(issue?.message).toContain("resolves outside system-prompts/");
 	});
 
-	test.each([
-		"helper.ts",
-		"helper.js",
-		"notes.txt",
-		"addon.node",
-		"noext",
-	])("rejects a non-.md specifier (%s) carrying type: text", async (name) => {
-		write(`system-prompts/${name}`, "export const x = 1;\n");
-		const issue = await rejection(textHook(`../system-prompts/${name}`));
-		expect(issue?.line).toBe(2);
-		expect(issue?.message).toBe(
-			`text import "../system-prompts/${name}" must name a .md file under system-prompts/; extensions must not run code on import`,
-		);
-	});
+	test.each(["helper.ts", "helper.js", "notes.txt", "addon.node", "noext"])(
+		"rejects a non-.md specifier (%s) carrying type: text",
+		async (name) => {
+			write(`system-prompts/${name}`, "export const x = 1;\n");
+			const issue = await rejection(textHook(`../system-prompts/${name}`));
+			expect(issue?.line).toBe(2);
+			expect(issue?.message).toBe(
+				`text import "../system-prompts/${name}" must name a .md file under system-prompts/; extensions must not run code on import`,
+			);
+		},
+	);
 
 	test.each([
 		["holding an index module", "index.ts", 'console.log("INDEX");\n'],
@@ -1025,7 +1025,9 @@ describe("dispatch export (O11, D1)", () => {
 		);
 		const agent = await loadAgentDefinition(root, "agents/fixture/routed.md");
 		const entry = generateEntry(agent);
-		const call = entry.indexOf("await dispatchAndExit(spec, extension, process.argv.slice(2));");
+		const call = entry.indexOf(
+			"await dispatchAndExit(spec, extension, process.argv.slice(2));",
+		);
 		expect(call).toBeGreaterThan(0);
 		expect(call).toBeLessThan(entry.indexOf("resolveCli(spec"));
 		write("agents/fixture/plain.md", `${header}---\nBody\n`);
