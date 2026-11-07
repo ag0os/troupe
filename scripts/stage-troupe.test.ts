@@ -177,8 +177,9 @@ function put(root: string, path: string, text: string): void {
 
 /**
  * Runs a consumer script the way an installed consumer must under a `file:`
- * folder dependency. Bun runs the stage's own imports from its real
- * location, beside no node_modules, and would auto-install them from its
+ * folder dependency. Where Bun installs the folder as symlinks (1.2.22), it
+ * runs the stage's own imports from their real location, beside no
+ * node_modules, and would auto-install them from its
  * global cache at whatever version is newest there. `--no-install` makes
  * that fail instead, and `NODE_PATH` resolves them from the consumer's
  * lockfile.
@@ -509,8 +510,8 @@ describe("staged distribution", () => {
 				noEmit: true,
 				strict: true,
 				skipLibCheck: true,
-				// Bun installs a folder dependency as per-file symlinks into the
-				// stage; without this tsc resolves its imports from the stage.
+				// Bun 1.2.22 installs a folder dependency as per-file symlinks into
+				// the stage; without this tsc resolves its imports from the stage.
 				preserveSymlinks: true,
 			},
 			include: ["main.ts", "surface.ts", "build.ts"],
@@ -643,7 +644,25 @@ describe("staged distribution", () => {
 				unrelated,
 			);
 
+		/**
+		 * The real directory of the compiler the consumer loads. Bun 1.2.22
+		 * installs a `file:` folder as per-file symlinks into the stage, so
+		 * this is the stage; Bun 1.4.4 hardlinks the files into
+		 * `node_modules/troupe`, so it is the consumer's own copy.
+		 */
+		const installedRuntime = () =>
+			dirname(
+				realpathSync(
+					join(consumer, "node_modules/troupe/lib/agent-format/compiler.ts"),
+				),
+			);
+
 		test("generated entries import the runtime from the installed distribution", () => {
+			const installed = installedRuntime();
+			expect([
+				join(dist, "lib/agent-format"),
+				join(consumer, "node_modules/troupe/lib/agent-format"),
+			]).toContain(installed);
 			const result = build("entry");
 			expect(result.stderr).toBe("");
 			expect(result.code).toBe(0);
@@ -652,15 +671,15 @@ describe("staged distribution", () => {
 			);
 			expect(imports).toEqual([
 				"node:fs",
-				join(dist, "lib/agent-format/cli.ts"),
-				join(dist, "lib/agent-format/run.ts"),
+				join(installed, "cli.ts"),
+				join(installed, "run.ts"),
 				join(consumer, "defs/greet/hello.ts"),
 			]);
 			expect(result.stdout).not.toContain(repo);
 		});
 
 		test("the shipped runtime missing fails explicitly before any build", () => {
-			const runtime = join(dist, "lib/agent-format/run.ts");
+			const runtime = join(installedRuntime(), "run.ts");
 			const aside = `${runtime}.aside`;
 			renameSync(runtime, aside);
 			try {
