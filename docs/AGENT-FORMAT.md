@@ -2,7 +2,7 @@
 
 Troupe agents are strict Markdown declarations under `agents/`. The path becomes the binary name: `agents/design/diagram/all.md` builds `bin/design:diagram:all`. A declaration may have a same-stem TypeScript extension that exports `prepare`, `finish` or `dispatch`. The shared runner validates the declaration, composes prompts, selects a backend adapter, and owns execution and cleanup.
 
-The compiler accepts only the fixed roster, the `ROSTER` list in `lib/agent-format/compiler.ts` (re-exported by `scripts/agent-compiler.ts`). This repository is not a registry for arbitrary extra binaries.
+The compiler accepts only the fixed roster, the `ROSTER` list in `lib/agent-format/compiler.ts` (re-exported by `scripts/agent-compiler.ts`). This repository is not a registry for arbitrary extra binaries. The paths and roster in this document are this repository's configuration; another package configures its own through a build definition (see [Building from another package](#building-from-another-package)).
 
 ## Declaration schema
 
@@ -202,6 +202,26 @@ bun run watch
 `compile`, `compile:all`, and the watcher share one compiler. A full build validates all sources, builds every binary serially in a temporary directory on the same filesystem as `bin/`, verifies outputs, then renames them into place. A failure before publication leaves `bin/` untouched. A failure after renaming begins is reported as a partial update. A successful full build prunes binaries outside the roster unless `--no-prune` is used. `--dry-run` validates and reports without writing.
 
 The watcher observes exactly `agents/` and `system-prompts/` and rebuilds the full roster after a change. Generated files in `bin/` are never edited by hand.
+
+### Building from another package
+
+`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it, judged at its real location, so a symlink leading outside is refused too; a refusal names the root and field. `outDir` may be anywhere except where publication would destroy or ignore inputs: it may not contain the consumer root or any configured root, and no root may sit under a `.troupe-build-` or `.agent-build-` name beside it. A root may contain `outDir`, but no declaration, include, extension, or file the extension imports directly by relative path may come from inside `outDir` or those temporary directories. The checked boundary is exact: a relative value import must name a file, a `.ts` file without its extension, or a directory holding `index.ts` and no `package.json`; any other form (a directory with a `package.json`, a directory without `index.ts`, another extension) is refused because its selected module cannot be established, so name the file explicitly. Bare package imports are not checked, and neither are an accepted helper's own imports. The declaration root's `local/`, and its real target if it is a symlink, is never discovered, compiled or watched, and no configured input or watch root may sit under it. An include from a symlinked `local/`'s target is refused. A declaration may still include a file from an ordinary, non-symlinked `local/` directory through the declaration root, as before; edits to that file do not trigger the watcher.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `consumerRoot` | required | The package root |
+| `declarationRoot` | `agents` | Declarations and their same-stem extensions; nested paths give colon names, and its `local/` is never compiled |
+| `includeRoots` | the declaration root and `system-prompts` | Roots an include's realpath must stay under |
+| `extensionCodeRoots` | none | Roots whose modules an extension may import by relative path |
+| `extensionTextRoots` | `system-prompts` | Roots whose `.md` files an extension may import as text |
+| `roster` | required for `planBuild`, `publish` and `startWatcher` | The exact names a full build publishes |
+| `outDir` | `bin` | Output directory |
+| `protectedOutputs` | none | Names in `outDir` that pruning never removes |
+| `watchRoots` | every root above except `outDir` | Directories the watcher watches |
+
+Under a `file:` folder dependency Bun installs the package as per-file links into the folder and runs its modules from the folder's real location, where no `node_modules` exists. Run the consumer's build scripts with `bun --no-install` and `NODE_PATH=<consumer>/node_modules`: without them Bun auto-installs the compiler's own imports from its global cache, at whatever versions are newest there rather than the consumer's locked ones. The bundler never auto-installs, so the default builder sets `NODE_PATH` for `bun build` itself whenever the runtime lies outside the consumer root (`BuildRequest.dependencyRoot` tells a custom builder the same). The compiled-consumer tests in `scripts/stage-troupe.test.ts` run this way.
+
+`compileAgent` builds one declaration under the declaration root and needs no roster. The watcher ignores its own writes to `outDir` and the temporary build directories beside it. Generated entries import the CLI and runner from the compiler's installed distribution and fail before building when either file is missing. This repository's wrappers in `scripts/` supply its definition: the roots and roster above, `lib/agent-format/` and `lib/shepherd/` as code roots, outputs of other `compile:*` scripts protected, and `agents/` and `system-prompts/` watched.
 
 ## Authoring checklist
 

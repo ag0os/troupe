@@ -18,9 +18,11 @@ import { dirname, join, resolve } from "node:path";
 import { AgentSourceError, type SourceIssue } from "../lib/agent-format/errors";
 import {
 	type BuildEntry,
+	compileAgent,
 	createSerialQueue,
 	describePublishFailure,
 	LOCAL_AGENTS_WARNING,
+	legacyDefinition,
 	PartialPublishError,
 	PruneError,
 	type PublishOptions,
@@ -149,6 +151,9 @@ describe("roster", () => {
 		// D-036: personas:github was removed from the hub.
 		expect(ROSTER as readonly string[]).not.toContain("personas:github");
 		const repo = resolve(import.meta.dir, "..");
+		// The roster is the legacy wrapper's: the library planner has no
+		// default, and the wrapper's definition carries ROSTER.
+		expect(legacyDefinition(repo).roster).toBe(ROSTER);
 		return planBuild({ root: repo }).then((plan) => {
 			expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
 			for (const entry of plan.entries) {
@@ -580,6 +585,62 @@ describe("single compile (D-011)", () => {
 });
 
 describe("agents/local/ (D-011)", () => {
+	test("an include from a symlinked agents/local/'s target is refused", async () => {
+		// Base built a with team/p.txt and rebuilt on its edits; the watcher
+		// now ignores the canonical local/ target, so the include is refused.
+		write("agents/team/p.txt", "Team fragment\n");
+		symlinkSync(join(root, "agents/team"), join(root, "agents/local"));
+		write("agents/a.md", `${header}includes: [team/p.txt]\n---\nA body\n`);
+		const issues = await issuesOf(planBuild(opts({ roster: ["a"] })));
+		expect(issues).toEqual([
+			{
+				file: "agents/a.md",
+				line: 4,
+				field: "includes[0]",
+				message:
+					'"team/p.txt" lies inside agents/local/, a symlink whose target is never watched',
+			},
+		]);
+	});
+
+	test("an ordinary agents/local/ include is still accepted", async () => {
+		write("agents/local/p.md", "Private fragment\n");
+		write("agents/a.md", `${header}includes: [local/p.md]\n---\nA body\n`);
+		const plan = await planBuild(opts({ roster: ["a"] }));
+		expect(plan.entries.map((entry) => entry.id)).toEqual(["a"]);
+	});
+
+	test("a symlinked agents/local/ excludes its real target from discovery and compilation", async () => {
+		// Base walked agents/team/ and compiled it while the watcher saw its
+		// edits; the canonical exclusion now covers the link's target.
+		addDeclaration("agents/team/a.md", "Team body");
+		symlinkSync(join(root, "agents/team"), join(root, "agents/local"));
+		const issues = await issuesOf(planBuild(opts({ roster: ["team:a"] })));
+		expect(issues).toEqual([
+			{
+				file: "agents/team/a.md",
+				field: "roster",
+				message: 'roster agent "team:a" has no declaration',
+			},
+		]);
+		const direct = await issuesOf(
+			compileAgent({
+				root,
+				file: "agents/team/a.md",
+				outFile: join(root, "team"),
+				build: async () => {},
+			}),
+		);
+		expect(direct).toEqual([
+			{
+				file: "agents/team/a.md",
+				field: "path",
+				message:
+					"declaration lies inside agents/local/, which is never compiled",
+			},
+		]);
+	});
+
 	test("is never discovered, and a present directory gives one warning line", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		addDeclaration("agents/ns/b.md", "B body");

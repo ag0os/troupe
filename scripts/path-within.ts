@@ -1,14 +1,5 @@
-import { isAbsolute, relative, sep } from "node:path";
-
 /**
- * Whether `child` is `parent` or lies beneath it. Only a leading `..` path
- * component means outside; a name that merely starts with two dots, such as
- * `..evidence`, is inside.
+ * Compatibility wrapper: the containment helper lives in
+ * `lib/agent-format/path-within.ts`, shared with the compiler and naming.
  */
-export function isWithin(parent: string, child: string): boolean {
-	const rel = relative(parent, child);
-	return (
-		rel === "" ||
-		(!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))
-	);
-}
+export * from "../lib/agent-format/path-within";
