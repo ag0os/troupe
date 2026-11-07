@@ -222,8 +222,8 @@
 		},
 		{
 			"path": "evals/shepherd/artifacts/",
-			"reason": "archived trial evidence of the committed results; it belongs with those results in the original layout",
-			"packageNames": "^([0-9a-f]{64}/.+|\\.gitkeep)$"
+			"reason": "archived trial evidence of the committed results; it belongs with those results in the original layout; the package may hold only the exported attempt layout (<source hash>/<run id>/<gate trial>/attempt-<n>/, or a set-aside .partial export of it) and the names harness.py (backend claude), export.ts and gate.ts write there",
+			"packageNames": "^(\\.gitkeep|[0-9a-f]{64}/[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}/(A|D|E|G|E-neg|G-neg)/attempt-[1-9][0-9]*(\\.partial(-[1-9][0-9]*)?)?/(claude(\\.md|(-initial|-resume)?\\.jsonl|-(run|start|baseline|final)\\.json|-fixture-notes\\.md|-(resume-)?(stdout|stderr)\\.txt|-diff\\.patch)|must-check\\.json|packet\\.md|scorer-[1-9][0-9]*-r[1-9][0-9]*\\.json(\\.orphan(-[1-9][0-9]*)?)?))$"
 		}
 	]
 }

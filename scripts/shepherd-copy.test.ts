@@ -332,6 +332,77 @@ describe("the copy check (O26)", () => {
 		]);
 	});
 
+	test("the artifacts exclusion allows only the exported evidence layout", () => {
+		const real: Adaptations = JSON.parse(
+			readFileSync(join(repo, PACKAGE, "ADAPTATIONS.json"), "utf8"),
+		);
+		const artifacts = "evals/shepherd/artifacts/";
+		const only: Adaptations = {
+			mappings: [],
+			rewrites: [],
+			extractionOnly: [],
+			excluded: real.excluded.filter((entry) => entry.path === artifacts),
+		};
+		expect(only.excluded).toHaveLength(1);
+		const hex = "0123456789abcdef".repeat(4);
+		const attempt = `${hex}/20261015T032553Z-97c8fd/E-neg/attempt-12`;
+		// Every name the harness (backend claude, as the gate runs it), the
+		// exporter and the gate write into an exported attempt, plus the
+		// gate's set-aside exports and orphaned scorer outputs.
+		const legitimate = [
+			".gitkeep",
+			...[
+				"claude.md",
+				"claude.jsonl",
+				"claude-initial.jsonl",
+				"claude-resume.jsonl",
+				"claude-run.json",
+				"claude-start.json",
+				"claude-baseline.json",
+				"claude-final.json",
+				"claude-fixture-notes.md",
+				"claude-stdout.txt",
+				"claude-stderr.txt",
+				"claude-resume-stdout.txt",
+				"claude-resume-stderr.txt",
+				"claude-diff.patch",
+				"must-check.json",
+				"packet.md",
+				"scorer-1-r1.json",
+				"scorer-10-r2.json.orphan",
+				"scorer-1-r1.json.orphan-2",
+			].map((name) => `${attempt}/${name}`),
+			`${hex}/20261015T032553Z-97c8fd/A/attempt-1.partial/claude.md`,
+			`${hex}/20261015T032553Z-97c8fd/G/attempt-1.partial-2/packet.md`,
+		];
+		const planted = [
+			`${hex}/x.test.ts`,
+			`${attempt}/x.test.ts`,
+			`${attempt}/claude-stdout.test.ts`,
+			`${attempt}/nested/claude.md`,
+			`${hex}/20261015T032553Z-97c8fd/Z/attempt-1/claude.md`,
+			`${hex}/20261015T032553Z-97c8fd/A/attempt-0/claude.md`,
+			`${hex}/run/A/attempt-1/claude.md`,
+			`${hex}/20261015T032553Z-97c8fd/A/attempt-1/codex.md`,
+		];
+		const source = join(scratch, `repo-${count++}`);
+		const pkg = join(source, PACKAGE);
+		for (const path of [...legitimate, ...planted]) {
+			const file = join(pkg, artifacts, path);
+			mkdirSync(dirname(file), { recursive: true });
+			writeFileSync(file, "x\n");
+		}
+		spawnSync("git", ["init", "-q"], { cwd: source });
+		expect(copyProblems(source, pkg, only)).toEqual(
+			planted
+				.map(
+					(path) =>
+						`${artifacts}${path}: under an exclusion but not a name it allows in the package`,
+				)
+				.sort(),
+		);
+	});
+
 	test("a faithful copy passes", () => {
 		const { source, pkg } = fixture();
 		expect(copyProblems(source, pkg, ADAPTATIONS)).toEqual([]);
