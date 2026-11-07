@@ -12,6 +12,10 @@
 
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import type {
+	BuildStampPolicy,
+	CapturedBuildStamp,
+} from "../lib/agent-format/compiler";
 import {
 	buildManifest,
 	createGitRunner,
@@ -99,6 +103,34 @@ export function gitStamp(git: GitRunner = runGit): StampSource {
 	return {
 		capture: (root) => captureProvenance(root, { git }),
 		recheck: (root) => readWorktreeSource(root, { git }),
+	};
+}
+
+/** Shepherd's v1 provenance, read back from a stamp `legacyStampPolicy` captured. */
+export function provenanceOf(stamp: CapturedBuildStamp): BuildProvenance {
+	const { revision, dirty, sourceDirty } = stamp.provenance;
+	return {
+		revision: String(revision),
+		dirty: dirty === true,
+		sourceDirty: sourceDirty === true,
+		manifest: stamp.manifest,
+	};
+}
+
+/**
+ * The v1 Shepherd stamp as a `BuildStampPolicy`: the repository wrappers
+ * hand it to the compiler for `shepherd`, and only through this interface.
+ */
+export function legacyStampPolicy(
+	source: StampSource = gitStamp(),
+): BuildStampPolicy {
+	return {
+		async capture(context) {
+			const { manifest, ...facts } = await source.capture(context.consumerRoot);
+			return { manifest, provenance: { ...facts } };
+		},
+		recheck: (context) => source.recheck(context.consumerRoot),
+		versionLine: (_agentId, captured) => versionLine(provenanceOf(captured)),
 	};
 }
 
