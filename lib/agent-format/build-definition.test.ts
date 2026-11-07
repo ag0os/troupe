@@ -211,16 +211,25 @@ describe("O6 declaration roots", () => {
 	test("traversal and symlink escapes from the declaration root fail", async () => {
 		addAgent("outside.md");
 		symlinkSync(join(root, "outside.md"), join(root, "defs/link.md"));
-		for (const file of ["defs/../outside.md", "defs/link.md"]) {
-			const issues = await issuesOf(loadAgentDefinition(definition(), file));
-			expect(issues).toEqual([
-				{
-					file: "outside.md",
-					field: "path",
-					message: "declarations live under defs/",
-				},
-			]);
-		}
+		expect(
+			await issuesOf(loadAgentDefinition(definition(), "defs/../outside.md")),
+		).toEqual([
+			{
+				file: "outside.md",
+				field: "path",
+				message: "declarations live under defs/",
+			},
+		]);
+		// C11: a symlinked declaration is refused as such, wherever it leads.
+		expect(
+			await issuesOf(loadAgentDefinition(definition(), "defs/link.md")),
+		).toEqual([
+			{
+				file: "defs/link.md",
+				field: "path",
+				message: "a declaration must not be a symlink",
+			},
+		]);
 	});
 
 	test("duplicate IDs and unpaired TypeScript under the root are rejected", async () => {

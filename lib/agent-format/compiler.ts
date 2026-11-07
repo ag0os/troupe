@@ -415,6 +415,17 @@ async function loadResolved(
 ): Promise<LoadedAgent> {
 	const root = definition.root;
 	const repoRoot = realpathSync(root);
+	if (
+		lstatSync(resolve(root, file), { throwIfNoEntry: false })?.isSymbolicLink()
+	) {
+		throw new AgentSourceError([
+			{
+				file: relative(root, resolve(root, file)),
+				field: "path",
+				message: "a declaration must not be a symlink",
+			},
+		]);
+	}
 	const declaration = realpathOrSelf(resolve(root, file));
 	const display = relative(repoRoot, declaration);
 
@@ -521,6 +532,21 @@ async function loadResolved(
 	}
 	if (inspection.sideEffects.length > 0) {
 		throw new AgentSourceError(inspection.sideEffects);
+	}
+	const transitive = helperClosureProblems(
+		definition,
+		repoRoot,
+		realpathSync(sibling),
+		frameworkDirs,
+	);
+	if (transitive.length > 0) {
+		throw new AgentSourceError(
+			transitive.map((message) => ({
+				file: siblingDisplay,
+				field: "import",
+				message,
+			})),
+		);
 	}
 	return {
 		id,
@@ -672,6 +698,149 @@ function unestablishedModule(path: string): string | undefined {
 	return stat(join(path, "index.ts"))?.isFile()
 		? undefined
 		: "the directory has no index.ts";
+}
+
+/**
+ * The relative module specifiers a file's code loads, as written: static
+ * imports and re-exports that are not type-only, and literal dynamic
+ * `import()` or `require()`. A dynamic load whose specifier is not a
+ * string literal cannot be established and is reported in `opaque`.
+ */
+function relativeLoads(
+	file: string,
+	text: string,
+): { loads: { specifier: string; text: boolean }[]; opaque: string[] } {
+	const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+	const loads: { specifier: string; text: boolean }[] = [];
+	const opaque: string[] = [];
+	const isText = (attributes: ts.ImportAttributes | undefined) =>
+		attributes?.elements.some(
+			(element) =>
+				element.name.getText(source).replace(/["']/g, "") === "type" &&
+				ts.isStringLiteral(element.value) &&
+				element.value.text === "text",
+		) ?? false;
+	const visit = (node: ts.Node) => {
+		if (
+			ts.isImportDeclaration(node) &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			!node.importClause?.isTypeOnly
+		) {
+			loads.push({
+				specifier: node.moduleSpecifier.text,
+				text: isText(node.attributes),
+			});
+		} else if (
+			ts.isExportDeclaration(node) &&
+			node.moduleSpecifier &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			!node.isTypeOnly
+		) {
+			loads.push({ specifier: node.moduleSpecifier.text, text: false });
+		} else if (
+			ts.isCallExpression(node) &&
+			(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+				(ts.isIdentifier(node.expression) &&
+					node.expression.text === "require"))
+		) {
+			const [first] = node.arguments;
+			if (first && ts.isStringLiteralLike(first)) {
+				loads.push({ specifier: first.text, text: false });
+			} else {
+				const { line } = source.getLineAndCharacterOfPosition(node.getStart());
+				opaque.push(`${file}:${line + 1}`);
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	return {
+		loads: loads.filter(
+			(load) =>
+				load.specifier.startsWith("./") ||
+				load.specifier.startsWith("../") ||
+				load.specifier.startsWith("/") ||
+				load.specifier.startsWith("file:"),
+		),
+		opaque,
+	};
+}
+
+/**
+ * Problems in the transitive relative import closure of an accepted
+ * extension (C13). Every module an accepted helper loads by path is judged
+ * by the rules its direct imports are: one of the three established forms,
+ * real location under an extension code root, never in the compiler's own
+ * locations; text imports by the text-import rules. Absolute and `file:`
+ * specifiers and non-literal dynamic loads cannot be established and are
+ * refused. Bare package imports are not checked.
+ */
+function helperClosureProblems(
+	definition: ResolvedDefinition,
+	repoRoot: string,
+	extension: string,
+	codeRoots: readonly string[],
+): string[] {
+	const problems: string[] = [];
+	const seen = new Set<string>([extension]);
+	const queue = [extension];
+	const label = (path: string) => relative(repoRoot, path);
+	while (queue.length > 0) {
+		const file = queue.shift() as string;
+		const base = dirname(file);
+		const { loads, opaque } = relativeLoads(file, readFileSync(file, "utf8"));
+		for (const where of opaque) {
+			problems.push(
+				`${label(where)}: a dynamic load whose module cannot be established`,
+			);
+		}
+		for (const load of loads) {
+			const from = label(file);
+			if (!load.specifier.startsWith(".")) {
+				problems.push(
+					`${from}: import "${load.specifier}" names an absolute location; use a relative path`,
+				);
+				continue;
+			}
+			if (load.text) {
+				// The extension's own text imports were judged by inspection.
+				if (file === extension) continue;
+				const text = textImportProblem(
+					definition,
+					repoRoot,
+					base,
+					load.specifier,
+				);
+				if (text) problems.push(`${from}: ${text}`);
+				continue;
+			}
+			const target = resolve(base, load.specifier);
+			const unknown = unestablishedModule(target);
+			if (unknown) {
+				problems.push(
+					`${from}: value import "${load.specifier}": its selected module cannot be established (${unknown}); name the file explicitly`,
+				);
+				continue;
+			}
+			const module = moduleFile(target) as string;
+			if (!codeRoots.some((dir) => isInside(dir, module))) {
+				problems.push(
+					`${from}: value import "${load.specifier}" resolves outside ${listRoots(definition.extensionCodeRoots, "and")}`,
+				);
+				continue;
+			}
+			const owned = ownedProblem(definition.owned, module);
+			if (owned) {
+				problems.push(`${from}: value import "${load.specifier}" ${owned}`);
+				continue;
+			}
+			if (!seen.has(module)) {
+				seen.add(module);
+				queue.push(module);
+			}
+		}
+	}
+	return problems;
 }
 
 /** Strictly beneath `dir`; `dir` itself is not inside. */
@@ -1593,6 +1762,14 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 					: undefined;
 			if (!kind) continue;
 			const file = relative(root, full);
+			if (kind === found.markdown && entry.isSymbolicLink()) {
+				found.issues.push({
+					file,
+					field: "path",
+					message: "a declaration must not be a symlink",
+				});
+				continue;
+			}
 			const id = toBinaryName(declarationCoordinate(full), root, realAgents);
 			const previous = kind.get(id);
 			if (previous) {
@@ -1614,7 +1791,7 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
  * A source path in the declaration root's canonical coordinate: its
  * directory canonicalized, its own name kept. Naming and membership compare
  * this with the canonical declaration root. A declaration file that is
- * itself a symlink keeps its link name here (C11 decides that policy).
+ * itself a symlink is refused by discovery and loading.
  */
 function declarationCoordinate(path: string): string {
 	return join(canonical(dirname(path)), basename(path));
