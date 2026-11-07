@@ -1222,3 +1222,275 @@ describe("watcher filter in canonical coordinates (O18)", () => {
 		});
 	}
 });
+
+describe("consumed inputs in owned locations (R1)", () => {
+	test("an include consumed from inside outDir is refused and survives a build", async () => {
+		write("prompts/generated/p.md", "Generated prompt\n");
+		addAgent("defs/a.md", "includes: [../prompts/generated/p.md]\n");
+		const failure = await publish({
+			definition: definition({
+				roster: ["a"],
+				includeRoots: ["prompts"],
+				outDir: "prompts/generated",
+			}),
+			build: fakeBuilder(),
+		}).then(
+			() => undefined,
+			(error) => error,
+		);
+		expect(failure).toBeInstanceOf(AgentSourceError);
+		expect((failure as AgentSourceError).issues).toEqual([
+			{
+				file: "defs/a.md",
+				line: 4,
+				field: "includes[0]",
+				message:
+					'"../prompts/generated/p.md" lies inside the output directory "prompts/generated"',
+			},
+		]);
+		expect(readFileSync(join(root, "prompts/generated/p.md"), "utf8")).toBe(
+			"Generated prompt\n",
+		);
+	});
+
+	test("a helper imported from inside outDir is refused", async () => {
+		write("tools/gen/h.ts", "export const greeting = 'hi';\n");
+		addAgent("defs/a.md");
+		write(
+			"defs/a.ts",
+			'import { greeting } from "../tools/gen/h.ts";\nexport function prepare() {\n\treturn { prompt: greeting };\n}\n',
+		);
+		const issues = await issuesOf(
+			loadAgentDefinition(
+				definition({ extensionCodeRoots: ["tools"], outDir: "tools/gen" }),
+				"defs/a.md",
+			),
+		);
+		expect(issues.map((issue) => [issue.field, issue.message])).toEqual([
+			[
+				"top-level",
+				'value import "../tools/gen/h.ts" lies inside the output directory "tools/gen"; extensions must not run code on import',
+			],
+		]);
+	});
+
+	test("a text import from a temporary build name beside outDir is refused", async () => {
+		write(".troupe-build-keep/p.md", "Text\n");
+		addAgent("defs/a.md");
+		write(
+			"defs/a.ts",
+			'import text from "../.troupe-build-keep/p.md" with { type: "text" };\nexport function prepare() {\n\treturn {};\n}\n',
+		);
+		const issues = await issuesOf(
+			loadAgentDefinition(
+				definition({ extensionTextRoots: ["."], outDir: "out" }),
+				"defs/a.md",
+			),
+		);
+		expect(issues.map((issue) => issue.message)).toEqual([
+			'text import "../.troupe-build-keep/p.md" lies inside the temporary build directory .troupe-build-keep beside the output directory "out"; extensions must not run code on import',
+		]);
+	});
+
+	test("a declaration root containing outDir neither loads nor discovers inside it", async () => {
+		addAgent("out/x.md");
+		write("out/y.ts", "export const stray = 1;\n");
+		write(".troupe-build-z/entries/x.ts", "export const entry = 1;\n");
+		const def = definition({ roster: [], declarationRoot: ".", outDir: "out" });
+		const issues = await issuesOf(loadAgentDefinition(def, "out/x.md"));
+		expect(issues).toEqual([
+			{
+				file: "out/x.md",
+				field: "path",
+				message: 'declaration lies inside the output directory "out"',
+			},
+		]);
+		const plan = await planBuild({ definition: def });
+		expect(plan.entries).toEqual([]);
+	});
+});
+
+describe("one temporary parent (R2)", () => {
+	beforeEach(() => {
+		mkdirSync(join(root, "generated/bin"), { recursive: true });
+		symlinkSync(join(root, "generated/bin"), join(root, "out"));
+	});
+
+	test("publication, resolution and the watcher agree on a symlinked outDir's temp parent", async () => {
+		addAgent("defs/a.md");
+		const seen: BuildRequest[] = [];
+		await publish({
+			definition: definition({ roster: ["a"] }),
+			build: fakeBuilder(seen),
+		});
+		// mkdtemp used the consumer root, the parent of the lexical outDir.
+		expect(dirname(seen[0]?.cwd ?? "")).toStartWith(
+			join(root, ".troupe-build-"),
+		);
+		expect(readFileSync(join(root, "generated/bin/a"), "utf8")).toBe(
+			"binary for defs/a.md\n",
+		);
+
+		const refused = await issuesOf(
+			planBuild({
+				definition: definition({
+					roster: [],
+					includeRoots: [".troupe-build-x"],
+				}),
+			}),
+		);
+		expect(refused.map((issue) => issue.field)).toEqual(["includeRoots"]);
+		await planBuild({
+			definition: definition({
+				roster: ["a"],
+				includeRoots: ["generated/.troupe-build-x"],
+			}),
+		});
+
+		const fake = fakeWatch();
+		let runs = 0;
+		const watcher = startWatcher({
+			definition: definition({ roster: [], watchRoots: ["."] }),
+			watch: fake.watch,
+			debounceMs: 1,
+			rebuild: async () => {
+				runs++;
+			},
+		});
+		mkdirSync(join(root, ".troupe-build-abc/bin"), { recursive: true });
+		fake.emit(root, ".troupe-build-abc");
+		fake.emit(root, ".troupe-build-abc/bin/a");
+		fake.emit(root, "out/a");
+		fake.emit(root, "generated/bin/a");
+		rmSync(join(root, ".troupe-build-abc"), { recursive: true });
+		fake.emit(root, ".troupe-build-abc");
+		await sleep(20);
+		expect(runs).toBe(0);
+		fake.emit(root, "defs/a.md");
+		await sleep(20);
+		await watcher.queue.idle();
+		expect(runs).toBe(1);
+		watcher.close();
+	});
+});
+
+describe("one declaration coordinate (R3)", () => {
+	test("the alias and its real target name the same agent everywhere", async () => {
+		mkdirSync(join(root, "sources/team"), { recursive: true });
+		rmSync(join(root, "defs"), { recursive: true });
+		symlinkSync(join(root, "sources"), join(root, "defs"));
+		addAgent("defs/team/a.md");
+		const def = definition({ roster: ["team:a"] });
+		const loaded = await loadAgentDefinition(def, "defs/team/a.md");
+		expect(loaded.file).toBe("sources/team/a.md");
+		for (const path of ["defs/team/a.md", "sources/team/a.md", loaded.file]) {
+			expect([path, resolveAgentName(def, path, root)]).toEqual([
+				path,
+				"team:a",
+			]);
+		}
+		expect(resolveAgentName(def, "elsewhere/team/a.md", root)).toBe(
+			"elsewhere/team/a.md",
+		);
+		const plan = await planBuild({ definition: def });
+		expect(plan.entries.map((entry) => [entry.id, entry.source])).toEqual([
+			["team:a", "defs/team/a.md"],
+		]);
+		mkdirSync(join(root, "out"));
+		const built = await compileAgent({
+			definition: def,
+			file: "sources/team/a.md",
+			outFile: "out/team:a",
+			build: fakeBuilder(),
+		});
+		expect(built.id).toBe("team:a");
+	});
+
+	test("compileAgent through the real path still stamps Shepherd first", async () => {
+		mkdirSync(join(root, "sources"), { recursive: true });
+		rmSync(join(root, "defs"), { recursive: true });
+		symlinkSync(join(root, "sources"), join(root, "defs"));
+		addAgent("defs/shepherd.md");
+		mkdirSync(join(root, "out"));
+		const order: string[] = [];
+		const built = await compileAgent({
+			definition: definition(),
+			file: "sources/shepherd.md",
+			outFile: "out/shepherd",
+			stamp: {
+				capture: () => {
+					order.push("capture");
+					return fakeProvenance;
+				},
+				recheck: () => fakeProvenance.manifest,
+			},
+			build: async (request) => {
+				order.push("build");
+				writeFileSync(request.outFile, "x");
+			},
+		});
+		expect(built.id).toBe("shepherd");
+		expect(order).toEqual(["capture", "build"]);
+	});
+});
+
+describe("local/ exclusion (R4)", () => {
+	test("a symlinked local/ is excluded wherever its events arrive", async () => {
+		mkdirSync(join(root, "private"));
+		symlinkSync(join(root, "private"), join(root, "defs/local"));
+		const fake = fakeWatch();
+		let runs = 0;
+		const watcher = startWatcher({
+			definition: definition({ roster: [], watchRoots: ["."] }),
+			watch: fake.watch,
+			debounceMs: 1,
+			rebuild: async () => {
+				runs++;
+			},
+		});
+		fake.emit(root, "private/p.md");
+		fake.emit(root, "defs/local/p.md");
+		await sleep(20);
+		expect(runs).toBe(0);
+		fake.emit(root, "defs/p.md");
+		await sleep(20);
+		await watcher.queue.idle();
+		expect(runs).toBe(1);
+		watcher.close();
+	});
+
+	test("a configured input or watch root under local/ is refused, naming it", async () => {
+		mkdirSync(join(root, "private"));
+		symlinkSync(join(root, "private"), join(root, "defs/local"));
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({
+					roster: [],
+					includeRoots: ["defs/local"],
+					extensionTextRoots: ["private"],
+					watchRoots: ["defs/local/watched"],
+				}),
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				file: "defs/local",
+				field: "includeRoots",
+				message:
+					'root "defs/local" lies inside defs/local/, which is never compiled or watched',
+			},
+			{
+				file: "private",
+				field: "extensionTextRoots",
+				message:
+					'root "private" lies inside defs/local/, which is never compiled or watched',
+			},
+			{
+				file: "defs/local/watched",
+				field: "watchRoots",
+				message:
+					'root "defs/local/watched" lies inside defs/local/, which is never compiled or watched',
+			},
+		]);
+	});
+});

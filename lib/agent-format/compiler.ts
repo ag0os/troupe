@@ -91,6 +91,11 @@ export interface InspectOptions {
 	 * it, every text import is rejected.
 	 */
 	textImportProblem?: (specifier: string) => string | undefined;
+	/**
+	 * Why a relative value import must be refused whatever its root, such as
+	 * a module inside the compiler's own output, or undefined.
+	 */
+	importProblem?: (specifier: string) => string | undefined;
 	/** Code roots named in import diagnostics. Defaults to `FRAMEWORK_DIRS`. */
 	codeRoots?: readonly string[];
 	/** Text roots named in import diagnostics. Defaults to `TEXT_IMPORT_DIR`. */
@@ -140,6 +145,45 @@ export type AgentSourceDefinition = Omit<AgentBuildDefinition, "roster"> & {
 interface ConfiguredRoot {
 	path: string;
 	label: string;
+	/** `canonical(path)`: the coordinate membership and naming use. */
+	real: string;
+}
+
+/** Temporary build directory names the compiler creates beside its outputs. */
+const TEMPORARY_BUILD = /^\.(troupe|agent)-build-/;
+
+/**
+ * The parent `publish` really creates its `.troupe-build-*` directory in:
+ * `mkdtemp(join(dirname(outDir), ...))` resolves `dirname(outDir)`, so the
+ * parent is the canonical form of that, not the parent of the canonical
+ * output directory (they differ when `outDir` itself is a symlink).
+ */
+function temporaryParent(outDir: string): string {
+	return canonical(dirname(outDir));
+}
+
+/**
+ * The compiler's own locations, in canonical coordinates: the output
+ * directory, which pruning empties of every non-roster entry, and the
+ * temporary build directories beside it. Inputs there would be destroyed
+ * or their changes ignored by the watcher.
+ */
+interface OwnedLocations {
+	realOut: string;
+	tempParent: string;
+	outLabel: string;
+}
+
+/** Why `real` (a canonical path) is the compiler's own, or undefined. */
+function ownedProblem(owned: OwnedLocations, real: string): string | undefined {
+	if (isWithin(owned.realOut, real)) {
+		return `lies inside the output directory "${owned.outLabel}"`;
+	}
+	if (!isInside(owned.tempParent, real)) return undefined;
+	const first = relative(owned.tempParent, real).split(sep)[0] ?? "";
+	return TEMPORARY_BUILD.test(first)
+		? `lies inside the temporary build directory ${first} beside the output directory "${owned.outLabel}"`
+		: undefined;
 }
 
 /** An `AgentBuildDefinition` with every path absolute and every default applied. */
@@ -151,6 +195,7 @@ interface ResolvedDefinition {
 	extensionTextRoots: ConfiguredRoot[];
 	roster?: readonly string[];
 	outDir: string;
+	owned: OwnedLocations;
 	watchRoots: string[];
 	/** Read when pruning is decided, not when the definition is resolved. */
 	protectedOutputs(): ReadonlySet<string>;
@@ -194,7 +239,7 @@ function resolveDefinition(
 		} else {
 			checked.push({ field, path, real });
 		}
-		return { path: absolute, label: relative(root, absolute) || "." };
+		return { path: absolute, label: relative(root, absolute) || ".", real };
 	};
 	const declarationRoot = configured(
 		"declarationRoot",
@@ -223,8 +268,15 @@ function resolveDefinition(
 				),
 			];
 	const outDir = resolve(root, source.outDir ?? "bin");
-	const realOut = canonical(outDir);
-	const outLabel = source.outDir ?? "bin";
+	const owned: OwnedLocations = {
+		realOut: canonical(outDir),
+		tempParent: temporaryParent(outDir),
+		outLabel: source.outDir ?? "bin",
+	};
+	const { realOut, outLabel } = owned;
+	// The declaration root's local/ is never compiled or watched, so a
+	// configured input or watch root there would be read but never rebuilt.
+	const realLocal = canonical(join(declarationRoot.path, "local"));
 	if (isWithin(realOut, realRoot)) {
 		issues.push({
 			file: outLabel,
@@ -233,13 +285,11 @@ function resolveDefinition(
 		});
 	} else {
 		for (const entry of checked) {
-			const beside = relative(dirname(realOut), entry.real).split(sep)[0] ?? "";
-			const problem = isWithin(realOut, entry.real)
-				? `lies inside the output directory "${outLabel}"`
-				: isWithin(dirname(realOut), entry.real) &&
-						/^\.(troupe|agent)-build-/.test(beside)
-					? `lies inside the temporary build directory ${beside} beside the output directory "${outLabel}"`
-					: undefined;
+			const problem =
+				ownedProblem(owned, entry.real) ??
+				(entry.field !== "declarationRoot" && isWithin(realLocal, entry.real)
+					? `lies inside ${declarationRoot.label}/local/, which is never compiled or watched`
+					: undefined);
 			if (problem) {
 				issues.push({
 					file: entry.path,
@@ -259,6 +309,7 @@ function resolveDefinition(
 		extensionTextRoots,
 		roster: source.roster,
 		outDir,
+		owned,
 		watchRoots,
 		protectedOutputs: () => new Set(source.protectedOutputs ?? []),
 	};
@@ -334,6 +385,16 @@ async function loadResolved(
 			},
 		]);
 	}
+	const declarationOwned = ownedProblem(definition.owned, declaration);
+	if (declarationOwned) {
+		throw new AgentSourceError([
+			{
+				file: display,
+				field: "path",
+				message: `declaration ${declarationOwned}`,
+			},
+		]);
+	}
 
 	const parsed = parseAgentMarkdown(
 		display,
@@ -354,6 +415,16 @@ async function loadResolved(
 	if (!existsSync(sibling)) return { id, file: display, spec };
 
 	const siblingDisplay = relative(repoRoot, sibling);
+	const siblingOwned = ownedProblem(definition.owned, realpathSync(sibling));
+	if (siblingOwned) {
+		throw new AgentSourceError([
+			{
+				file: siblingDisplay,
+				field: "path",
+				message: `extension ${siblingOwned}`,
+			},
+		]);
+	}
 	// Bun resolves an extension's imports from its real location, so the
 	// checks do too; a symlinked extension is judged where it really lives.
 	const importBase = dirname(realpathSync(sibling));
@@ -370,6 +441,14 @@ async function loadResolved(
 				),
 			textImportProblem: (specifier) =>
 				textImportProblem(definition, repoRoot, importBase, specifier),
+			importProblem: (specifier) => {
+				const found = moduleCandidates(resolve(importBase, specifier)).find(
+					(candidate) => existsSync(candidate),
+				);
+				const owned =
+					found && ownedProblem(definition.owned, realpathSync(found));
+				return owned ? `value import "${specifier}" ${owned}` : undefined;
+			},
 			codeRoots: definition.extensionCodeRoots.map((entry) => entry.label),
 			textRoots: definition.extensionTextRoots.map((entry) => entry.label),
 		},
@@ -434,6 +513,11 @@ async function readIncludes(
 			);
 			continue;
 		}
+		const owned = ownedProblem(definition.owned, real);
+		if (owned) {
+			issue(`"${include}" ${owned}`);
+			continue;
+		}
 		try {
 			texts.push({
 				path: relative(repoRoot, real),
@@ -475,6 +559,8 @@ function textImportProblem(
 	if (!realRoots(repoRoot, roots).some((dir) => isInside(dir, real))) {
 		return `text import "${specifier}" resolves outside ${listRoots(roots, "and")}`;
 	}
+	const owned = ownedProblem(definition.owned, real);
+	if (owned) return `text import "${specifier}" ${owned}`;
 	return undefined;
 }
 
@@ -513,6 +599,7 @@ export function inspectExtension(
 ): ExtensionInspection {
 	const rules: ImportRules = {
 		codeRoots: options.codeRoots ?? FRAMEWORK_DIRS,
+		importProblem: options.importProblem ?? (() => undefined),
 		textRoots: options.textRoots ?? [TEXT_IMPORT_DIR],
 		isFrameworkImport: options.isFrameworkImport ?? (() => false),
 		textImportProblem:
@@ -789,9 +876,10 @@ function importProblem(
 	if (statement.attributes) {
 		return textImportShapeProblem(statement, specifier, rules);
 	}
-	if (isBareSpecifier(specifier) || rules.isFrameworkImport(specifier)) {
-		return undefined;
-	}
+	if (isBareSpecifier(specifier)) return undefined;
+	const owned = rules.importProblem(specifier);
+	if (owned) return owned;
+	if (rules.isFrameworkImport(specifier)) return undefined;
 	return `value import from "${specifier}" (only ${joinList(["packages", "builtins", ...rules.codeRoots], "and")} may be imported)`;
 }
 
@@ -1094,9 +1182,9 @@ export async function compileAgent(options: {
 	const stamp = options.stamp ?? gitStamp();
 	const early =
 		toBinaryName(
-			resolve(root, options.file),
+			declarationCoordinate(resolve(root, options.file)),
 			root,
-			definition.declarationRoot.path,
+			definition.declarationRoot.real,
 		) === SHEPHERD_ID
 			? await settle(() => stamp.capture(root))
 			: undefined;
@@ -1313,6 +1401,7 @@ interface DiscoveredSources {
 function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 	const root = definition.root;
 	const agentsDir = definition.declarationRoot.path;
+	const realAgents = definition.declarationRoot.real;
 	const found: DiscoveredSources = {
 		markdown: new Map(),
 		typescript: new Map(),
@@ -1324,6 +1413,9 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 			const full = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (dir === agentsDir && entry.name === "local") continue;
+				// The compiler's own output and temporary directories hold no
+				// sources, even under a declaration root that contains them.
+				if (ownedProblem(definition.owned, canonical(full))) continue;
 				walk(full);
 				continue;
 			}
@@ -1334,7 +1426,7 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 					: undefined;
 			if (!kind) continue;
 			const file = relative(root, full);
-			const id = toBinaryName(full, root, agentsDir);
+			const id = toBinaryName(declarationCoordinate(full), root, realAgents);
 			const previous = kind.get(id);
 			if (previous) {
 				found.issues.push({
@@ -1349,6 +1441,16 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 	};
 	if (existsSync(agentsDir)) walk(agentsDir);
 	return found;
+}
+
+/**
+ * A source path in the declaration root's canonical coordinate: its
+ * directory canonicalized, its own name kept. Naming and membership compare
+ * this with the canonical declaration root. A declaration file that is
+ * itself a symlink keeps its link name here (C11 decides that policy).
+ */
+function declarationCoordinate(path: string): string {
+	return join(canonical(dirname(path)), basename(path));
 }
 
 function expectedSource(definition: ResolvedDefinition, id: string): string {
@@ -1372,15 +1474,16 @@ export function resolveAgentName(
 	}
 	const resolved = resolveDefinition(definition);
 	const root = resolved.root;
-	const agentsDir = resolved.declarationRoot.path;
+	const realAgents = resolved.declarationRoot.real;
 	// A path outside the declaration root is not an agent source: keep it as
 	// given so the roster check rejects it instead of mapping it to a
-	// same-named agent.
+	// same-named agent. Both the configured alias and its real target count.
 	const path = resolve(cwd, argument);
-	if (!isInside(agentsDir, path)) {
+	const coordinate = declarationCoordinate(path);
+	if (!isInside(realAgents, coordinate)) {
 		return relative(root, path);
 	}
-	return toBinaryName(path, root, agentsDir);
+	return toBinaryName(coordinate, root, realAgents);
 }
 
 /**
@@ -1873,15 +1976,12 @@ export function startWatcher(options: WatcherOptions): {
 		});
 	// Events are judged in canonical coordinates, so a watch root reached
 	// through a symlink filters the same paths as the real one.
-	const realOut = canonical(outDir);
-	const realLocal = join(canonical(definition.declarationRoot.path), "local");
+	// The same owned locations resolution refuses inputs in, and the whole
+	// local/ path canonicalized, so a symlinked local/ is excluded too.
+	const realLocal = canonical(join(definition.declarationRoot.path, "local"));
 	const ignored = (path: string) =>
-		isWithin(realOut, path) ||
-		isWithin(realLocal, path) ||
-		(isInside(dirname(realOut), path) &&
-			/^\.(troupe|agent)-build-/.test(
-				relative(dirname(realOut), path).split(sep)[0] ?? "",
-			));
+		ownedProblem(definition.owned, path) !== undefined ||
+		isWithin(realLocal, path);
 	const queue = createSerialQueue(rebuild);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const schedule = () => {
