@@ -175,6 +175,7 @@
 		"scripts/eval-source.ts",
 		"scripts/install-forms.test.ts",
 		"scripts/resolution.ts",
+		"scripts/shared-core.test.ts",
 		"scripts/shepherd-definition.ts",
 		"scripts/watch.ts",
 		"tsconfig.json"
