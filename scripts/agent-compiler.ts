@@ -14,21 +14,22 @@ import {
 	type AgentBuildDefinition,
 	type Builder,
 	type BuildPlan,
-	FRAMEWORK_DIRS,
+	type ExtensionInspection,
 	INCLUDE_ROOTS,
+	type InspectOptions,
 	type PublishOptions as LibPublishOptions,
 	type PublishResult as LibPublishResult,
 	type WatcherOptions as LibWatcherOptions,
 	type LoadedAgent,
 	compileAgent as libCompileAgent,
 	generateEntry as libGenerateEntry,
+	inspectExtension as libInspectExtension,
 	loadAgentDefinition as libLoadAgentDefinition,
 	planBuild as libPlanBuild,
 	publish as libPublish,
 	resolveAgentName as libResolveAgentName,
 	startWatcher as libStartWatcher,
 	protectedBinaries,
-	ROSTER,
 	TEXT_IMPORT_DIR,
 	WATCH_ROOTS,
 } from "../lib/agent-format/compiler";
@@ -42,6 +43,47 @@ import {
 } from "./shepherd-source";
 
 export * from "../lib/agent-format/compiler";
+
+/** Directories whose modules extensions may import by relative path. */
+export const FRAMEWORK_DIRS = ["lib/agent-format", "lib/shepherd"] as const;
+
+/** The fixed 22-agent roster (D-008, D-036). */
+export const ROSTER = [
+	"analyze:orient",
+	"build:builder",
+	"build:comment-review",
+	"build:refactor",
+	"build:tdd",
+	"design:architect",
+	"design:audit",
+	"design:designer",
+	"design:diagram:all",
+	"design:diagram:consolidate",
+	"design:diagram:topic",
+	"git:fix",
+	"meta:prompt",
+	"modes:contain",
+	"plan:planner",
+	"plan:riff",
+	"rails:backlog",
+	"resume:tailor",
+	"review:pr",
+	"shepherd",
+	"tools:webfetch",
+	"tutors:coach",
+] as const;
+
+/** The library's inspection, naming `FRAMEWORK_DIRS` in diagnostics by default. */
+export function inspectExtension(
+	file: string,
+	text: string,
+	options: InspectOptions = {},
+): ExtensionInspection {
+	return libInspectExtension(file, text, {
+		...options,
+		codeRoots: options.codeRoots ?? FRAMEWORK_DIRS,
+	});
+}
 
 /**
  * The repository's build definition for `root`. Protected outputs are read

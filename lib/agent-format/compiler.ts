@@ -52,9 +52,6 @@ import {
 /** Roots an include's realpath must stay under (D-027). */
 export const INCLUDE_ROOTS = ["agents", "system-prompts"] as const;
 
-/** Directories whose modules extensions may import by relative path. */
-export const FRAMEWORK_DIRS = ["lib/agent-format", "lib/shepherd"] as const;
-
 /** Directory whose files extensions may import as text. */
 export const TEXT_IMPORT_DIR = "system-prompts";
 
@@ -90,7 +87,7 @@ export interface InspectOptions {
 	 * a module inside the compiler's own output, or undefined.
 	 */
 	importProblem?: (specifier: string) => string | undefined;
-	/** Code roots named in import diagnostics. Defaults to `FRAMEWORK_DIRS`. */
+	/** Code roots named in import diagnostics. Defaults to none. */
 	codeRoots?: readonly string[];
 	/** Text roots named in import diagnostics. Defaults to `TEXT_IMPORT_DIR`. */
 	textRoots?: readonly string[];
@@ -909,7 +906,7 @@ export function inspectExtension(
 	options: InspectOptions = {},
 ): ExtensionInspection {
 	const rules: ImportRules = {
-		codeRoots: options.codeRoots ?? FRAMEWORK_DIRS,
+		codeRoots: options.codeRoots ?? [],
 		importProblem: options.importProblem ?? (() => undefined),
 		textRoots: options.textRoots ?? [TEXT_IMPORT_DIR],
 		isFrameworkImport: options.isFrameworkImport ?? (() => false),
@@ -1707,32 +1704,6 @@ async function bunBuild(options: BuildRequest): Promise<void> {
 // ---------------------------------------------------------------------------
 // Roster discovery, strict source selection and publication (D-011, D-017,
 // D-023).
-
-/** The fixed 22-agent roster (D-008, D-036). */
-export const ROSTER = [
-	"analyze:orient",
-	"build:builder",
-	"build:comment-review",
-	"build:refactor",
-	"build:tdd",
-	"design:architect",
-	"design:audit",
-	"design:designer",
-	"design:diagram:all",
-	"design:diagram:consolidate",
-	"design:diagram:topic",
-	"git:fix",
-	"meta:prompt",
-	"modes:contain",
-	"plan:planner",
-	"plan:riff",
-	"rails:backlog",
-	"resume:tailor",
-	"review:pr",
-	"shepherd",
-	"tools:webfetch",
-	"tutors:coach",
-] as const;
 
 /** The only directories the watcher watches and includes may resolve into. */
 export const WATCH_ROOTS = INCLUDE_ROOTS;

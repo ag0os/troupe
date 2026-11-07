@@ -606,9 +606,16 @@ describe("staged distribution", () => {
 		for (const file of closure.files) {
 			expect(file).not.toMatch(/shepherd/i);
 		}
-		for (const member of manifest.members) {
-			const text = readFileSync(join(dist, member.path), "utf8");
-			expect(text).not.toMatch(/from\s+["'][^"']*shepherd/i);
+		// Nor does any staged text name it, comments and data included.
+		const files = readdirSync(dist, { recursive: true, withFileTypes: true })
+			.filter((entry) => entry.isFile())
+			.map((entry) => join(entry.parentPath, entry.name));
+		expect(files).toHaveLength(manifest.members.length + 2);
+		for (const file of files) {
+			expect({
+				file,
+				named: /shepherd/i.test(readFileSync(file, "utf8")),
+			}).toEqual({ file, named: false });
 		}
 	});
 

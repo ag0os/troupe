@@ -175,7 +175,7 @@ export interface SourceTree {
  * `/`. Every listed file must exist; trees may be absent.
  */
 export interface SourceInputDefinition {
-	/** Logical namespace, such as `framework/troupe` or `package/shepherd`. */
+	/** Logical namespace, such as `framework/troupe` or `package/<name>`. */
 	origin: string;
 	/** The origin's directory on disk. */
 	root: string;
