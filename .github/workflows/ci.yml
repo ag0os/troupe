@@ -19,7 +19,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
-          bun-version: latest
+          bun-version: 1.2.22
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -29,10 +29,27 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
+      # Stage Troupe and run the extracted package's frozen install before
+      # any root check (scripts/setup-extractions.ts).
+      - name: Set up extractions
+        run: bun run setup:extractions
+
       - name: TypeScript + Biome checks
         run: bun run check:all
 
       - name: Tests
+        run: bun test
+
+      - name: Package typecheck
+        working-directory: extractions/shepherd
+        run: bun run typecheck
+
+      - name: Package Biome
+        working-directory: extractions/shepherd
+        run: bun run check
+
+      - name: Package tests
+        working-directory: extractions/shepherd
         run: bun test
 
   # The informational Shepherd evals check (docs/SHEPHERD-EVALS.md). Evals
@@ -57,7 +74,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
-          bun-version: latest
+          bun-version: 1.2.22
 
       - name: Setup Python
         uses: actions/setup-python@v5
