@@ -23,4 +23,5 @@ test("a configured declaration root replaces agents/", () => {
 		"ns:a",
 	);
 	expect(toBinaryName("/repo/agents/ns/a.md", "/repo", "/repo/defs")).toBe("a");
+	expect(toBinaryName("/repo/..x/a.md", "/repo", "/repo/..x")).toBe("a");
 });

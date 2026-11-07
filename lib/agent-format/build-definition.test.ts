@@ -31,9 +31,11 @@ import {
 	resolveAgentName,
 	startWatcher,
 } from "../entries/compiler";
-import { PROMPT_SEPARATOR } from "../entries/declaration";
-import { toBinaryName } from "./binary-name";
-import { AgentSourceError, type SourceIssue } from "./errors";
+import {
+	AgentSourceError,
+	PROMPT_SEPARATOR,
+	type SourceIssue,
+} from "../entries/declaration";
 
 // O3, O6 to O10, O12, O18 through the public `troupe/compiler` entry, with a
 // consumer whose declarations live outside `agents/`. Fixtures only.
@@ -277,8 +279,6 @@ describe("O6 declaration roots", () => {
 		);
 		expect(issue?.field).toBe("id");
 		expect(issue?.message).toStartWith('"..x:b" is not a valid agent id');
-		expect(toBinaryName("/r/agents/..x/a.md", "/r")).toBe("..x:a");
-		expect(toBinaryName("/r/..x/a.md", "/r", "/r/..x")).toBe("a");
 	});
 });
 
@@ -458,6 +458,38 @@ describe("O9 text roots and static inspection", () => {
 		}
 	});
 
+	test("loading and planning never run a sentinel-writing extension", async () => {
+		const sentinel = join(root, "sentinel");
+		addAgent("defs/a.md");
+		write(
+			"defs/a.ts",
+			[
+				'import { writeFileSync } from "node:fs";',
+				`writeFileSync(${JSON.stringify(sentinel)}, "ran");`,
+				"export function prepare() {",
+				"\treturn {};",
+				"}",
+			].join("\n"),
+		);
+		const loaded = await issuesOf(loadAgentDefinition(def(), "defs/a.md"));
+		const planned = await issuesOf(
+			planBuild({ definition: { ...def(), roster: ["a"] } }),
+		);
+		for (const issues of [loaded, planned]) {
+			expect(issues).toEqual([
+				{
+					file: "defs/a.ts",
+					line: 2,
+					field: "top-level",
+					message: expect.stringContaining(
+						"extensions must not run code on import",
+					),
+				},
+			]);
+		}
+		expect(existsSync(sentinel)).toBe(false);
+	});
+
 	test("inspection never runs the module and rejects import-time work", () => {
 		const sentinel = join(root, "sentinel");
 		const inspection = inspectExtension(
@@ -547,6 +579,16 @@ describe("O10 roster", () => {
 		addAgent("defs/a.md");
 		const { roster: _, ...unrostered } = definition();
 		const bare = unrostered as AgentBuildDefinition;
+		// R7 at compile time: a definition without a roster does not typecheck.
+		const typeOnly = () => {
+			// @ts-expect-error roster is required
+			void planBuild({ definition: unrostered });
+			// @ts-expect-error roster is required
+			void publish({ definition: unrostered });
+			// @ts-expect-error roster is required
+			startWatcher({ definition: unrostered });
+		};
+		expect(typeof typeOnly).toBe("function");
 		await expect(planBuild({ definition: bare })).rejects.toThrow(
 			"the build definition must name its roster",
 		);
