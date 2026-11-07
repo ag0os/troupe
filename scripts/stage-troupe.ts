@@ -12,6 +12,11 @@
  * changed bytes in an existing member need no reinstall, but an added member
  * appears in the consumer only after it reinstalls.
  *
+ * Do not restage while a consumer build runs. A stamp policy that hashes the
+ * installed distribution compares identity once, after every binary is built
+ * and before the first rename: a change still present then refuses
+ * publication, but one reverted earlier or made later goes undetected.
+ *
  * Usage:
  *   bun scripts/stage-troupe.ts [--out <dir>]
  *   (default: extractions/.troupe-dist/troupe)
