@@ -6,13 +6,16 @@ import {
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
+import { installFakeClis, readRecords } from "../lib/agent-format/fake-cli";
 import { relativeClosure } from "./import-closure";
 import { readSurface, surfaceModule } from "./stage-surface";
 import {
@@ -324,6 +327,98 @@ console.log(
 );
 `;
 
+// O3, O11, O18 and C1: a consumer build script compiles its own agents
+// through troupe/compiler with the real Bun builder, from an unrelated
+// working directory, with declarations outside agents/.
+const BUILD = `import {
+	type AgentBuildDefinition,
+	describePublishFailure,
+	generateEntry,
+	planBuild,
+	publish,
+	startWatcher,
+} from "troupe/compiler";
+
+// The builder must find the runtime's packages on its own.
+delete process.env.NODE_PATH;
+const [consumerRoot, mode, outDir] = process.argv.slice(2);
+if (!consumerRoot || !mode || !outDir) throw new Error("usage");
+const definition: AgentBuildDefinition = {
+	consumerRoot,
+	declarationRoot: "defs",
+	includeRoots: ["defs", "prompts"],
+	roster: ["greet:hello"],
+	outDir,
+	watchRoots: ["defs", "prompts"],
+};
+try {
+	if (mode === "entry") {
+		const plan = await planBuild({ definition });
+		const [entry] = plan.entries;
+		if (!entry) throw new Error("no entry");
+		console.log(generateEntry(entry.agent));
+	} else if (mode === "publish") {
+		const result = await publish({ definition });
+		console.log(JSON.stringify(result));
+	} else {
+		const changes: string[] = [];
+		const watched: string[] = [];
+		const closed: string[] = [];
+		const watcher = startWatcher({
+			definition,
+			watch: (dir) => {
+				watched.push(dir);
+				return { close: () => closed.push(dir) };
+			},
+			debounceMs: 20,
+			log: (line) => changes.push(line),
+		});
+		await watcher.queue.request();
+		watcher.close();
+		console.log(JSON.stringify({ roots: watcher.roots, watched, closed, changes }));
+	}
+} catch (error) {
+	console.error(describePublishFailure(error, "out/"));
+	process.exit(1);
+}
+`;
+
+const HELLO = `---
+description: A consumer's nested agent.
+backends: [claude, codex]
+mode: print
+includes:
+  - ../../prompts/guide.md
+---
+Say hello from defs.
+`;
+
+const HELLO_EXTENSION = `export function dispatch(argv: readonly string[]) {
+	return argv[0] === "tool"
+		? { exec: { file: "/bin/sh", args: ["-c", "exit 7"], cwd: "/", env: {} } }
+		: undefined;
+}
+
+export function prepare() {
+	return {};
+}
+`;
+
+/** Path, size and content of every file under the stage, for no-write checks. */
+function stageInventory(): string {
+	const lines: string[] = [];
+	const walk = (dir: string, prefix: string) => {
+		for (const name of readdirSync(dir).sort()) {
+			const full = join(dir, name);
+			const rel = `${prefix}${name}`;
+			if (statSync(full).isDirectory()) walk(full, `${rel}/`);
+			else lines.push(`${rel} ${readFileSync(full).toString("base64")}`);
+		}
+	};
+	walk(dist, "");
+	return lines.join("\n");
+}
+
 const DECLARATION = `---
 description: A consumer's agent.
 backends: [claude, codex]
@@ -371,12 +466,16 @@ describe("staged distribution", () => {
 				// stage; without this tsc resolves its imports from the stage.
 				preserveSymlinks: true,
 			},
-			include: ["main.ts", "surface.ts"],
+			include: ["main.ts", "surface.ts", "build.ts"],
 		}),
 	);
 	put(consumer, "agents/hello.md", DECLARATION);
 	put(consumer, "guide.md", "Guide text.\n");
 	put(consumer, "main.ts", MAIN);
+	put(consumer, "build.ts", BUILD);
+	put(consumer, "defs/greet/hello.md", HELLO);
+	put(consumer, "defs/greet/hello.ts", HELLO_EXTENSION);
+	put(consumer, "prompts/guide.md", "Guide from prompts.\n");
 	put(consumer, "surface.ts", surfaceModule(surfaces));
 	put(
 		consumer,
@@ -466,6 +565,131 @@ describe("staged distribution", () => {
 			passed: "not dispatched",
 		});
 	}, 60_000);
+
+	describe("compiled consumer", () => {
+		const unrelated = join(parent, "unrelated-cwd");
+		mkdirSync(unrelated, { recursive: true });
+		const out = join(parent, "consumer-out");
+		// Bun runs the stage's own imports from its real location, beside no
+		// node_modules, and would auto-install them from its global cache at
+		// whatever version is newest there. Resolve them from the consumer's
+		// lockfile instead, and fail rather than auto-install.
+		const build = (mode: string) => {
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"--no-install",
+					join(consumer, "build.ts"),
+					consumer,
+					mode,
+					out,
+				],
+				{
+					cwd: unrelated,
+					stdout: "pipe",
+					stderr: "pipe",
+					env: {
+						...process.env,
+						NO_COLOR: "1",
+						NODE_PATH: join(consumer, "node_modules"),
+					},
+				},
+			);
+			return {
+				code: child.exitCode,
+				stdout: child.stdout.toString(),
+				stderr: child.stderr.toString(),
+			};
+		};
+
+		test("generated entries import the runtime from the installed distribution", () => {
+			const result = build("entry");
+			expect(result.stderr).toBe("");
+			expect(result.code).toBe(0);
+			const imports = [...result.stdout.matchAll(/from ("[^"]+");/g)].map(
+				(match) => JSON.parse(match[1] ?? '""') as string,
+			);
+			expect(imports).toEqual([
+				"node:fs",
+				join(dist, "lib/agent-format/cli.ts"),
+				join(dist, "lib/agent-format/run.ts"),
+				join(consumer, "defs/greet/hello.ts"),
+			]);
+			expect(result.stdout).not.toContain(repo);
+		});
+
+		test("the shipped runtime missing fails explicitly before any build", () => {
+			const runtime = join(dist, "lib/agent-format/run.ts");
+			const aside = `${runtime}.aside`;
+			renameSync(runtime, aside);
+			try {
+				const result = build("publish");
+				expect(result.code).toBe(1);
+				expect(result.stderr).toBe(
+					`the troupe runtime file ${runtime} is missing from the installed distribution; reinstall troupe\nNothing published; out/ left untouched.\n`,
+				);
+				expect(existsSync(out)).toBe(false);
+			} finally {
+				renameSync(aside, runtime);
+			}
+		});
+
+		test("publishes, previews, runs and dispatches through the exit forms", () => {
+			const before = stageInventory();
+			const result = build("publish");
+			expect(result.stderr).toBe("");
+			expect(result.code).toBe(0);
+			expect(JSON.parse(result.stdout)).toMatchObject({
+				built: ["greet:hello"],
+				dryRun: false,
+			});
+			expect(readdirSync(out)).toEqual(["greet:hello"]);
+			const binary = join(out, "greet:hello");
+
+			const preview = run([binary, "--show-prompt", "hi"], unrelated);
+			expect(preview.code).toBe(0);
+			expect(preview.stdout).toContain("Say hello from defs.");
+			expect(preview.stdout).toContain("Guide from prompts.");
+
+			const fakes = join(parent, "fake-bin");
+			mkdirSync(fakes, { recursive: true });
+			installFakeClis(fakes);
+			const records = join(parent, "compiled-records.jsonl");
+			const env = {
+				...process.env,
+				PATH: `${fakes}:${process.env.PATH}`,
+				FAKE_RECORD: records,
+			};
+			const executed = Bun.spawnSync([binary, "greet", "me"], {
+				cwd: unrelated,
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(executed.exitCode).toBe(0);
+			expect(readRecords(records).map((record) => record.name)).toEqual([
+				"claude",
+			]);
+
+			const dispatched = run([binary, "tool"], unrelated);
+			expect(dispatched.code).toBe(7);
+			expect(stageInventory()).toEqual(before);
+		}, 120_000);
+
+		test("the configured watcher rebuilds the roster from the installed package", () => {
+			const before = stageInventory();
+			const result = build("watch");
+			expect(result.stderr).toBe("");
+			expect(result.code).toBe(0);
+			const report = JSON.parse(result.stdout);
+			const roots = [join(consumer, "defs"), join(consumer, "prompts")];
+			expect(report.roots).toEqual(roots);
+			expect(report.watched).toEqual(roots);
+			expect(report.closed).toEqual(roots);
+			expect(report.changes).toEqual(["built greet:hello", "rebuilt 1 agents"]);
+			expect(stageInventory()).toEqual(before);
+		}, 120_000);
+	});
 
 	test("every subpath exports exactly its named surface", () => {
 		const byPath = Object.fromEntries(
