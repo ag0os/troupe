@@ -25,11 +25,12 @@ import {
 } from "node:fs/promises";
 import {
 	basename,
+	delimiter,
 	dirname,
-	isAbsolute,
 	join,
 	relative,
 	resolve,
+	sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -42,6 +43,7 @@ import {
 } from "../../scripts/shepherd-source";
 import { toBinaryName } from "./binary-name";
 import { AgentSourceError, formatIssue, type SourceIssue } from "./errors";
+import { isWithin } from "./path-within";
 import {
 	type IncludeText,
 	materializeAgentSpec,
@@ -89,6 +91,10 @@ export interface InspectOptions {
 	 * it, every text import is rejected.
 	 */
 	textImportProblem?: (specifier: string) => string | undefined;
+	/** Code roots named in import diagnostics. Defaults to `FRAMEWORK_DIRS`. */
+	codeRoots?: readonly string[];
+	/** Text roots named in import diagnostics. Defaults to `TEXT_IMPORT_DIR`. */
+	textRoots?: readonly string[];
 }
 
 export interface LoadedAgent {
@@ -99,24 +105,185 @@ export interface LoadedAgent {
 }
 
 /**
+ * Where a consumer's agents and their inputs live, what is built and where it
+ * goes. Relative paths resolve against `consumerRoot`, and every root except
+ * `outDir` must lie within it. Per-agent stamp policies are not part of it
+ * yet; Shepherd's stamp still comes from `CompilerOptions.stamp`.
+ */
+export interface AgentBuildDefinition {
+	/** The consumer package root. Relative to the working directory if relative. */
+	consumerRoot: string;
+	/** Declarations and their same-stem extensions. Defaults to `agents`. */
+	declarationRoot?: string;
+	/** Roots an include's realpath must stay under. Defaults to the declaration root and `system-prompts`. */
+	includeRoots?: readonly string[];
+	/** Roots whose modules an extension may import by relative path. Defaults to none. */
+	extensionCodeRoots?: readonly string[];
+	/** Roots whose Markdown files an extension may import as text. Defaults to `system-prompts`. */
+	extensionTextRoots?: readonly string[];
+	/** The exact set of agent names a full build publishes. */
+	roster: readonly string[];
+	/** Output directory. Defaults to `bin`. */
+	outDir?: string;
+	/** Names in the output directory that pruning never removes. */
+	protectedOutputs?: readonly string[];
+	/** Directories the watcher watches. Defaults to every root above except `outDir`. */
+	watchRoots?: readonly string[];
+}
+
+/** What loading and direct compilation need: a definition without a roster. */
+export type AgentSourceDefinition = Omit<AgentBuildDefinition, "roster"> & {
+	roster?: readonly string[];
+};
+
+/** A configured root, absolute, with the name diagnostics give it. */
+interface ConfiguredRoot {
+	path: string;
+	label: string;
+}
+
+/** An `AgentBuildDefinition` with every path absolute and every default applied. */
+interface ResolvedDefinition {
+	root: string;
+	declarationRoot: ConfiguredRoot;
+	includeRoots: ConfiguredRoot[];
+	extensionCodeRoots: ConfiguredRoot[];
+	extensionTextRoots: ConfiguredRoot[];
+	roster?: readonly string[];
+	outDir: string;
+	watchRoots: string[];
+	/** Read when pruning is decided, not when the definition is resolved. */
+	protectedOutputs(): ReadonlySet<string>;
+}
+
+const RESOLVED = Symbol("resolved build definition");
+
+/**
+ * Resolve a definition once. Configured roots are refused, naming the root,
+ * when they lie outside the consumer root.
+ */
+function resolveDefinition(
+	definition: AgentSourceDefinition | ResolvedDefinition,
+): ResolvedDefinition {
+	if (RESOLVED in definition) return definition as ResolvedDefinition;
+	const source = definition as AgentSourceDefinition;
+	const root = resolve(source.consumerRoot);
+	const issues: SourceIssue[] = [];
+	const configured = (field: string, path: string): ConfiguredRoot => {
+		const absolute = resolve(root, path);
+		if (!isWithin(root, absolute)) {
+			issues.push({
+				file: path,
+				field,
+				message: `root "${path}" lies outside the consumer root ${root}`,
+			});
+		}
+		return { path: absolute, label: relative(root, absolute) || "." };
+	};
+	const declarationRoot = configured(
+		"declarationRoot",
+		source.declarationRoot ?? "agents",
+	);
+	const includeRoots = (
+		source.includeRoots ?? [declarationRoot.path, "system-prompts"]
+	).map((path) => configured("includeRoots", path));
+	const extensionCodeRoots = (source.extensionCodeRoots ?? []).map((path) =>
+		configured("extensionCodeRoots", path),
+	);
+	const extensionTextRoots = (
+		source.extensionTextRoots ?? ["system-prompts"]
+	).map((path) => configured("extensionTextRoots", path));
+	const watchRoots = source.watchRoots
+		? source.watchRoots.map((path) => configured("watchRoots", path).path)
+		: [
+				...new Set(
+					[
+						declarationRoot,
+						...includeRoots,
+						...extensionCodeRoots,
+						...extensionTextRoots,
+					].map((entry) => entry.path),
+				),
+			];
+	if (issues.length > 0) throw new AgentSourceError(issues);
+	const resolved: ResolvedDefinition & { [RESOLVED]: true } = {
+		[RESOLVED]: true,
+		root,
+		declarationRoot,
+		includeRoots,
+		extensionCodeRoots,
+		extensionTextRoots,
+		roster: source.roster,
+		outDir: resolve(root, source.outDir ?? "bin"),
+		watchRoots,
+		protectedOutputs: () => new Set(source.protectedOutputs ?? []),
+	};
+	return resolved;
+}
+
+/** The roster a full build needs; the package-facing planner has no default. */
+function requireRoster(definition: ResolvedDefinition): readonly string[] {
+	if (!Array.isArray(definition.roster)) {
+		throw new TypeError("the build definition must name its roster");
+	}
+	return definition.roster;
+}
+
+/** Realpaths of the configured roots that exist, beneath the real consumer root. */
+function realRoots(
+	repoRoot: string,
+	roots: readonly ConfiguredRoot[],
+): string[] {
+	return roots
+		.map((entry) => join(repoRoot, entry.label))
+		.filter((dir) => existsSync(dir))
+		.map((dir) => realpathSync(dir));
+}
+
+/** `a/`, `a/ and b/`, `a/, b/ and c/`. */
+function listRoots(
+	roots: readonly ConfiguredRoot[],
+	conjunction: "and" | "or",
+): string {
+	return joinList(
+		roots.map((entry) => `${entry.label}/`),
+		conjunction,
+	);
+}
+
+function joinList(items: readonly string[], conjunction: string): string {
+	if (items.length <= 1) return items.join("");
+	return `${items.slice(0, -1).join(", ")} ${conjunction} ${items.at(-1)}`;
+}
+
+/**
  * Read and validate one declaration without importing any TypeScript.
  * Throws `AgentSourceError` naming the file, line and field.
  */
 export async function loadAgentDefinition(
-	root: string,
+	definition: AgentSourceDefinition,
 	file: string,
 ): Promise<LoadedAgent> {
+	return loadResolved(resolveDefinition(definition), file);
+}
+
+async function loadResolved(
+	definition: ResolvedDefinition,
+	file: string,
+): Promise<LoadedAgent> {
+	const root = definition.root;
 	const repoRoot = realpathSync(root);
 	const declaration = realpathOrSelf(resolve(root, file));
 	const display = relative(repoRoot, declaration);
 
-	const agentsRoot = realpathSync(join(repoRoot, "agents"));
+	const declarationLabel = definition.declarationRoot.label;
+	const agentsRoot = realpathSync(join(repoRoot, declarationLabel));
 	if (!isInside(agentsRoot, declaration)) {
 		throw new AgentSourceError([
 			{
 				file: display,
 				field: "path",
-				message: "declarations live under agents/",
+				message: `declarations live under ${declarationLabel}/`,
 			},
 		]);
 	}
@@ -125,8 +292,18 @@ export async function loadAgentDefinition(
 		display,
 		await readFile(declaration, "utf8"),
 	);
-	const includes = await readIncludes(repoRoot, declaration, display, parsed);
-	const id = toBinaryName(declaration, repoRoot);
+	const includes = await readIncludes(
+		definition,
+		repoRoot,
+		declaration,
+		display,
+		parsed,
+	);
+	const id = toBinaryName(
+		declaration,
+		repoRoot,
+		join(repoRoot, declarationLabel),
+	);
 	const spec = materializeAgentSpec(parsed, { id, includes });
 
 	const sibling = declaration.replace(/\.md$/, ".ts");
@@ -136,9 +313,7 @@ export async function loadAgentDefinition(
 	// Bun resolves an extension's imports from its real location, so the
 	// checks do too; a symlinked extension is judged where it really lives.
 	const importBase = dirname(realpathSync(sibling));
-	const frameworkDirs = FRAMEWORK_DIRS.map((dir) => join(repoRoot, dir))
-		.filter((dir) => existsSync(dir))
-		.map((dir) => realpathSync(dir));
+	const frameworkDirs = realRoots(repoRoot, definition.extensionCodeRoots);
 	const inspection = inspectExtension(
 		siblingDisplay,
 		await readFile(sibling, "utf8"),
@@ -150,7 +325,9 @@ export async function loadAgentDefinition(
 						frameworkDirs.some((dir) => isInside(dir, realpathSync(candidate))),
 				),
 			textImportProblem: (specifier) =>
-				textImportProblem(repoRoot, importBase, specifier),
+				textImportProblem(definition, repoRoot, importBase, specifier),
+			codeRoots: definition.extensionCodeRoots.map((entry) => entry.label),
+			textRoots: definition.extensionTextRoots.map((entry) => entry.label),
 		},
 	);
 	// A sibling without reserved exports is not an extension, unless an
@@ -176,14 +353,13 @@ export async function loadAgentDefinition(
 }
 
 async function readIncludes(
+	definition: ResolvedDefinition,
 	repoRoot: string,
 	declaration: string,
 	display: string,
 	parsed: ReturnType<typeof parseAgentMarkdown>,
 ): Promise<IncludeText[]> {
-	const roots = INCLUDE_ROOTS.map((name) => join(repoRoot, name))
-		.filter((dir) => existsSync(dir))
-		.map((dir) => realpathSync(dir));
+	const roots = realRoots(repoRoot, definition.includeRoots);
 	const issues: SourceIssue[] = [];
 	const texts: IncludeText[] = [];
 
@@ -202,7 +378,9 @@ async function readIncludes(
 		}
 		const real = realpathSync(target);
 		if (!roots.some((dir) => isInside(dir, real))) {
-			issue(`"${include}" resolves outside agents/ and system-prompts/`);
+			issue(
+				`"${include}" resolves outside ${listRoots(definition.includeRoots, "and")}`,
+			);
 			continue;
 		}
 		try {
@@ -220,18 +398,20 @@ async function readIncludes(
 
 /**
  * A text import must name a relative path, from the extension's real
- * directory, to an existing regular file whose realpath is under
- * `system-prompts/`, the same root the watcher covers (D-027). A directory
- * is refused: Bun would apply module resolution (`index.*`, `package.json`)
- * to it and embed whatever that finds.
+ * directory, to an existing regular file whose realpath is under a configured
+ * text root (legacy: `system-prompts/`, the same root the watcher covers,
+ * D-027). A directory is refused: Bun would apply module resolution
+ * (`index.*`, `package.json`) to it and embed whatever that finds.
  */
 function textImportProblem(
+	definition: ResolvedDefinition,
 	repoRoot: string,
 	importBase: string,
 	specifier: string,
 ): string | undefined {
+	const roots = definition.extensionTextRoots;
 	if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-		return `text import "${specifier}" must be a relative path into ${TEXT_IMPORT_DIR}/`;
+		return `text import "${specifier}" must be a relative path into ${listRoots(roots, "or")}`;
 	}
 	const target = resolve(importBase, specifier);
 	if (!existsSync(target)) {
@@ -240,12 +420,9 @@ function textImportProblem(
 	if (!statSync(target).isFile()) {
 		return `text import "${specifier}" is not a file`;
 	}
-	const textRoot = join(repoRoot, TEXT_IMPORT_DIR);
-	if (
-		!existsSync(textRoot) ||
-		!isInside(realpathSync(textRoot), realpathSync(target))
-	) {
-		return `text import "${specifier}" resolves outside ${TEXT_IMPORT_DIR}/`;
+	const real = realpathSync(target);
+	if (!realRoots(repoRoot, roots).some((dir) => isInside(dir, real))) {
+		return `text import "${specifier}" resolves outside ${listRoots(roots, "and")}`;
 	}
 	return undefined;
 }
@@ -258,9 +435,9 @@ function moduleCandidates(path: string): string[] {
 	return [path, `${path}.ts`, join(path, "index.ts")];
 }
 
+/** Strictly beneath `dir`; `dir` itself is not inside. */
 function isInside(dir: string, path: string): boolean {
-	const rel = relative(dir, path);
-	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+	return relative(dir, path) !== "" && isWithin(dir, path);
 }
 
 /**
@@ -284,6 +461,8 @@ export function inspectExtension(
 	options: InspectOptions = {},
 ): ExtensionInspection {
 	const rules: ImportRules = {
+		codeRoots: options.codeRoots ?? FRAMEWORK_DIRS,
+		textRoots: options.textRoots ?? [TEXT_IMPORT_DIR],
 		isFrameworkImport: options.isFrameworkImport ?? (() => false),
 		textImportProblem:
 			options.textImportProblem ??
@@ -562,7 +741,7 @@ function importProblem(
 	if (isBareSpecifier(specifier) || rules.isFrameworkImport(specifier)) {
 		return undefined;
 	}
-	return `value import from "${specifier}" (only packages, builtins, ${FRAMEWORK_DIRS[0]} and ${FRAMEWORK_DIRS[1]} may be imported)`;
+	return `value import from "${specifier}" (only ${joinList(["packages", "builtins", ...rules.codeRoots], "and")} may be imported)`;
 }
 
 /**
@@ -594,7 +773,10 @@ function textImportShapeProblem(
 		return `text import "${specifier}" must be a single default import`;
 	}
 	if (!specifier.endsWith(TEXT_EXTENSION)) {
-		return `text import "${specifier}" must name a ${TEXT_EXTENSION} file under ${TEXT_IMPORT_DIR}/`;
+		return `text import "${specifier}" must name a ${TEXT_EXTENSION} file under ${joinList(
+			rules.textRoots.map((root) => `${root}/`),
+			"or",
+		)}`;
 	}
 	return rules.textImportProblem(specifier);
 }
@@ -760,6 +942,25 @@ function isSideEffectFree(expression: ts.Expression): boolean {
 }
 
 /**
+ * The CLI and runner files a generated entry imports: the implementation
+ * behind `troupe/cli` and `troupe/runtime`, found beside this compiler in
+ * its own installed distribution, never through the consumer's working
+ * directory. A missing file fails here, before any build starts.
+ */
+function runtimeFiles(): { cli: string; run: string } {
+	const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
+	const run = fileURLToPath(new URL("./run.ts", import.meta.url));
+	for (const file of [cli, run]) {
+		if (!existsSync(file)) {
+			throw new Error(
+				`the troupe runtime file ${file} is missing from the installed distribution; reinstall troupe`,
+			);
+		}
+	}
+	return { cli, run };
+}
+
+/**
  * Entry source for a compiled agent. It embeds the spec and imports only the
  * reserved extension exports. A `dispatch` export sees the raw argv first
  * and may claim the run (D1). Otherwise it parses its argv with the shared CLI (help
@@ -772,8 +973,7 @@ export function generateEntry(
 	agent: LoadedAgent,
 	provenance?: BuildProvenance,
 ): string {
-	const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
-	const run = fileURLToPath(new URL("./run.ts", import.meta.url));
+	const { cli, run } = runtimeFiles();
 	const stamped = agent.id === SHEPHERD_ID && provenance !== undefined;
 	const names = agent.extension?.exports ?? [];
 	const dispatched = names.includes("dispatch");
@@ -828,21 +1028,29 @@ export function generateEntry(
  * `publish` stamps it.
  */
 export async function compileAgent(options: {
-	root: string;
+	/** Roster-independent: any declaration under the declaration root builds. */
+	definition: AgentSourceDefinition;
+	/** Relative to the consumer root. */
 	file: string;
+	/** Relative to the consumer root. */
 	outFile: string;
 	stamp?: StampSource;
 	build?: Builder;
 	signal?: AbortSignal;
 }): Promise<LoadedAgent & { provenance?: BuildProvenance }> {
-	const root = resolve(options.root);
+	const definition = resolveDefinition(options.definition);
+	const root = definition.root;
 	const stamp = options.stamp ?? gitStamp();
 	const early =
-		toBinaryName(resolve(root, options.file), root) === SHEPHERD_ID
+		toBinaryName(
+			resolve(root, options.file),
+			root,
+			definition.declarationRoot.path,
+		) === SHEPHERD_ID
 			? await settle(() => stamp.capture(root))
 			: undefined;
-	const agent = await loadAgentDefinition(options.root, options.file);
-	const outFile = resolve(options.outFile);
+	const agent = await loadResolved(definition, options.file);
+	const outFile = resolve(root, options.outFile);
 	const provenance =
 		agent.id === SHEPHERD_ID
 			? unwrap(early ?? (await settle(() => stamp.capture(root))))
@@ -858,6 +1066,7 @@ export async function compileAgent(options: {
 			cwd: workDir,
 			label: agent.file,
 			signal: options.signal,
+			...dependencyRoot(root),
 		});
 		if (provenance) await recheckSource(stamp, root, provenance);
 		options.signal?.throwIfAborted();
@@ -908,6 +1117,24 @@ export interface BuildRequest {
 	cwd: string;
 	label: string;
 	signal?: AbortSignal;
+	/**
+	 * Set when the runtime is installed outside the consumer root, as Bun
+	 * installs a `file:` folder dependency (per-file symlinks into the
+	 * folder): the runtime's own package imports resolve from this root's
+	 * `node_modules`, which the default builder puts on `NODE_PATH`.
+	 */
+	dependencyRoot?: string;
+}
+
+/**
+ * The consumer root a build must resolve the runtime's packages from, when
+ * the runtime's real location lies outside it. Inside the consumer (the
+ * repository's own builds) ordinary resolution already finds them.
+ */
+function dependencyRoot(root: string): { dependencyRoot?: string } {
+	const runtime = realpathSync(runtimeFiles().run);
+	const real = realpathOrSelf(root);
+	return isWithin(real, runtime) ? {} : { dependencyRoot: real };
 }
 
 /** Builds one entry into one binary; `bun build --compile` by default. */
@@ -924,7 +1151,24 @@ async function bunBuild(options: BuildRequest): Promise<void> {
 			"--outfile",
 			options.outFile,
 		],
-		{ cwd: options.cwd, stdout: "pipe", stderr: "pipe" },
+		{
+			cwd: options.cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			...(options.dependencyRoot
+				? {
+						env: {
+							...process.env,
+							NODE_PATH: [
+								join(options.dependencyRoot, "node_modules"),
+								process.env.NODE_PATH,
+							]
+								.filter(Boolean)
+								.join(delimiter),
+						},
+					}
+				: {}),
+		},
 	);
 	const kill = () => child.kill("SIGTERM");
 	options.signal?.addEventListener("abort", kill, { once: true });
@@ -978,16 +1222,16 @@ export const ROSTER = [
 /** The only directories the watcher watches and includes may resolve into. */
 export const WATCH_ROOTS = INCLUDE_ROOTS;
 
-export const LOCAL_AGENTS_WARNING =
-	"warning: agents/local/ is not compiled; private agents are not supported";
+export const LOCAL_AGENTS_WARNING = localWarning("agents");
+
+function localWarning(label: string): string {
+	return `warning: ${label}/local/ is not compiled; private agents are not supported`;
+}
 
 export interface CompilerOptions {
-	root: string;
-	/** Output directory. Defaults to `<root>/bin`. */
-	outDir?: string;
-	/** Defaults to `ROSTER`. */
-	roster?: readonly string[];
-	/** Shepherd's provenance. Defaults to the Git repository at `root`. */
+	/** Roots, roster and output; resolved once per call. */
+	definition: AgentBuildDefinition;
+	/** Shepherd's provenance. Defaults to the Git repository at the consumer root. */
 	stamp?: StampSource;
 	/** Defaults to `bun build --compile`; tests pass a fake. */
 	build?: Builder;
@@ -1012,11 +1256,12 @@ interface DiscoveredSources {
 }
 
 /**
- * Every declaration and non-test TypeScript file under `agents/`, keyed by
- * binary name. `agents/local/` is never read (D-011).
+ * Every declaration and non-test TypeScript file under the declaration root,
+ * keyed by binary name. Its `local/` is never read (D-011).
  */
-function discoverSources(root: string): DiscoveredSources {
-	const agentsDir = join(root, "agents");
+function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
+	const root = definition.root;
+	const agentsDir = definition.declarationRoot.path;
 	const found: DiscoveredSources = {
 		markdown: new Map(),
 		typescript: new Map(),
@@ -1038,7 +1283,7 @@ function discoverSources(root: string): DiscoveredSources {
 					: undefined;
 			if (!kind) continue;
 			const file = relative(root, full);
-			const id = toBinaryName(full, root);
+			const id = toBinaryName(full, root, agentsDir);
 			const previous = kind.get(id);
 			if (previous) {
 				found.issues.push({
@@ -1055,8 +1300,11 @@ function discoverSources(root: string): DiscoveredSources {
 	return found;
 }
 
-function expectedSource(id: string): string {
-	return `agents/${id.split(":").join("/")}.md`;
+function expectedSource(definition: ResolvedDefinition, id: string): string {
+	return join(
+		definition.declarationRoot.label,
+		`${id.split(":").join("/")}.md`,
+	);
 }
 
 /**
@@ -1064,20 +1312,24 @@ function expectedSource(id: string): string {
  * binary name.
  */
 export function resolveAgentName(
-	root: string,
+	definition: AgentSourceDefinition,
 	argument: string,
 	cwd = process.cwd(),
 ): string {
 	if (!/\.(md|tsx?)$/.test(argument) && !argument.includes("/")) {
 		return argument;
 	}
-	// A path outside agents/ is not an agent source: keep it as given so the
-	// roster check rejects it instead of mapping it to a same-named agent.
+	const resolved = resolveDefinition(definition);
+	const root = resolved.root;
+	const agentsDir = resolved.declarationRoot.path;
+	// A path outside the declaration root is not an agent source: keep it as
+	// given so the roster check rejects it instead of mapping it to a
+	// same-named agent.
 	const path = resolve(cwd, argument);
-	if (!isInside(join(resolve(root), "agents"), path)) {
-		return relative(resolve(root), path);
+	if (!isInside(agentsDir, path)) {
+		return relative(root, path);
 	}
-	return toBinaryName(path, resolve(root));
+	return toBinaryName(path, root, agentsDir);
 }
 
 /**
@@ -1087,12 +1339,20 @@ export function resolveAgentName(
  * either way.
  * Throws `AgentSourceError` naming every offending file and field.
  */
-export async function planBuild(
-	options: CompilerOptions & { only?: string },
+export async function planBuild(options: {
+	definition: AgentBuildDefinition;
+	only?: string;
+}): Promise<BuildPlan> {
+	return planResolved(resolveDefinition(options.definition), options.only);
+}
+
+async function planResolved(
+	definition: ResolvedDefinition,
+	only: string | undefined,
 ): Promise<BuildPlan> {
-	const root = resolve(options.root);
-	const roster = new Set(options.roster ?? ROSTER);
-	const found = discoverSources(root);
+	const root = definition.root;
+	const roster = new Set(requireRoster(definition));
+	const found = discoverSources(definition);
 	const issues = [...found.issues];
 	const ids = new Set(found.markdown.keys());
 
@@ -1102,15 +1362,14 @@ export async function planBuild(
 			issues.push({
 				file,
 				field: "path",
-				message:
-					"only Markdown declarations are built; a .ts under agents/ must be the same-stem extension of a declaration",
+				message: `only Markdown declarations are built; a .ts under ${definition.declarationRoot.label}/ must be the same-stem extension of a declaration`,
 			});
 		}
 	}
 
 	let selected: string[];
-	if (options.only) {
-		const id = options.only;
+	if (only) {
+		const id = only;
 		if (!roster.has(id)) {
 			issues.push({
 				file: found.markdown.get(id) ?? found.typescript.get(id) ?? id,
@@ -1118,7 +1377,7 @@ export async function planBuild(
 				message: `"${id}" is not a roster agent`,
 			});
 		} else if (!ids.has(id)) {
-			issues.push(missingIssue(id));
+			issues.push(missingIssue(definition, id));
 		}
 		selected = ids.has(id) && roster.has(id) ? [id] : [];
 	} else {
@@ -1132,7 +1391,7 @@ export async function planBuild(
 			}
 		}
 		for (const id of roster) {
-			if (!ids.has(id)) issues.push(missingIssue(id));
+			if (!ids.has(id)) issues.push(missingIssue(definition, id));
 		}
 		selected = [...ids].filter((id) => roster.has(id));
 	}
@@ -1141,7 +1400,7 @@ export async function planBuild(
 	for (const id of selected.sort()) {
 		const markdown = found.markdown.get(id) as string;
 		try {
-			const agent = await loadAgentDefinition(root, markdown);
+			const agent = await loadResolved(definition, markdown);
 			const sibling = found.typescript.get(id);
 			if (sibling?.endsWith(".tsx")) {
 				issues.push(tsxSiblingIssue(sibling));
@@ -1172,7 +1431,9 @@ export async function planBuild(
 	if (issues.length > 0) throw new AgentSourceError(issues);
 	return {
 		entries,
-		warnings: found.localPresent ? [LOCAL_AGENTS_WARNING] : [],
+		warnings: found.localPresent
+			? [localWarning(definition.declarationRoot.label)]
+			: [],
 	};
 }
 
@@ -1197,9 +1458,9 @@ function hooklessSiblingIssue(file: string): SourceIssue {
 	};
 }
 
-function missingIssue(id: string): SourceIssue {
+function missingIssue(definition: ResolvedDefinition, id: string): SourceIssue {
 	return {
-		file: expectedSource(id),
+		file: expectedSource(definition, id),
 		field: "roster",
 		message: `roster agent "${id}" has no declaration`,
 	};
@@ -1274,9 +1535,16 @@ export interface PublishResult {
  * throws `PruneError`. There is no cross-process lock (D-023).
  */
 export async function publish(options: PublishOptions): Promise<PublishResult> {
-	const root = resolve(options.root);
-	const outDir = resolve(options.outDir ?? join(root, "bin"));
-	const roster = new Set(options.roster ?? ROSTER);
+	return publishResolved(resolveDefinition(options.definition), options);
+}
+
+async function publishResolved(
+	definition: ResolvedDefinition,
+	options: Omit<PublishOptions, "definition">,
+): Promise<PublishResult> {
+	const root = definition.root;
+	const outDir = definition.outDir;
+	const roster = new Set(requireRoster(definition));
 	const log = options.log ?? (() => {});
 	const warn = options.warn ?? log;
 	const prune = options.prune !== false && !options.only;
@@ -1287,10 +1555,10 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 			? await settle(() => stamp.capture(root))
 			: undefined;
 
-	const plan = await planBuild({ ...options, root });
+	const plan = await planResolved(definition, options.only);
 	for (const warning of plan.warnings) warn(warning);
 	const orphans = prune
-		? orphansIn(outDir, roster, protectedBinaries(root))
+		? orphansIn(outDir, roster, definition.protectedOutputs())
 		: [];
 
 	if (options.dryRun) {
@@ -1331,6 +1599,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 				cwd: entryDir,
 				label: entry.source,
 				signal: options.signal,
+				...dependencyRoot(root),
 			});
 			log(`built ${entry.id}`);
 		}
@@ -1491,6 +1760,7 @@ type WatchFn = (
 ) => { close(): void };
 
 export interface WatcherOptions extends CompilerOptions {
+	/** Replaces `fs.watch`; tests inject one. */
 	watch?: WatchFn;
 	debounceMs?: number;
 	log?: (line: string) => void;
@@ -1502,30 +1772,48 @@ export interface WatcherOptions extends CompilerOptions {
 }
 
 /**
- * Watch exactly `agents/` and `system-prompts/` (D-027) and rebuild every
- * agent through the shared compiler on any change, one rebuild at a time.
- * Changes under `agents/local/` are ignored.
+ * Watch exactly the definition's watch roots (legacy: `agents/` and
+ * `system-prompts/`, D-027) and rebuild the definition's roster through the
+ * shared compiler on any change, one rebuild at a time. Changes under the
+ * declaration root's `local/` are ignored, and so are the compiler's own
+ * writes (the output directory and its temporary build siblings) when a
+ * watch root contains them, so a rebuild cannot schedule another.
  */
 export function startWatcher(options: WatcherOptions): {
 	close(): void;
 	queue: ReturnType<typeof createSerialQueue>;
 	roots: string[];
 } {
-	const root = resolve(options.root);
+	const definition = resolveDefinition(options.definition);
+	const root = definition.root;
+	const outDir = definition.outDir;
+	requireRoster(definition);
 	const log = options.log ?? (() => {});
 	const watch = options.watch ?? (nodeWatch as unknown as WatchFn);
+	const {
+		definition: _,
+		watch: __,
+		rebuild: custom,
+		...publishOptions
+	} = options;
 	const rebuild =
-		options.rebuild ??
+		custom ??
 		(async () => {
 			try {
-				const result = await publish({ ...options, root });
+				const result = await publishResolved(definition, publishOptions);
 				log(`rebuilt ${result.built.length} agents`);
 			} catch (error) {
 				log(
-					`rebuild failed:\n${describePublishFailure(error, `${basename(resolve(options.outDir ?? join(root, "bin")))}/`)}`,
+					`rebuild failed:\n${describePublishFailure(error, `${basename(outDir)}/`)}`,
 				);
 			}
 		});
+	const ownWrite = (path: string) =>
+		isWithin(outDir, path) ||
+		(isInside(dirname(outDir), path) &&
+			/^\.(troupe|agent)-build-/.test(
+				relative(dirname(outDir), path).split(sep)[0] ?? "",
+			));
 	const queue = createSerialQueue(rebuild);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const schedule = () => {
@@ -1536,18 +1824,17 @@ export function startWatcher(options: WatcherOptions): {
 		}, options.debounceMs ?? 100);
 	};
 
-	const roots = WATCH_ROOTS.map((name) => join(root, name)).filter((dir) =>
-		existsSync(dir),
-	);
+	const roots = definition.watchRoots.filter((dir) => existsSync(dir));
 	const watchers = roots.map((dir) =>
 		watch(dir, { recursive: true }, (_event, filename) => {
 			const name = filename?.toString() ?? "";
 			if (
-				dir === join(root, "agents") &&
+				dir === definition.declarationRoot.path &&
 				(name === "local" || name.startsWith("local/"))
 			) {
 				return;
 			}
+			if (ownWrite(join(dir, name))) return;
 			log(`change: ${relative(root, join(dir, name))}`);
 			schedule();
 		}),

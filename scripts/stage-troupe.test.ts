@@ -37,6 +37,7 @@ const STAGED_MEMBERS = [
 	"lib/agent-format/errors.ts",
 	"lib/agent-format/fake-cli.ts",
 	"lib/agent-format/interpolate.ts",
+	"lib/agent-format/path-within.ts",
 	"lib/agent-format/preview.ts",
 	"lib/agent-format/run.ts",
 	"lib/agent-format/schema.ts",
@@ -53,7 +54,7 @@ const STAGED_MEMBERS = [
 	"scripts/shepherd-source.ts",
 ];
 
-/** The PR 1 public surface per subpath (design.md section 2, E1 to E9). */
+/** The public surface per subpath (design.md section 2, E1 to E9; PR 2 adds the definition types). */
 const EXPECTED_SURFACE: Record<string, { values: string[]; types?: string[] }> =
 	{
 		troupe: {
@@ -134,6 +135,8 @@ const EXPECTED_SURFACE: Record<string, { values: string[]; types?: string[] }> =
 				"PublishOptions",
 				"PublishResult",
 				"WatcherOptions",
+				"AgentBuildDefinition",
+				"AgentSourceDefinition",
 			],
 		},
 		"troupe/provenance": {
@@ -397,7 +400,7 @@ describe("staged distribution", () => {
 		const closure = relativeClosure(repo, entries).files;
 		expect(staged.members.map((member) => member.path)).toEqual(closure);
 		expect(closure).toEqual(STAGED_MEMBERS);
-		expect(STAGED_MEMBERS).toHaveLength(26);
+		expect(STAGED_MEMBERS).toHaveLength(27);
 		expect(closure).toContain("lib/text-imports.d.ts");
 		expect(closure).toContain("lib/agent-format/run.ts");
 		expect(closure.some((path) => path.endsWith(".test.ts"))).toBe(false);

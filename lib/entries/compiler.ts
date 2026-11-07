@@ -1,5 +1,7 @@
 /** `troupe/compiler`: load, inspect, plan, generate, compile, publish, watch. */
 export {
+	type AgentBuildDefinition,
+	type AgentSourceDefinition,
 	abortOnSignals,
 	type BuildEntry,
 	type Builder,
