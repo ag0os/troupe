@@ -82,7 +82,26 @@ import { trendLines } from "./trend";
 
 /** This harness's own directory: its scripts, policy, rubric and prompt. */
 export const EVALS_DIR = dirname(fileURLToPath(import.meta.url));
-const RUBRIC = join(EVALS_DIR, "rubric.json");
+
+/**
+ * Refuse a run whose layout's evals directory is not this harness: a run
+ * executes these scripts, so it may only hash and record their identity.
+ * Trend, verify and export read other roots and do not call this.
+ */
+export function requireExecutedHarness(layout: EvalLayout): void {
+	const real = (path: string) => {
+		try {
+			return realpathSync(path);
+		} catch {
+			return resolve(path);
+		}
+	};
+	if (real(layout.evalsDir) !== real(EVALS_DIR)) {
+		throw new Error(
+			`Refusing to run: the layout's evals directory ${layout.evalsDir} is not the harness that would run, ${EVALS_DIR}. Run the evals/shepherd/run.ts beneath the package you evaluate.`,
+		);
+	}
+}
 
 /** The fixed subject and execution policy (spec 5.1), from `policy.json`. */
 export interface Policy {
@@ -398,7 +417,7 @@ export function freeze(options: {
 		}),
 		policy: options.policy,
 		policyHash: options.policyHash,
-		rubricSha256: `sha256:${sha256(readFileSync(options.rubric ?? RUBRIC))}`,
+		rubricSha256: `sha256:${sha256(readFileSync(options.rubric ?? join(layout.evalsDir, "rubric.json")))}`,
 		config: options.config,
 		configSha256: sha256(readFileSync(options.config)),
 		...(options.packages ? { packages: options.packages } : {}),
@@ -414,6 +433,7 @@ export function recheck(
 	const git = options.git ?? runGit;
 	const layout = toLayout(options.root);
 	const at = { git, layout: sourceLayout(layout) };
+	const rubric = join(layout.evalsDir, "rubric.json");
 	const reasons: string[] = [];
 	const attempt = (what: string, check: () => string | undefined) => {
 		try {
@@ -436,9 +456,9 @@ export function recheck(
 			: `run configuration changed after freezing: ${frozen.config}`,
 	);
 	attempt("rubric", () =>
-		`sha256:${sha256(readFileSync(RUBRIC))}` === frozen.rubricSha256
+		`sha256:${sha256(readFileSync(rubric))}` === frozen.rubricSha256
 			? undefined
-			: `rubric changed after freezing: ${RUBRIC}`,
+			: `rubric changed after freezing: ${rubric}`,
 	);
 	const packages = frozen.packages;
 	if (packages) {
@@ -673,6 +693,7 @@ async function main(): Promise<number> {
 		for (const line of trendLines(layout)) console.log(line);
 		return 0;
 	}
+	requireExecutedHarness(layout);
 	const controller = new AbortController();
 	let interrupted = 0;
 	for (const [name, code] of [
@@ -695,7 +716,7 @@ async function main(): Promise<number> {
 		console.error(late);
 		return 2;
 	}
-	const { policy, hash } = loadPolicy();
+	const { policy, hash } = loadPolicy(layout.evalsDir);
 	const root = layout;
 	if (parsed.check) {
 		for (const name of ["run-trial.sh", "fixtures.sh"]) {
@@ -804,7 +825,7 @@ async function main(): Promise<number> {
 		scratchRoot: run.runDir,
 		artifactRoot: run.artifactRoot,
 		home: homedir(),
-		rubric: loadRubric(),
+		rubric: loadRubric(join(layout.evalsDir, "rubric.json")),
 		deadline,
 		runWave: async (jobs) => {
 			if (controller.signal.aborted) return [];
