@@ -34,7 +34,7 @@ import {
 	summary,
 } from "./gate";
 import { evaluationIdentity } from "./identity";
-import { toLayout } from "./layout";
+import { evalLayout, toLayout } from "./layout";
 import {
 	deriveAggregate,
 	deriveTrial,
@@ -1107,6 +1107,106 @@ describe("pending attempts (fix round 1b, ruling D)", () => {
 			expect(existsSync(dir)).toBe(false);
 			expect(existsSync(`${dir}.partial`)).toBe(false);
 		}
+	});
+
+	test("a pending attempt under a nested package recovers with both roots redacted and a prefix sharing sibling kept (O24b)", async () => {
+		const home = join(scratch, "home");
+		// Every writable fixture path lies under a host prefix the export
+		// redacts token by token, and a path token ends at a space. A space in
+		// the repository's name therefore shows which rule fired: only the
+		// root rule redacts past it.
+		const gitRoot = join(scratch, "the repo");
+		const packageRoot = join(gitRoot, "a/b/pkg");
+		const layout = evalLayout({ packageRoot, gitRoot });
+		evalsDir = layout.evalsDir;
+		mkdirSync(evalsDir, { recursive: true });
+		// Both roots lie outside the home.
+		expect(gitRoot.startsWith(`${home}/`)).toBe(false);
+		const killed = options({}, {}, { home, layout });
+		const run = killed.scratchRoot;
+		const workspace = `${run}/shepherd-eval-G-neg-x/workspace`;
+		const session = "00000000-0000-4000-8000-0000000000aa";
+		const sibling = `${gitRoot}-old/notes.md`;
+		killed.runWave = async (jobs) => {
+			for (const { trial: t, ordinal } of jobs) {
+				if (t !== "G-neg") continue;
+				const dir = join(killed.artifactRoot, t, `attempt-${ordinal}`);
+				mkdirSync(dir, { recursive: true });
+				writeFileSync(
+					join(dir, "claude-run.json"),
+					JSON.stringify({
+						trial: t,
+						workspace,
+						argv: subjectArgv(`${run}/bin/shepherd`, session),
+						validity: { valid: false, void_reasons: [] },
+						provenance: [{ expected_binary: `${run}/bin/shepherd` }],
+						started_at: "2026-10-13T15:11:10.000Z",
+						ended_at: null,
+					}),
+				);
+				const log = join(
+					home,
+					".claude/projects",
+					projectDirName(workspace),
+					`${session}.jsonl`,
+				);
+				mkdirSync(join(log, ".."), { recursive: true });
+				writeFileSync(
+					log,
+					[
+						{
+							type: "assistant",
+							cwd: workspace,
+							message: {
+								model: "claude-opus-5-5",
+								role: "assistant",
+								content: [
+									{
+										type: "tool_use",
+										id: "toolu_s",
+										name: "Bash",
+										input: { command: "shepherd tool start" },
+									},
+								],
+							},
+						},
+						{
+							type: "user",
+							cwd: workspace,
+							message: {
+								role: "user",
+								content: [
+									{
+										type: "tool_result",
+										tool_use_id: "toolu_s",
+										content: `binary: ${run}/bin/shepherd\nrepo ${gitRoot}/README.md\npackage ${packageRoot}/evals/shepherd/policy.json\nsibling ${sibling}`,
+									},
+								],
+							},
+						},
+					]
+						.map((e) => JSON.stringify(e))
+						.join("\n")
+						.concat("\n"),
+				);
+			}
+			throw new Error("killed during the wave");
+		};
+		await expect(runGate(killed)).rejects.toThrow(/killed/);
+		expect(trial(read(), "G-neg")?.attempts[0]?.kind).toBe("pending");
+
+		const later = await runGate(options({}, {}, { home, layout }));
+		const gneg = trial(later.result, "G-neg")?.attempts[0];
+		expect(gneg?.kind).toBe("behavioral");
+		const text = readFileSync(
+			join(evalsDir, gneg?.artifactDir ?? "?", "claude.jsonl"),
+			"utf8",
+		);
+		expect(text).toContain(`repo ${REDACTED}\\n`);
+		expect(text).toContain(`package ${REDACTED}\\n`);
+		// The sibling meets only the host rule, which stops at the space.
+		expect(text).toContain(`sibling ${REDACTED} repo-old/notes.md`);
+		expect(text).not.toContain("the repo");
 	});
 
 	test("a projects directory reached twice through a symlink holds one native log", () => {
