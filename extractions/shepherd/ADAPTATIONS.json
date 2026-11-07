@@ -210,6 +210,7 @@
 		"scripts/shared-core.test.ts",
 		"scripts/shepherd-definition.test.ts",
 		"scripts/shepherd-definition.ts",
+		"scripts/stage-resolution.test.ts",
 		"scripts/watch.ts",
 		"tsconfig.json"
 	],
