@@ -73,6 +73,13 @@ const ROWS: [string, boolean, string][] = [
 	["packages/software/.DS_Store", false, "host byproduct"],
 	["packages/software/node_modules/x.ts", false, "installed module"],
 	["packages/software/tools/__pycache__/x.pyc", false, "bytecode"],
+	["packages/software/old.pyc", false, "bytecode by name"],
+	[
+		"packages/software/cache.pyc/helper.ts",
+		false,
+		"beneath a bytecode-named directory (C23)",
+	],
+	["packages/software/x.pyc.ts", true, "a suffix only in the middle"],
 	["scripts/shepherd-source.ts", false, "v1 adapter"],
 	["scripts/watch-agents.ts", false, "legacy watcher"],
 	["scripts/agent-compiler.ts", false, "legacy wrapper"],

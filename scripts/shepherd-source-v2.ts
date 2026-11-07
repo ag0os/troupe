@@ -80,13 +80,15 @@ export function isRuntimeTool(path: string): boolean {
 	return /^packages\/[^/]+\/tools\//.test(path);
 }
 
-/** Judged on every path component, so a byproduct directory hides its contents. */
+/**
+ * Judged on every path component, names and suffixes alike, so a byproduct
+ * directory hides its contents and the selector agrees with the traversal,
+ * which prunes an excluded directory without visiting it.
+ */
 function excluded(path: string): boolean {
 	const parts = path.split("/");
-	const name = parts.at(-1) ?? "";
 	return (
-		parts.some((part) => EXCLUDED_NAMES.has(part)) ||
-		name.endsWith(".pyc") ||
+		parts.some((part) => EXCLUDED_NAMES.has(part) || part.endsWith(".pyc")) ||
 		EXCLUDED_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`))
 	);
 }
