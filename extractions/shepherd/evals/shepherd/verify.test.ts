@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createGitRunner,
+	GATED_MODULES,
 	IDENTITY_MODULE,
 	RECORDS_UNTRACKED,
 	readWorktreeSource,
@@ -945,9 +946,13 @@ describe("fix round 1 (review-c4)", () => {
 				"evals/shepherd/gated-paths.ts",
 				"evals/shepherd/identity.ts",
 				"evals/shepherd/verify.ts",
-				IDENTITY_MODULE,
+				...GATED_MODULES,
 			].sort(),
 		);
+		expect(GATED_MODULES).toContain(IDENTITY_MODULE);
+		for (const path of GATED_MODULES) {
+			expect([path, isGatedPath(path)]).toEqual([path, true]);
+		}
 		for (const path of ALWAYS_GATED) {
 			const base = head();
 			writeAt(root, path, `// changed ${path}\n`);

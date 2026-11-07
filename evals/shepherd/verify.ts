@@ -32,8 +32,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
+	GATED_MODULES,
 	type GitRunner,
-	IDENTITY_MODULE,
 	readWorktreeSource,
 	runGit,
 	type SourceManifest,
@@ -88,15 +88,15 @@ import {
  * Files that decide what is gated and how results are identified and
  * verified. A change to any of them always needs a result, whatever the
  * path policy says, so a broken predicate cannot exempt its own change. All
- * four are in the adopted set already. This guards honest mistakes only:
- * the job, the verifier and the policy all run from the PR head. Paths are
- * package paths; the identity module is whichever the build seam names.
+ * are in the adopted set already. This guards honest mistakes only: the
+ * job, the verifier and the policy all run from the PR head. Paths are
+ * package paths; the gated modules are whichever the build seam names.
  */
 export const ALWAYS_GATED: readonly string[] = [
 	"evals/shepherd/gated-paths.ts",
 	"evals/shepherd/identity.ts",
 	"evals/shepherd/verify.ts",
-	IDENTITY_MODULE,
+	...GATED_MODULES,
 ];
 
 /** Native logs name this pseudo model for local messages; it is no model. */

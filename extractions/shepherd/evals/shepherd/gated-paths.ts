@@ -6,7 +6,7 @@
  * kept beside it as the documented alternative.
  */
 
-import { isSourcePath } from "./build-source";
+import { GATED_MODULES, isSourcePath } from "./build-source";
 import { isEvaluationPath } from "./identity";
 
 export type GatedPathPolicy = "expanded" | "narrower";
@@ -36,7 +36,11 @@ export function isGatedPath(
 	policy: GatedPathPolicy = ADOPTED_GATED_PATHS,
 ): boolean {
 	if (policy === "expanded") {
-		return isSourcePath(path) || isEvaluationPath(path);
+		return (
+			isSourcePath(path) ||
+			isEvaluationPath(path) ||
+			GATED_MODULES.includes(path)
+		);
 	}
 	return (
 		(NARROWER_GATED_PATHS.files as readonly string[]).includes(path) ||

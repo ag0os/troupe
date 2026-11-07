@@ -63,6 +63,16 @@ export { type Builder, isSourcePath, SHEPHERD_ID };
 /** The identity module: a change to it always needs an eval result. */
 export const IDENTITY_MODULE = "scripts/shepherd-source-v2.ts";
 
+/**
+ * Modules whose change always needs an eval result, whatever the path
+ * policy says: the identity module and this seam, which v2's source
+ * membership does not select.
+ */
+export const GATED_MODULES: readonly string[] = [
+	IDENTITY_MODULE,
+	"scripts/eval-source.ts",
+];
+
 export interface BuildProvenance {
 	/** The package's full build-time `HEAD`. */
 	revision: string;

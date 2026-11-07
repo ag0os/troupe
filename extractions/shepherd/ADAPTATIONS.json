@@ -139,8 +139,8 @@
 		},
 		{
 			"file": "evals/shepherd/build-source.ts",
-			"from": "export { type Builder, compileAgent } from \"../../scripts/agent-compiler\";\nexport {\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/shepherd-source\";\n",
-			"to": "export {\n\ttype Builder,\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcompileAgent,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/eval-source\";\n",
+			"from": "export { type Builder, compileAgent } from \"../../scripts/agent-compiler\";\nexport {\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\tGATED_MODULES,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/shepherd-source\";\n",
+			"to": "export {\n\ttype Builder,\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcompileAgent,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\tGATED_MODULES,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/eval-source\";\n",
 			"count": 1
 		},
 		{
@@ -171,6 +171,7 @@
 		"package.json",
 		"scripts/build.ts",
 		"scripts/eval-source-fixture.ts",
+		"scripts/eval-source.test.ts",
 		"scripts/eval-source.ts",
 		"scripts/shepherd-definition.ts",
 		"scripts/watch.ts",

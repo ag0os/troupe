@@ -12,6 +12,7 @@ export {
 	createGitRunner,
 	entryPackagePath,
 	framedDigest,
+	GATED_MODULES,
 	type GitRunner,
 	gitStamp,
 	IDENTITY_MODULE,

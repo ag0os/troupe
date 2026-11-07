@@ -102,6 +102,9 @@ export const runGit = createGitRunner();
 /** This module's path: a change to it always needs an eval result. */
 export const IDENTITY_MODULE = "scripts/shepherd-source.ts";
 
+/** Modules whose change always needs an eval result, whatever the path policy says. */
+export const GATED_MODULES: readonly string[] = [IDENTITY_MODULE];
+
 /** The v1 stamp; with `layout`, of the package at its prefix. */
 export function gitStamp(
 	git: GitRunner = runGit,
