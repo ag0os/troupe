@@ -1494,3 +1494,103 @@ describe("local/ exclusion (R4)", () => {
 		]);
 	});
 });
+
+describe("resolved module files and the sibling (fix 3, R1)", () => {
+	const importing = (specifier: string) =>
+		`import { greeting } from "${specifier}";\nexport function prepare() {\n\treturn { prompt: greeting };\n}\n`;
+
+	test("a directory import whose index resolves into outDir is refused", async () => {
+		write("tools/gen/h.ts", "export const greeting = 'hi';\n");
+		mkdirSync(join(root, "tools/helper"));
+		symlinkSync(
+			join(root, "tools/gen/h.ts"),
+			join(root, "tools/helper/index.ts"),
+		);
+		addAgent("defs/a.md");
+		write("defs/a.ts", importing("../tools/helper"));
+		const issues = await issuesOf(
+			loadAgentDefinition(
+				definition({ extensionCodeRoots: ["tools"], outDir: "tools/gen" }),
+				"defs/a.md",
+			),
+		);
+		expect(issues.map((issue) => issue.message)).toEqual([
+			'value import "../tools/helper" lies inside the output directory "tools/gen"; extensions must not run code on import',
+		]);
+	});
+
+	test("a directory import is judged by its index file, not the directory", async () => {
+		write("tools/helper/index.ts", "export const greeting = 'hi';\n");
+		write("elsewhere/h.ts", "export const greeting = 'hi';\n");
+		mkdirSync(join(root, "tools/empty"));
+		addAgent("defs/a.md");
+		const def = definition({ extensionCodeRoots: ["tools"] });
+		write("defs/a.ts", importing("../tools/helper"));
+		expect(
+			(await loadAgentDefinition(def, "defs/a.md")).extension?.exports,
+		).toEqual(["prepare"]);
+		// A directory under the root with no index loads nothing from it.
+		write("defs/a.ts", importing("../tools/empty"));
+		const issues = await issuesOf(loadAgentDefinition(def, "defs/a.md"));
+		expect(issues[0]?.message).toStartWith(
+			'value import from "../tools/empty"',
+		);
+	});
+
+	test("an extension sibling whose real file is inside outDir is refused", async () => {
+		write("out/a.ts", "export function prepare() {\n\treturn {};\n}\n");
+		addAgent("defs/a.md");
+		symlinkSync(join(root, "out/a.ts"), join(root, "defs/a.ts"));
+		const issues = await issuesOf(
+			loadAgentDefinition(definition({ outDir: "out" }), "defs/a.md"),
+		);
+		expect(issues).toEqual([
+			{
+				file: "defs/a.ts",
+				field: "path",
+				message: 'extension lies inside the output directory "out"',
+			},
+		]);
+	});
+});
+
+describe("canonical local/ target (fix 3, R4)", () => {
+	test("a declaration under a symlinked local/'s target is neither discovered nor compiled", async () => {
+		addAgent("defs/team/a.md");
+		symlinkSync(join(root, "defs/team"), join(root, "defs/local"));
+		const def = definition({ roster: ["team:a"] });
+		const planned = await issuesOf(planBuild({ definition: def }));
+		expect(planned).toEqual([
+			{
+				file: "defs/team/a.md",
+				field: "roster",
+				message: 'roster agent "team:a" has no declaration',
+			},
+		]);
+		const direct = await issuesOf(
+			compileAgent({
+				definition: def,
+				file: "defs/team/a.md",
+				outFile: "team",
+				build: fakeBuilder(),
+			}),
+		);
+		expect(direct).toEqual([
+			{
+				file: "defs/team/a.md",
+				field: "path",
+				message: "declaration lies inside defs/local/, which is never compiled",
+			},
+		]);
+		expect(existsSync(join(root, "team"))).toBe(false);
+	});
+
+	test("an ordinary local/ include through the declaration root stays accepted", async () => {
+		write("defs/local/p.md", "Private fragment\n");
+		addAgent("defs/a.md", "includes: [local/p.md]\n");
+		const agent = await loadAgentDefinition(definition(), "defs/a.md");
+		expect(agent.spec.systemPrompt).toBe(
+			["Body", "Private fragment"].join(PROMPT_SEPARATOR),
+		);
+	});
+});

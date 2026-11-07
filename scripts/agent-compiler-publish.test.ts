@@ -18,6 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { AgentSourceError, type SourceIssue } from "../lib/agent-format/errors";
 import {
 	type BuildEntry,
+	compileAgent,
 	createSerialQueue,
 	describePublishFailure,
 	LOCAL_AGENTS_WARNING,
@@ -584,6 +585,37 @@ describe("single compile (D-011)", () => {
 });
 
 describe("agents/local/ (D-011)", () => {
+	test("a symlinked agents/local/ excludes its real target from discovery and compilation", async () => {
+		// Base walked agents/team/ and compiled it while the watcher saw its
+		// edits; the canonical exclusion now covers the link's target.
+		addDeclaration("agents/team/a.md", "Team body");
+		symlinkSync(join(root, "agents/team"), join(root, "agents/local"));
+		const issues = await issuesOf(planBuild(opts({ roster: ["team:a"] })));
+		expect(issues).toEqual([
+			{
+				file: "agents/team/a.md",
+				field: "roster",
+				message: 'roster agent "team:a" has no declaration',
+			},
+		]);
+		const direct = await issuesOf(
+			compileAgent({
+				root,
+				file: "agents/team/a.md",
+				outFile: join(root, "team"),
+				build: async () => {},
+			}),
+		);
+		expect(direct).toEqual([
+			{
+				file: "agents/team/a.md",
+				field: "path",
+				message:
+					"declaration lies inside agents/local/, which is never compiled",
+			},
+		]);
+	});
+
 	test("is never discovered, and a present directory gives one warning line", async () => {
 		write("agents/a.md", `${header}---\nA body\n`);
 		addDeclaration("agents/ns/b.md", "B body");

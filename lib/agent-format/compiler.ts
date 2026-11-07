@@ -196,6 +196,8 @@ interface ResolvedDefinition {
 	roster?: readonly string[];
 	outDir: string;
 	owned: OwnedLocations;
+	/** `canonical(<declarationRoot>/local)`: never discovered, compiled or watched. */
+	realLocal: string;
 	watchRoots: string[];
 	/** Read when pruning is decided, not when the definition is resolved. */
 	protectedOutputs(): ReadonlySet<string>;
@@ -310,6 +312,7 @@ function resolveDefinition(
 		roster: source.roster,
 		outDir,
 		owned,
+		realLocal,
 		watchRoots,
 		protectedOutputs: () => new Set(source.protectedOutputs ?? []),
 	};
@@ -385,6 +388,15 @@ async function loadResolved(
 			},
 		]);
 	}
+	if (isWithin(definition.realLocal, declaration)) {
+		throw new AgentSourceError([
+			{
+				file: display,
+				field: "path",
+				message: `declaration lies inside ${declarationLabel}/local/, which is never compiled`,
+			},
+		]);
+	}
 	const declarationOwned = ownedProblem(definition.owned, declaration);
 	if (declarationOwned) {
 		throw new AgentSourceError([
@@ -433,20 +445,18 @@ async function loadResolved(
 		siblingDisplay,
 		await readFile(sibling, "utf8"),
 		{
-			isFrameworkImport: (specifier) =>
-				moduleCandidates(resolve(importBase, specifier)).some(
-					(candidate) =>
-						existsSync(candidate) &&
-						frameworkDirs.some((dir) => isInside(dir, realpathSync(candidate))),
-				),
+			// Both checks judge the one file the import really loads.
+			isFrameworkImport: (specifier) => {
+				const file = moduleFile(resolve(importBase, specifier));
+				return (
+					file !== undefined && frameworkDirs.some((dir) => isInside(dir, file))
+				);
+			},
 			textImportProblem: (specifier) =>
 				textImportProblem(definition, repoRoot, importBase, specifier),
 			importProblem: (specifier) => {
-				const found = moduleCandidates(resolve(importBase, specifier)).find(
-					(candidate) => existsSync(candidate),
-				);
-				const owned =
-					found && ownedProblem(definition.owned, realpathSync(found));
+				const file = moduleFile(resolve(importBase, specifier));
+				const owned = file && ownedProblem(definition.owned, file);
 				return owned ? `value import "${specifier}" ${owned}` : undefined;
 			},
 			codeRoots: definition.extensionCodeRoots.map((entry) => entry.label),
@@ -570,6 +580,20 @@ function realpathOrSelf(path: string): string {
 
 function moduleCandidates(path: string): string[] {
 	return [path, `${path}.ts`, join(path, "index.ts")];
+}
+
+/**
+ * The real path of the file a relative value import loads: the first
+ * candidate that is a regular file, so a directory import is judged by its
+ * `index.ts`, wherever that really lives. Undefined when none is a file.
+ */
+function moduleFile(path: string): string | undefined {
+	for (const candidate of moduleCandidates(path)) {
+		if (statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+			return realpathSync(candidate);
+		}
+	}
+	return undefined;
 }
 
 /** Strictly beneath `dir`; `dir` itself is not inside. */
@@ -1413,6 +1437,8 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 			const full = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (dir === agentsDir && entry.name === "local") continue;
+				// Nor its real target, if local/ is a link to another directory.
+				if (isWithin(definition.realLocal, canonical(full))) continue;
 				// The compiler's own output and temporary directories hold no
 				// sources, even under a declaration root that contains them.
 				if (ownedProblem(definition.owned, canonical(full))) continue;
@@ -1978,7 +2004,7 @@ export function startWatcher(options: WatcherOptions): {
 	// through a symlink filters the same paths as the real one.
 	// The same owned locations resolution refuses inputs in, and the whole
 	// local/ path canonicalized, so a symlinked local/ is excluded too.
-	const realLocal = canonical(join(definition.declarationRoot.path, "local"));
+	const realLocal = definition.realLocal;
 	const ignored = (path: string) =>
 		ownedProblem(definition.owned, path) !== undefined ||
 		isWithin(realLocal, path);
