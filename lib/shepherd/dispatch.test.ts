@@ -14,8 +14,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { runDispatch } from "../agent-format/run";
-import type { AgentSpec, DispatchResult } from "../agent-format/types";
+import { runDispatch } from "../entries/runtime";
+import type { AgentSpec, DispatchResult } from "../index";
 import { composeFragments } from "./compose";
 import { dispatchPackageTool } from "./dispatch";
 import type { PackageLocation } from "./package-resolution";

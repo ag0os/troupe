@@ -3,9 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { prepare } from "../../agents/shepherd";
-import { loadAgentDefinition } from "../../scripts/agent-compiler";
-import { parseCli } from "../agent-format/cli";
-import { previewAgent } from "../agent-format/run";
+import { shepherdDefinition } from "../../scripts/shepherd-definition";
+import { parseCli } from "../entries/cli";
+import { loadAgentDefinition } from "../entries/compiler";
+import { previewAgent } from "../entries/runtime";
 import { promptWords } from "./compose";
 import { fakeToolEnv } from "./test-support";
 import { words } from "./text";
@@ -22,7 +23,10 @@ test("promptWords counts the system prompt produced by previewAgent", async () =
 			"# Local module\n\nLocal instructions.\n",
 		);
 
-		const agent = await loadAgentDefinition(repo, "agents/shepherd.md");
+		const agent = await loadAgentDefinition(
+			shepherdDefinition(repo),
+			"agents/shepherd.md",
+		);
 		const outcome = parseCli(agent.spec, ["--show-prompt"], { cwd: workspace });
 		if (outcome.kind !== "run") throw new Error("unexpected help");
 		let stdout = "";

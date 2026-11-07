@@ -13,6 +13,7 @@ export const WRAPPERS = [
 	"scripts/binary-name.ts",
 	"scripts/compile-all.ts",
 	"scripts/compile.ts",
+	"scripts/shepherd-definition.ts",
 	"scripts/watch-agents.ts",
 ] as const;
 
