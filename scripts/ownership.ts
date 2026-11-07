@@ -3,8 +3,9 @@
  * every Shepherd and compatibility location still in Troupe, by exact path
  * or named tree. Generic framework code outside it imports nothing inside
  * it; the wrappers hand Shepherd policy to the compiler only through
- * `BuildStampPolicy`. `scripts/ownership.test.ts` enforces this. PR 4
- * extends the list with the extracted tree; phase 3 deletes what it names.
+ * `BuildStampPolicy`. `scripts/ownership.test.ts` enforces this. From PR 4
+ * the list also names the extracted package tree and the transitional
+ * extraction verification code; phase 3 deletes what it names.
  */
 
 /** Legacy command and re-export wrappers. */
@@ -86,15 +87,36 @@ export const AGENT_FIXTURES = [
 	"agents/__snapshots__/shepherd.test.ts.snap",
 ] as const;
 
+/**
+ * Transitional verification code for the extraction: continuity evidence,
+ * setup of the extracted package, its gate proof and its copy check, with
+ * their tests. Phase 3 retires them with the original layout.
+ */
+export const TRANSITIONAL = [
+	"scripts/check-extraction-commits.ts",
+	"scripts/check-extraction-gates.test.ts",
+	"scripts/check-extraction-gates.ts",
+	"scripts/compare-extraction-slice.ts",
+	"scripts/extraction-continuity.test.ts",
+	"scripts/extraction-continuity.ts",
+	"scripts/setup-extractions.test.ts",
+	"scripts/setup-extractions.ts",
+	"scripts/shepherd-copy.test.ts",
+] as const;
+
 /** Trees owned whole. */
 export const OWNED_TREES = [
 	"evals/shepherd/",
+	"extractions/shepherd/",
 	"lib/shepherd/",
 	"packages/software/",
 	"system-prompts/shepherd/",
 ] as const;
 
-/** Shepherd documentation. */
+/**
+ * Shepherd documentation. The extracted package owns these from PR 4; each
+ * root copy carries one transitional line naming its package location.
+ */
 export const DOCUMENTS = [
 	"docs/PACKAGES.md",
 	"docs/SETUP.md",
@@ -137,6 +159,7 @@ const EXACT = new Set<string>([
 	...AGENT_FILES,
 	...AGENT_FIXTURES,
 	...DOCUMENTS,
+	...TRANSITIONAL,
 ]);
 
 /** Whether a repository-relative path is in the ownership inventory. */

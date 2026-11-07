@@ -22,6 +22,7 @@ import {
 	mayImportOwned,
 	OWNED_TREES,
 	POLICIES,
+	TRANSITIONAL,
 	WRAPPERS,
 } from "./ownership";
 
@@ -102,6 +103,7 @@ describe("the ownership inventory (O19)", () => {
 			...AGENT_FILES,
 			...AGENT_FIXTURES,
 			...DOCUMENTS,
+			...TRANSITIONAL,
 			...Object.keys(COMPATIBILITY_TESTS),
 		]) {
 			expect(existsSync(resolve(repo, path))).toBe(true);
@@ -116,6 +118,32 @@ describe("the ownership inventory (O19)", () => {
 			/shepherd/i.test(path),
 		);
 		expect(shepherdAgentFiles.filter((path) => !isOwned(path))).toEqual([]);
+	});
+
+	test("extraction scripts are all listed by exact path as transitional verification code", () => {
+		const extraction = tracked("scripts").filter((path) =>
+			/extraction|shepherd-copy/.test(path),
+		);
+		expect(extraction.length).toBeGreaterThan(0);
+		expect(extraction.filter((path) => !isOwned(path))).toEqual([]);
+		expect([...extraction].sort()).toEqual([...TRANSITIONAL].sort());
+	});
+
+	test("each root Shepherd document carries one transitional line naming its package copy", () => {
+		for (const path of DOCUMENTS) {
+			const name = path.slice("docs/".length);
+			const target = `extractions/shepherd/docs/${name}`;
+			expect(existsSync(resolve(repo, target))).toBe(true);
+			const text = readFileSync(resolve(repo, path), "utf8");
+			const lines = text
+				.split("\n")
+				.filter((line) => line.startsWith("> Transitional copy:"));
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toContain(`[${target}](../${target})`);
+			expect(readFileSync(resolve(repo, target), "utf8")).not.toContain(
+				"Transitional copy:",
+			);
+		}
 	});
 
 	test("no file outside the inventory imports into it, except classified compatibility tests", () => {
