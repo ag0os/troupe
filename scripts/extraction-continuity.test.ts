@@ -5,6 +5,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -159,6 +160,16 @@ describe("evidence destination", () => {
 			"through the symlink",
 		);
 		expect(Bun.file(join(live, "packages/software/MODULE.md")).size).toBe(7);
+	});
+});
+
+describe("evidence files name the Bun version (R2)", () => {
+	test("the first line is the evidence script's Bun version", () => {
+		const dir = join(root, "evidence-header");
+		const file = writeEvidence(dir, "run.log", "$ cmd\noutput\n");
+		expect(readFileSync(file, "utf8")).toBe(
+			`# bun ${Bun.version} (Bun.version of the evidence script)\n$ cmd\noutput\n`,
+		);
 	});
 });
 

@@ -415,14 +415,23 @@ export function installFakes(slot: string, dir: string): string {
 	return dir;
 }
 
+/**
+ * Write one evidence file under `dir`, never through a symlink. Its first
+ * line names the Bun version, so every log carries it.
+ */
 export function writeEvidence(dir: string, name: string, text: string): string {
 	mkdirSync(dir, { recursive: true });
 	const file = join(dir, name);
 	if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
 		throw new Error(`refusing to write evidence through the symlink ${file}`);
 	}
-	writeFileSync(file, text);
+	writeFileSync(file, `${evidenceHeader()}\n${text}`);
 	return file;
+}
+
+/** The first line of every evidence file: the Bun that ran the script. */
+export function evidenceHeader(): string {
+	return `# bun ${Bun.version} (Bun.version of the evidence script)`;
 }
 
 export function describeRan(ran: Ran): string {
