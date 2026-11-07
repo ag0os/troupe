@@ -4,9 +4,12 @@ import {
 	appendFileSync,
 	chmodSync,
 	cpSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
+	readlinkSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -20,7 +23,9 @@ import { PACKAGE_ROOT, troupeRoot } from "./shepherd-definition";
 // (lib/shepherd/check-charter.ts) both text-import the package's own
 // system-prompts/shepherd/core.md. A mutation of core.md in a scratch copy
 // of the package changes both a composed prompt and a charter check, with
-// no Troupe change, and the bundled binary carries the mutated core. Fake
+// no Troupe change (the staged Troupe tree's inventory and bytes are
+// unchanged), and the bundled binary carries the mutated core into both
+// composition and charter checking once core.md is gone. Fake
 // workspace, HOME and XDG_CONFIG_HOME only; fake backends first on PATH.
 
 setDefaultTimeout(180_000);
@@ -70,6 +75,30 @@ const env = {
 	NO_COLOR: "1",
 };
 
+/** The digest of every entry under `root`: paths, kinds, bytes and link targets. */
+function treeDigest(root: string): string {
+	const hash = createHash("sha256");
+	const walk = (dir: string) => {
+		for (const name of readdirSync(dir).sort()) {
+			const path = join(dir, name);
+			const stat = lstatSync(path);
+			const key = relative(root, path);
+			if (stat.isSymbolicLink()) {
+				hash.update(`link ${key} ${readlinkSync(path)}\0`);
+			} else if (stat.isDirectory()) {
+				hash.update(`dir ${key}\0`);
+				walk(path);
+			} else {
+				hash.update(`file ${key} ${stat.mode & 0o111 ? "x" : "-"} `);
+				hash.update(readFileSync(path));
+				hash.update("\0");
+			}
+		}
+	};
+	walk(root);
+	return hash.digest("hex");
+}
+
 /** A paragraph of more than 20 words that core.md does not hold. */
 const SENTINEL =
 	"Shared core sentinel: every scratch Shepherd reads this exact paragraph from its own core file, so composition and charter checking change together without any Troupe change.";
@@ -117,9 +146,7 @@ const coreParagraph =
 		?.trim() ?? "";
 
 describe("one moved core feeds composition and charter checking (O20)", () => {
-	const stageBefore = sha(
-		readFileSync(join(troupeRoot(PACKAGE_ROOT), "lib/index.ts")),
-	);
+	const stageBefore = treeDigest(troupeRoot(PACKAGE_ROOT));
 	let before: Probe | undefined;
 
 	test("both consumers text-import the package's own core.md", () => {
@@ -156,12 +183,10 @@ describe("one moved core feeds composition and charter checking (O20)", () => {
 		expect(after.restatements[1]?.join("\n")).toMatch(
 			/possible repeated rule: core:\d+/,
 		);
-		expect(
-			sha(readFileSync(join(troupeRoot(PACKAGE_ROOT), "lib/index.ts"))),
-		).toBe(stageBefore);
+		expect(treeDigest(troupeRoot(PACKAGE_ROOT))).toBe(stageBefore);
 	});
 
-	test("the bundled binary carries the mutated core, with core.md gone", () => {
+	test("the bundled binary carries the mutated core into composition and charter checking, with core.md gone", () => {
 		// The documented command (docs/SHEPHERD.md), run in the scratch copy.
 		const build = Bun.spawnSync(
 			[process.execPath, "run", "compile", "--", "shepherd"],
@@ -184,5 +209,17 @@ describe("one moved core feeds composition and charter checking (O20)", () => {
 		);
 		expect(shown.exitCode).toBe(0);
 		expect(shown.stdout.toString()).toContain(SENTINEL);
+		// The bundled charter check finds a charter restating the mutated core.
+		writeFileSync(
+			join(workspace, ".shepherd/charter.md"),
+			`# Charter\n\n${SENTINEL}\n`,
+		);
+		const checked = Bun.spawnSync(
+			[resolve(copy, "bin/shepherd"), "tool", "check", "--all"],
+			{ cwd: workspace, env, stdout: "pipe", stderr: "pipe" },
+		);
+		const output = `${checked.stdout.toString()}${checked.stderr.toString()}`;
+		expect(output).toMatch(/possible repeated rule: core:\d+/);
+		expect(treeDigest(troupeRoot(PACKAGE_ROOT))).toBe(stageBefore);
 	});
 });

@@ -16,7 +16,9 @@ import { PACKAGE_ROOT } from "./shepherd-definition";
 
 // O21: Shepherd package contract 1 selects one set of packages and
 // offerings, and the prompt (composition), tool dispatch (`shepherd tool
-// <package> <tool>` routing) and guide selection all agree on it. The
+// <package> <tool>` routing) and guide selection all agree on it, and the
+// composed prompt carries each selected package's body and no refused
+// one's. The
 // packages are external fixtures: a scratch copy of the package whose base
 // `packages/` holds only fixture packages, and enclosing workspaces'
 // `.shepherd/packages/`. Fake workspaces and HOME only.
@@ -224,7 +226,7 @@ const { home, workspaces, names, tools, guides } = JSON.parse(process.argv[2]);
 const results = [];
 for (const ws of workspaces) {
 	let problems = "";
-	const { packages } = composeSession(ws, "claude", findEnclosingWorkspace(ws), [], new Date(0), (details) => { problems = details; });
+	const { fragments, packages } = composeSession(ws, "claude", findEnclosingWorkspace(ws), [], new Date(0), (details) => { problems = details; });
 	const env = { HOME: home, SHEPHERD_WORKSPACE: ws };
 	const dispatched = [];
 	const guided = [];
@@ -242,7 +244,8 @@ for (const ws of workspaces) {
 		.map((line) => line.split(":")[0])
 		.filter((head) => names.some((name) => head.startsWith(name + " ")));
 	results.push({
-		prompt: packages.map((p) => ({ name: p.name, tools: Object.keys(p.tools), guides: Object.keys(p.guides) })),
+		composed: fragments.join("\\n"),
+		selected: packages.map((p) => ({ name: p.name, tools: Object.keys(p.tools), guides: Object.keys(p.guides) })),
 		dispatched,
 		guided,
 		listed,
@@ -254,7 +257,10 @@ console.log(JSON.stringify(results));
 writeFileSync(join(copy, "parity-probe.ts"), PROBE);
 
 interface Outcome {
-	prompt: { name: string; tools: string[]; guides: string[] }[];
+	/** The composed prompt text. */
+	composed: string;
+	/** The package records composition returns. */
+	selected: { name: string; tools: string[]; guides: string[] }[];
 	dispatched: string[];
 	guided: string[];
 	listed: string[];
@@ -291,14 +297,23 @@ const outcomes = JSON.parse(child.stdout.toString()) as Outcome[];
 
 const sorted = (values: string[]) => [...values].sort();
 
+/** Each fixture package's distinctive body line. */
+const BODIES: Record<string, string> = Object.fromEntries([
+	...["notes", "dup", "jots", "broken", "typo", "mail"].map((name) => [
+		name,
+		`${name} package body.`,
+	]),
+	...["hey", "gmail"].map((name) => [name, `${name} provider body.`]),
+]);
+
 describe("contract 1 selection agrees across prompts, tools and guides (O21)", () => {
 	SCENARIOS.forEach((scenario, index) => {
 		test(scenario.name, () => {
 			const outcome = outcomes[index] as Outcome;
-			const promptTools = outcome.prompt.flatMap((p) =>
+			const promptTools = outcome.selected.flatMap((p) =>
 				p.tools.map((tool) => `${p.name} ${tool}`),
 			);
-			const promptGuides = outcome.prompt.flatMap((p) =>
+			const promptGuides = outcome.selected.flatMap((p) =>
 				p.guides.map((guide) => `${p.name} ${guide}`),
 			);
 			const context = { scenario: scenario.name, problems: outcome.problems };
@@ -327,6 +342,25 @@ describe("contract 1 selection agrees across prompts, tools and guides (O21)", (
 			expect({ ...context, guides: sorted(outcome.listed) }).toEqual({
 				...context,
 				guides: sorted(scenario.guides),
+			});
+			// The composed prompt carries a selected package's body, not a refused one's.
+			const chosen = new Set(
+				[...scenario.tools, ...scenario.guides].map(
+					(each) => each.split(" ")[0],
+				),
+			);
+			const lines = outcome.composed.split("\n");
+			const bodies = Object.fromEntries(
+				Object.entries(BODIES).map(([name, line]) => [
+					name,
+					lines.includes(line),
+				]),
+			);
+			expect({ ...context, bodies }).toEqual({
+				...context,
+				bodies: Object.fromEntries(
+					Object.keys(BODIES).map((name) => [name, chosen.has(name)]),
+				),
 			});
 		});
 	});
