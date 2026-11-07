@@ -844,14 +844,14 @@ describe("staged distribution", () => {
 			);
 			expect(result.code).not.toBe(0);
 		}
-		const queue = run(
+		const queue = runConsumer(
 			[
-				process.execPath,
 				"-e",
 				'const m = await import("troupe/compiler"); if ("createSerialQueue" in m) process.exit(3);',
 			],
 			consumer,
 		);
+		expect(queue.stderr).toBe("");
 		expect(queue.code).toBe(0);
 	});
 
