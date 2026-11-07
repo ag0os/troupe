@@ -17,6 +17,7 @@ import {
 	runGit,
 	ShepherdSourceError,
 	type SourceFile,
+	type SourceLayout,
 } from "../../scripts/shepherd-source";
 
 export const EVALUATION_DOMAIN = "troupe-shepherd-evals-v1";
@@ -58,26 +59,56 @@ function gitPaths(git: GitRunner, args: string[], cwd: string): string[] {
 }
 
 /**
- * The evaluation identity of the repository at `root`, its top level. A
- * listed file missing from the working tree is a deletion; symlinks at or
- * above a selected file and nonregular entries are errors.
+ * The evaluation identity of the package at `root`: by default the
+ * repository's top level; with `layout`, the `prefix` directory of the
+ * repository at `gitRoot`, with package-relative paths. A listed file
+ * missing from the working tree is a deletion; symlinks at or above a
+ * selected file and nonregular entries are errors.
  */
 export function evaluationIdentity(
 	root: string,
-	options: { git?: GitRunner } = {},
+	options: { git?: GitRunner; layout?: SourceLayout } = {},
 ): EvaluationIdentity {
 	const git = options.git ?? runGit;
-	const top = git(["rev-parse", "--show-toplevel"], root);
+	const prefix = (options.layout?.prefix ?? "").replace(/^\/+|\/+$/g, "");
+	const gitRoot = options.layout?.gitRoot ?? root;
+	const top = git(["rev-parse", "--show-toplevel"], gitRoot);
 	const topPath = new TextDecoder().decode(top.stdout).trim();
-	if (top.code !== 0 || realpathSync(topPath) !== realpathSync(root)) {
-		throw new ShepherdSourceError([`${root} is not the repository root`]);
+	if (top.code !== 0 || realpathSync(topPath) !== realpathSync(gitRoot)) {
+		throw new ShepherdSourceError([`${gitRoot} is not the repository root`]);
 	}
-	const selection = ["--exclude-standard", "-z", "--", EVALUATION_DIR];
+	if (
+		prefix.split("/").some((part) => part === ".." || part === ".") ||
+		realpathSync(prefix === "" ? topPath : join(topPath, prefix)) !==
+			realpathSync(root)
+	) {
+		throw new ShepherdSourceError([
+			`${root} is not ${prefix || "the root"} of the repository at ${topPath}`,
+		]);
+	}
+	const strip = (paths: string[]) =>
+		prefix === ""
+			? paths
+			: paths
+					.filter((path) => path.startsWith(`${prefix}/`))
+					.map((path) => path.slice(prefix.length + 1));
+	const selection = [
+		"--exclude-standard",
+		"-z",
+		"--",
+		prefix === "" ? EVALUATION_DIR : `${prefix}/${EVALUATION_DIR}`,
+	];
 	const untracked = new Set(
-		gitPaths(git, ["ls-files", "--others", ...selection], root),
+		strip(gitPaths(git, ["ls-files", "--others", ...selection], topPath)),
 	);
 	const listed = new Set(
-		gitPaths(git, ["ls-files", "--cached", "--others", ...selection], root),
+		strip(
+			gitPaths(
+				git,
+				["ls-files", "--cached", "--others", ...selection],
+				topPath,
+			),
+		),
 	);
 	const problems: string[] = listed.has(EVALUATION_DIR)
 		? [`${EVALUATION_DIR}: expected a directory of evaluation files`]

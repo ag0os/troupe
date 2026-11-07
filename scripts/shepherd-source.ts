@@ -201,6 +201,66 @@ function gitOk(
 }
 
 /** The repository root, which must be `root` itself. */
+/**
+ * Where a package sits in its repository: `gitRoot` is the repository's
+ * top level and `prefix` the package directory relative to it (`""` for
+ * the root layout). Manifest paths stay package-relative, so a nested
+ * package's identity equals the same files' root-layout identity.
+ */
+export interface SourceLayout {
+	gitRoot: string;
+	prefix: string;
+}
+
+interface Located {
+	/** The repository's top level. */
+	top: string;
+	/** The package directory: `top` joined with the prefix. */
+	base: string;
+	/** Normalized prefix without slashes at either end, or `""`. */
+	prefix: string;
+}
+
+/**
+ * The repository and package directory for `root`. Without a layout,
+ * `root` must be the repository root; with one, `gitRoot` must be the
+ * repository root and `root` its `prefix` directory.
+ */
+function locate(
+	root: string,
+	git: GitRunner,
+	layout: SourceLayout | undefined,
+): Located {
+	if (!layout) {
+		const top = repositoryRoot(root, git);
+		return { top, base: top, prefix: "" };
+	}
+	const prefix = layout.prefix.replace(/^\/+|\/+$/g, "");
+	if (prefix.split("/").some((part) => part === ".." || part === ".")) {
+		throw new ShepherdSourceError([`${layout.prefix}: not a package prefix`]);
+	}
+	const top = repositoryRoot(layout.gitRoot, git);
+	const base = prefix === "" ? top : join(top, prefix);
+	if (realpathSync(base) !== realpathSync(root)) {
+		throw new ShepherdSourceError([
+			`${root} is not ${prefix || "the root"} of the repository at ${top}`,
+		]);
+	}
+	return { top, base, prefix };
+}
+
+/** Paths under `prefix`, made package-relative; others dropped. */
+function underPrefix(paths: string[], prefix: string): string[] {
+	if (prefix === "") return paths;
+	return paths
+		.filter((path) => path.startsWith(`${prefix}/`))
+		.map((path) => path.slice(prefix.length + 1));
+}
+
+function scope(prefix: string): string[] {
+	return prefix === "" ? [] : ["--", prefix];
+}
+
 function repositoryRoot(root: string, git: GitRunner): string {
 	const result = git(["rev-parse", "--show-toplevel"], root);
 	if (result.code !== 0) {
@@ -230,24 +290,47 @@ function lstatOrUndefined(path: string) {
  */
 export function readWorktreeSource(
 	root: string,
-	options: { git?: GitRunner } = {},
+	options: { git?: GitRunner; layout?: SourceLayout } = {},
 ): SourceManifest {
 	const git = options.git ?? runGit;
-	const top = repositoryRoot(root, git);
+	const { top, base, prefix } = locate(root, git, options.layout);
 	const listed = [
 		...new Set(
-			splitNul(
-				gitOk(
-					git,
-					["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-					top,
+			underPrefix(
+				splitNul(
+					gitOk(
+						git,
+						[
+							"ls-files",
+							"--cached",
+							"--others",
+							"--exclude-standard",
+							"-z",
+							...scope(prefix),
+						],
+						top,
+					),
 				),
+				prefix,
 			),
 		),
 	];
 	const untracked = new Set(
-		splitNul(
-			gitOk(git, ["ls-files", "--others", "--exclude-standard", "-z"], top),
+		underPrefix(
+			splitNul(
+				gitOk(
+					git,
+					[
+						"ls-files",
+						"--others",
+						"--exclude-standard",
+						"-z",
+						...scope(prefix),
+					],
+					top,
+				),
+			),
+			prefix,
 		),
 	);
 	const problems = new Set<string>();
@@ -262,7 +345,7 @@ export function readWorktreeSource(
 	const linkedDir = (dir: string): boolean => {
 		const known = checkedDirs.get(dir);
 		if (known !== undefined) return known;
-		const stat = lstatOrUndefined(join(top, dir));
+		const stat = lstatOrUndefined(join(base, dir));
 		const linked = stat?.isSymbolicLink() ?? false;
 		if (linked) problems.add(`${dir}: a symlink holds Shepherd source`);
 		checkedDirs.set(dir, linked);
@@ -270,7 +353,7 @@ export function readWorktreeSource(
 	};
 	for (const dir of selectionDirs()) {
 		if (linkedDir(dir)) continue;
-		const stat = lstatOrUndefined(join(top, dir));
+		const stat = lstatOrUndefined(join(base, dir));
 		if (stat && !stat.isDirectory()) {
 			problems.add(`${dir}: expected a directory of Shepherd source`);
 		}
@@ -284,7 +367,7 @@ export function readWorktreeSource(
 			if (linkedDir(parts.slice(0, i).join("/"))) underLink = true;
 		}
 		if (underLink) continue;
-		const full = join(top, path);
+		const full = join(base, path);
 		const stat = lstatOrUndefined(full);
 		if (!stat) {
 			if ((SOURCE_FILES as readonly string[]).includes(path)) {
@@ -324,20 +407,25 @@ const REGULAR_MODES = new Set(["100644", "100755"]);
 export function readCommitSource(
 	root: string,
 	revision: string,
-	options: { git?: GitRunner; strict?: boolean } = {},
+	options: { git?: GitRunner; strict?: boolean; layout?: SourceLayout } = {},
 ): SourceManifest {
 	const git = options.git ?? runGit;
 	const strict = options.strict ?? true;
-	const top = repositoryRoot(root, git);
+	const { top, prefix } = locate(root, git, options.layout);
 	const holders = new Set(selectionDirs());
 	const problems: string[] = [];
 	const blobs: { path: string; oid: string }[] = [];
 	for (const record of splitNul(
-		gitOk(git, ["ls-tree", "-r", "-z", "--full-tree", revision], top),
+		gitOk(
+			git,
+			["ls-tree", "-r", "-z", "--full-tree", revision, ...scope(prefix)],
+			top,
+		),
 	)) {
 		const tab = record.indexOf("\t");
 		const [mode = "", , oid = ""] = record.slice(0, tab).split(" ");
-		const path = record.slice(tab + 1);
+		const [path] = underPrefix([record.slice(tab + 1)], prefix);
+		if (path === undefined) continue;
 		if (!isSourcePath(path) && !holders.has(path)) continue;
 		if (mode === "120000") {
 			problems.push(`${path}: Shepherd source must not be a symlink`);
@@ -404,18 +492,20 @@ function headRevision(top: string, git: GitRunner): string {
  */
 export function captureProvenance(
 	root: string,
-	options: { git?: GitRunner } = {},
+	options: { git?: GitRunner; layout?: SourceLayout } = {},
 ): BuildProvenance {
 	const git = options.git ?? runGit;
-	const top = repositoryRoot(root, git);
+	const { top } = locate(root, git, options.layout);
+	const layout = options.layout;
 	const revision = headRevision(top, git);
 	const status = gitOk(
 		git,
 		["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
 		top,
 	);
-	const manifest = readWorktreeSource(top, { git });
-	const head = readCommitSource(top, revision, { git, strict: false });
+	// `dirty` stays repository-wide under an explicit layout.
+	const manifest = readWorktreeSource(root, { git, layout });
+	const head = readCommitSource(root, revision, { git, strict: false, layout });
 	return {
 		revision,
 		dirty: status.byteLength > 0,
