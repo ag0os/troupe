@@ -20,7 +20,6 @@ import {
 	IDENTITY_MODULE,
 	RECORDS_UNTRACKED,
 	readWorktreeSource,
-	versionLine,
 } from "./build-source";
 import { artifactType } from "./export";
 import {
@@ -62,6 +61,7 @@ import {
 	RUN_ID,
 	result,
 	scorerOutput,
+	versionLineAt,
 } from "./testing";
 import {
 	ALWAYS_GATED,
@@ -177,7 +177,7 @@ function writeResult(
 		build.revision = revision;
 		build.dirty = false;
 		build.sourceDirty = false;
-		build.version = `${versionLine({ revision, dirty: false, sourceDirty: false, manifest: source })}\n`;
+		build.version = `${versionLineAt(root, { revision, dirty: false, sourceDirty: false, manifest: source })}\n`;
 	}
 	for (const trial of evaluation.trials) {
 		for (const attempt of trial.attempts) {
@@ -851,7 +851,7 @@ describe("verification (7.4)", () => {
 			if (build) {
 				build.dirty = true;
 				build.sourceDirty = true;
-				build.version = `${versionLine({
+				build.version = `${versionLineAt(root, {
 					revision: build.revision,
 					dirty: true,
 					sourceDirty: true,

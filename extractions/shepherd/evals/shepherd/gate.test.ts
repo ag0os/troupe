@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { readWorktreeSource, versionLine } from "./build-source";
+import { readWorktreeSource } from "./build-source";
 import { PATH_MARKER, REDACTED } from "./export";
 import {
 	findNativeLog,
@@ -45,7 +45,12 @@ import {
 } from "./schema";
 import { validateDecisions } from "./scorer";
 import { git as fixtureGit, initShepherdRepo, testGit } from "./source-fixture";
-import { invocation, projectDirName, scorerOutput } from "./testing";
+import {
+	invocation,
+	projectDirName,
+	scorerOutput,
+	versionLineAt,
+} from "./testing";
 import { verifyResults } from "./verify";
 
 // Each test runs the gate end to end with fake subjects and scorers; Linux CI
@@ -1638,7 +1643,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 				...base.build,
 				revision,
 				dirty: false,
-				version: `${versionLine({ revision, dirty: false, sourceDirty: false, manifest: source })}\n`,
+				version: `${versionLineAt(repo, { revision, dirty: false, sourceDirty: false, manifest: source })}\n`,
 			},
 		};
 	}

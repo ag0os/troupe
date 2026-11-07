@@ -10,9 +10,11 @@
  * bytes differ from that commit under the prefix); `dirty` stays repository
  * wide, as in v1, so any uncommitted change in the repository marks the
  * build dirty (C22). The version line is the v2 line: its framework part is
- * the lockfile resolution of `troupe` for this package, and its package part
- * follows from `revision` and `sourceDirty`, so a verifier can rebuild it
- * from a recorded build alone. It never prints `dirty`.
+ * the lockfile resolution of `troupe` for the package the build was
+ * captured from (`packageRoot`), and its package part follows from
+ * `revision` and `sourceDirty`, so a verifier can rebuild it from a
+ * recorded build and the package whose source hash it records. It never
+ * prints `dirty`.
  */
 
 import { realpathSync } from "node:fs";
@@ -31,7 +33,6 @@ import {
 	type SourceManifest,
 } from "troupe/provenance";
 import {
-	PACKAGE_ROOT,
 	SHEPHERD_ID,
 	shepherdDefinition,
 	troupeRoot,
@@ -81,6 +82,11 @@ export interface BuildProvenance {
 	/** The package's selected paths or bytes differ from `HEAD`. */
 	sourceDirty: boolean;
 	manifest: SourceManifest;
+	/**
+	 * The package directory the build was captured from, whose lockfile
+	 * gives the version line's framework part. Never recorded in a stamp.
+	 */
+	packageRoot?: string;
 }
 
 /** How a build is stamped: captured before any build file exists, rechecked before publication. */
@@ -240,6 +246,7 @@ async function captureProvenance(
 		dirty: status.text.length > 0,
 		sourceDirty: own?.marker === "dirty",
 		manifest: captured.manifest,
+		packageRoot: resolve(root),
 	};
 }
 
@@ -268,10 +275,18 @@ export function entryPackagePath(entryPath: string): string | undefined {
 /** Whether manifest entries record that a file was untracked. v2's do not. */
 export const RECORDS_UNTRACKED = false;
 
-/** The one line `shepherd --version` prints, without its newline. */
+/**
+ * The one line `shepherd --version` prints, without its newline, for the
+ * build of the package at `provenance.packageRoot`.
+ */
 export function versionLine(provenance: BuildProvenance): string {
+	if (provenance.packageRoot === undefined) {
+		throw new ShepherdSourceError([
+			"a version line needs the package root its build was captured from",
+		]);
+	}
 	const framework = frameworkRevision(
-		dependencyIdentity(PACKAGE_ROOT).resolved,
+		dependencyIdentity(provenance.packageRoot).resolved,
 	);
 	const marker: OriginMarker = !FULL_COMMIT.test(provenance.revision)
 		? "local"
@@ -299,14 +314,19 @@ function provenanceOf(stamp: CapturedBuildStamp): BuildProvenance {
 	};
 }
 
-function stampPolicy(source: StampSource): BuildStampPolicy {
+function stampPolicy(source: StampSource, root: string): BuildStampPolicy {
 	return {
 		async capture(context) {
-			const { manifest, ...facts } = await source.capture(context.consumerRoot);
+			const {
+				manifest,
+				packageRoot: _,
+				...facts
+			} = await source.capture(context.consumerRoot);
 			return { manifest, provenance: { ...facts } };
 		},
 		recheck: (context) => source.recheck(context.consumerRoot),
-		versionLine: (_agentId, captured) => versionLine(provenanceOf(captured)),
+		versionLine: (_agentId, captured) =>
+			versionLine({ ...provenanceOf(captured), packageRoot: root }),
 	};
 }
 
@@ -323,10 +343,15 @@ export async function compileAgent(options: {
 	const { stamp: captured, ...agent } = await compileWithTroupe({
 		...rest,
 		definition: shepherdDefinition(root, {
-			stamp: stampPolicy(stamp ?? gitStamp()),
+			stamp: stampPolicy(stamp ?? gitStamp(), resolve(root)),
 		}),
 		// Relative to the working directory, as in the original layout.
 		outFile: resolve(outFile),
 	});
-	return captured ? { ...agent, provenance: provenanceOf(captured) } : agent;
+	return captured
+		? {
+				...agent,
+				provenance: { ...provenanceOf(captured), packageRoot: resolve(root) },
+			}
+		: agent;
 }

@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
+	type BuildProvenance,
 	GATED_MODULES,
 	type GitRunner,
 	readWorktreeSource,
@@ -950,12 +951,16 @@ export function verifyResults(
 
 	const unrechecked = new Set<string>();
 	for (const { runId, build, recheck } of evaluation.invocations) {
-		const expected = `${versionLine({
+		// The package checked out here: the equal source hash binds its
+		// lockfile, which a layout's version line may read.
+		const recorded: BuildProvenance & { packageRoot?: string } = {
 			revision: build.revision,
 			dirty: build.dirty,
 			sourceDirty: build.sourceDirty,
 			manifest: { source: result.source.hash, entries: [] },
-		})}\n`;
+			packageRoot: root,
+		};
+		const expected = `${versionLine(recorded)}\n`;
 		if (build.version !== expected)
 			report(
 				`run ${runId}: version output ${JSON.stringify(build.version)} does not match its build record and source`,
