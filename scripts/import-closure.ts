@@ -3,16 +3,22 @@
  * syntax tree so comments and ordinary strings never count. Edges are:
  * import and export declarations (type-only and `export * as` included),
  * import-equals, `import("...")` types and calls with a literal argument,
- * literal `require`, triple-slash references, and a literal first argument
- * of `new URL(..., import.meta.url)`. Anything the walker cannot follow
- * statically is reported as opaque, never dropped: a computed `import()`, a
- * non-literal URL against `import.meta.url`, and any `import.meta.dir` or
- * `import.meta.dirname`. Bare specifiers (packages, `node:` and `bun:`
- * builtins) are external and not followed. Other files (`.md`, `.json`) are
- * members but not followed.
+ * literal `require`, and triple-slash references, all module specifiers; and
+ * a literal first argument of `new URL(..., import.meta.url)`, a file URL
+ * kept apart from specifiers and resolved with URL semantics, so a bare path
+ * such as `helper.ts` names a local file, never a package. Parentheses, type
+ * assertions and `import.meta["url"]` are seen through. Anything the walker
+ * cannot follow statically is reported as opaque with its kind, never
+ * dropped: a computed `import()` or `require()` (module), a non-literal or
+ * non-file URL or a computed `import.meta` read (url), and any
+ * `import.meta.dir` or `import.meta.dirname` in either spelling (directory).
+ * Bare module specifiers (packages, `node:` and `bun:` builtins) are
+ * external and not followed. Other files (`.md`, `.json`) are members but
+ * not followed.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const KINDS: Record<string, ts.ScriptKind> = {
@@ -27,20 +33,39 @@ const KINDS: Record<string, ts.ScriptKind> = {
 };
 const CANDIDATES = ["", ".ts", ".tsx", ".d.ts", "/index.ts", "/index.d.ts"];
 
+/** What an opaque reference may hide: a module, a file URL or a directory. */
+export type OpaqueKind = "module" | "url" | "directory";
+
+export interface OpaqueRef {
+	file: string;
+	line: number;
+	kind: OpaqueKind;
+	what: string;
+}
+
 export interface ClosureResult {
 	/** Absolute paths of every member, the entry files included. */
 	files: string[];
 	/** External specifiers seen, sorted. */
 	external: string[];
-	/** Relative specifiers that resolved to nothing, as `from -> specifier`. */
+	/** Local references that resolved to nothing, as `from -> specifier`. */
 	unresolved: string[];
 	/** Dynamic references the walker cannot follow, as `file:line: what`. */
 	opaque: string[];
+	/** The same references, classified. */
+	opaqueRefs: OpaqueRef[];
 }
 
 export interface FileEdges {
+	/** Module specifiers: relative ones are local, bare ones external. */
 	specifiers: string[];
-	opaque: string[];
+	/** Absolute paths named by file URLs resolved against the module. */
+	urls: string[];
+	opaque: OpaqueRef[];
+}
+
+export function formatOpaque(ref: OpaqueRef): string {
+	return `${ref.file}:${ref.line}: ${ref.what}`;
 }
 
 function scriptKind(file: string): ts.ScriptKind | undefined {
@@ -49,30 +74,83 @@ function scriptKind(file: string): ts.ScriptKind | undefined {
 	return dot === -1 ? undefined : KINDS[file.slice(dot)];
 }
 
-function literalText(node: ts.Node | undefined): string | undefined {
-	if (
-		node &&
-		(ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+/** Strip parentheses and type assertions that do not change the value. */
+function unwrap(node: ts.Node | undefined): ts.Node | undefined {
+	let current = node;
+	while (
+		current &&
+		(ts.isParenthesizedExpression(current) ||
+			ts.isAsExpression(current) ||
+			ts.isSatisfiesExpression(current) ||
+			ts.isNonNullExpression(current) ||
+			ts.isTypeAssertionExpression(current))
 	) {
-		return node.text;
+		current = current.expression;
+	}
+	return current;
+}
+
+function literalText(node: ts.Node | undefined): string | undefined {
+	const inner = unwrap(node);
+	if (
+		inner &&
+		(ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner))
+	) {
+		return inner.text;
 	}
 	return undefined;
 }
 
-function isImportMeta(node: ts.Node, name?: string): boolean {
-	if (!ts.isPropertyAccessExpression(node)) return false;
-	const target = node.expression;
+function isImportMetaProperty(node: ts.Node): boolean {
+	const inner = unwrap(node);
 	return (
-		ts.isMetaProperty(target) &&
-		target.keywordToken === ts.SyntaxKind.ImportKeyword &&
-		(name === undefined || node.name.text === name)
+		inner !== undefined &&
+		ts.isMetaProperty(inner) &&
+		inner.keywordToken === ts.SyntaxKind.ImportKeyword
+	);
+}
+
+/**
+ * The member an `import.meta` access reads: `url` for `import.meta.url` or
+ * `import.meta["url"]`, `null` for a computed key, `undefined` when the node
+ * is not an `import.meta` access.
+ */
+function importMetaMember(
+	node: ts.Node | undefined,
+): string | null | undefined {
+	const inner = unwrap(node);
+	if (!inner) return undefined;
+	if (
+		ts.isPropertyAccessExpression(inner) &&
+		isImportMetaProperty(inner.expression)
+	) {
+		return inner.name.text;
+	}
+	if (
+		ts.isElementAccessExpression(inner) &&
+		isImportMetaProperty(inner.expression)
+	) {
+		return literalText(inner.argumentExpression) ?? null;
+	}
+	return undefined;
+}
+
+function isUrlConstructor(node: ts.Node): boolean {
+	const inner = unwrap(node);
+	if (!inner) return false;
+	if (ts.isIdentifier(inner)) return inner.text === "URL";
+	return (
+		ts.isPropertyAccessExpression(inner) &&
+		inner.name.text === "URL" &&
+		ts.isIdentifier(inner.expression) &&
+		inner.expression.text === "globalThis"
 	);
 }
 
 /** The edges and opaque references of one source file. */
 export function edgesOf(file: string): FileEdges {
 	const kind = scriptKind(file);
-	if (kind === undefined) return { specifiers: [], opaque: [] };
+	if (kind === undefined) return { specifiers: [], urls: [], opaque: [] };
 	const source = ts.createSourceFile(
 		file,
 		readFileSync(file, "utf8"),
@@ -81,9 +159,15 @@ export function edgesOf(file: string): FileEdges {
 		kind,
 	);
 	const specifiers: string[] = [];
-	const opaque: string[] = [];
-	const at = (node: ts.Node) =>
-		`${file}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`;
+	const urls: string[] = [];
+	const opaque: OpaqueRef[] = [];
+	const report = (node: ts.Node, kind: OpaqueKind, what: string) =>
+		opaque.push({
+			file,
+			line: source.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+			kind,
+			what,
+		});
 
 	for (const ref of source.referencedFiles) specifiers.push(ref.fileName);
 	for (const ref of source.typeReferenceDirectives) {
@@ -106,40 +190,49 @@ export function edgesOf(file: string): FileEdges {
 				? literalText(argument.literal)
 				: undefined;
 			if (text !== undefined) specifiers.push(text);
-			else opaque.push(`${at(node)}: computed import() type`);
+			else report(node, "module", "computed import() type");
 		} else if (ts.isCallExpression(node)) {
-			const callee = node.expression;
+			const callee = unwrap(node.expression) as ts.Node;
 			const dynamic = callee.kind === ts.SyntaxKind.ImportKeyword;
 			const required = ts.isIdentifier(callee) && callee.text === "require";
 			if (dynamic || required) {
 				const text = literalText(node.arguments[0]);
 				if (text !== undefined) specifiers.push(text);
 				else {
-					opaque.push(
-						`${at(node)}: computed ${dynamic ? "import()" : "require()"}`,
+					report(
+						node,
+						"module",
+						`computed ${dynamic ? "import()" : "require()"}`,
 					);
 				}
 			}
-		} else if (
-			ts.isNewExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === "URL"
-		) {
-			const base = node.arguments?.[1];
-			if (base && isImportMeta(base, "url")) {
+		} else if (ts.isNewExpression(node) && isUrlConstructor(node.expression)) {
+			const base = importMetaMember(node.arguments?.[1]);
+			if (base === "url" || base === null) {
 				const text = literalText(node.arguments?.[0]);
-				if (text !== undefined) specifiers.push(text);
-				else opaque.push(`${at(node)}: non-literal URL with import.meta.url`);
+				if (base === null || text === undefined) {
+					report(node, "url", "non-literal URL with import.meta.url");
+				} else {
+					const url = new URL(text, pathToFileURL(file));
+					if (url.protocol !== "file:") {
+						report(node, "url", `non-file URL ${url.protocol}`);
+					} else {
+						urls.push(fileURLToPath(url));
+					}
+				}
 			}
-		} else if (isImportMeta(node, "dir") || isImportMeta(node, "dirname")) {
-			opaque.push(
-				`${at(node)}: import.meta.${(node as ts.PropertyAccessExpression).name.text}`,
-			);
+		} else {
+			const member = importMetaMember(node);
+			if (member === null) {
+				report(node, "url", "computed import.meta access");
+			} else if (member === "dir" || member === "dirname") {
+				report(node, "directory", `import.meta.${member}`);
+			}
 		}
 		ts.forEachChild(node, visit);
 	};
 	visit(source);
-	return { specifiers, opaque };
+	return { specifiers, urls, opaque };
 }
 
 function isRelative(specifier: string): boolean {
@@ -163,32 +256,47 @@ export function importClosure(entries: readonly string[]): ClosureResult {
 	const files = new Set<string>();
 	const external = new Set<string>();
 	const unresolved: string[] = [];
-	const opaque: string[] = [];
+	const opaqueRefs: OpaqueRef[] = [];
 	const queue = entries.map((entry) => resolve(entry));
+	const follow = (target: string) => {
+		if (!files.has(target)) queue.push(target);
+	};
 	while (queue.length > 0) {
 		const file = queue.shift() as string;
 		if (files.has(file)) continue;
 		files.add(file);
 		const edges = edgesOf(file);
-		opaque.push(...edges.opaque);
+		opaqueRefs.push(...edges.opaque);
 		for (const specifier of edges.specifiers) {
 			if (!isRelative(specifier)) {
 				external.add(specifier);
 				continue;
 			}
 			const target = resolveRelative(file, specifier);
-			if (target === undefined) {
-				unresolved.push(`${file} -> ${specifier}`);
-				continue;
-			}
-			if (!files.has(target)) queue.push(target);
+			if (target === undefined) unresolved.push(`${file} -> ${specifier}`);
+			else follow(target);
+		}
+		// A file URL names one exact local file: no extension search, never a
+		// package, whatever its spelling.
+		for (const target of edges.urls) {
+			const stat = statSync(target, { throwIfNoEntry: false });
+			if (!stat) unresolved.push(`${file} -> url ${target}`);
+			else if (stat.isDirectory()) {
+				opaqueRefs.push({
+					file,
+					line: 0,
+					kind: "directory",
+					what: `URL to the directory ${target}`,
+				});
+			} else follow(target);
 		}
 	}
 	return {
 		files: [...files].sort(),
 		external: [...external].sort(),
 		unresolved,
-		opaque,
+		opaque: opaqueRefs.map(formatOpaque),
+		opaqueRefs,
 	};
 }
 

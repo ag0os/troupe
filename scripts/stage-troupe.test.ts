@@ -623,6 +623,27 @@ describe("stage refusals", () => {
 		expect(problems(root)).toEqual(["unexpected file lib/shepherd/helper.ts"]);
 	});
 
+	test("a bare local URL is a member, not the declared package", () => {
+		const root = join(parent, "fixtures", "url-yaml");
+		put(
+			root,
+			"package.json",
+			JSON.stringify({
+				name: "troupe",
+				version: "0.0.0",
+				exports: { ".": "./lib/index.ts" },
+				dependencies: { yaml: "^2" },
+			}),
+		);
+		put(
+			root,
+			"lib/index.ts",
+			'export const u = new URL("yaml/helper.ts", import.meta.url);\n',
+		);
+		put(root, "lib/yaml/helper.ts", "export {};\n");
+		expect(problems(root)).toEqual(["unexpected file lib/yaml/helper.ts"]);
+	});
+
 	test("a .spec.ts member", () => {
 		const root = fixture("spec-member", {
 			"lib/index.ts": 'export * from "./agent-format/x.spec";\n',
