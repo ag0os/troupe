@@ -10,10 +10,29 @@
  * working-tree bytes, unnormalized.
  */
 
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import {
+	buildManifest,
+	createGitRunner,
+	type GitRunner,
+	type SourceFile,
+	type SourceManifest,
+	sameSource,
+} from "../lib/agent-format/provenance";
+
+/** The generic helpers, re-exported for this module's existing importers. */
+export {
+	buildManifest,
+	compareUtf8,
+	createGitRunner,
+	framedDigest,
+	type GitRunner,
+	type ManifestEntry,
+	type SourceFile,
+	type SourceManifest,
+	sameSource,
+} from "../lib/agent-format/provenance";
 
 /** The binary name whose builds are stamped. */
 export const SHEPHERD_ID = "shepherd";
@@ -47,26 +66,6 @@ export const SOURCE_TREES = [
 	{ dir: "packages", tests: true },
 ] as const;
 
-export interface ManifestEntry {
-	path: string;
-	bytes: number;
-	sha256: string;
-	untracked: boolean;
-}
-
-export interface SourceManifest {
-	/** `sha256:<hex>` over the framed entries. */
-	source: string;
-	/** Sorted by unsigned UTF-8 path bytes. */
-	entries: ManifestEntry[];
-}
-
-export interface SourceFile {
-	path: string;
-	content: Uint8Array;
-	untracked?: boolean;
-}
-
 export interface BuildProvenance {
 	/** Full build-time `HEAD`. */
 	revision: string;
@@ -94,36 +93,6 @@ export class ShepherdSourceError extends Error {
 	}
 }
 
-export type GitRunner = (
-	args: readonly string[],
-	cwd: string,
-	input?: Uint8Array,
-) => { code: number; stdout: Uint8Array; stderr: string };
-
-/**
- * A Git runner that drops inherited `GIT_*` routing variables, so the
- * repository is always the one at `cwd`, then applies `env`.
- */
-export function createGitRunner(env: Record<string, string> = {}): GitRunner {
-	return (args, cwd, input) => {
-		const clean: Record<string, string> = {};
-		for (const [key, value] of Object.entries(process.env)) {
-			if (value !== undefined && !key.startsWith("GIT_")) clean[key] = value;
-		}
-		const child = spawnSync("git", ["--no-optional-locks", ...args], {
-			cwd,
-			env: { ...clean, ...env },
-			input,
-			maxBuffer: 1 << 30,
-		});
-		return {
-			code: child.error ? 127 : (child.status ?? 1),
-			stdout: child.stdout ?? new Uint8Array(),
-			stderr: child.error?.message ?? child.stderr?.toString() ?? "",
-		};
-	};
-}
-
 export const runGit = createGitRunner();
 
 export function gitStamp(git: GitRunner = runGit): StampSource {
@@ -139,65 +108,6 @@ export function versionLine(provenance: BuildProvenance): string {
 }
 
 const encoder = new TextEncoder();
-
-/** Order by unsigned UTF-8 bytes. */
-export function compareUtf8(a: string, b: string): number {
-	return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
-}
-
-function uint64(value: number): Buffer {
-	const buffer = Buffer.alloc(8);
-	buffer.writeBigUInt64BE(BigInt(value));
-	return buffer;
-}
-
-/**
- * SHA-256, as lowercase hex, of `UTF8(domain + "\0")` followed by each file
- * in UTF-8 path order as a big-endian uint64 path length, the path bytes, a
- * big-endian uint64 content length and the raw content.
- */
-export function framedDigest(
-	domain: string,
-	files: readonly { path: string; content: Uint8Array }[],
-): string {
-	const sorted = [...files].sort((a, b) => compareUtf8(a.path, b.path));
-	const hash = createHash("sha256").update(encoder.encode(`${domain}\0`));
-	sorted.forEach((file, i) => {
-		if (i > 0 && sorted[i - 1]?.path === file.path) {
-			throw new Error(`duplicate source path ${file.path}`);
-		}
-		const path = encoder.encode(file.path);
-		hash.update(uint64(path.byteLength));
-		hash.update(path);
-		hash.update(uint64(file.content.byteLength));
-		hash.update(file.content);
-	});
-	return hash.digest("hex");
-}
-
-export function buildManifest(files: readonly SourceFile[]): SourceManifest {
-	return {
-		source: `sha256:${framedDigest(SOURCE_DOMAIN, files)}`,
-		entries: [...files]
-			.sort((a, b) => compareUtf8(a.path, b.path))
-			.map((file) => ({
-				path: file.path,
-				bytes: file.content.byteLength,
-				sha256: createHash("sha256").update(file.content).digest("hex"),
-				untracked: file.untracked ?? false,
-			})),
-	};
-}
-
-/**
- * Same source identity: the same paths with the same content hashes. The
- * `untracked` mark is reported, never compared.
- */
-export function sameSource(a: SourceManifest, b: SourceManifest): boolean {
-	if (a.entries.length !== b.entries.length) return false;
-	const hashes = new Map(a.entries.map((entry) => [entry.path, entry.sha256]));
-	return b.entries.every((entry) => hashes.get(entry.path) === entry.sha256);
-}
 
 /** Whether a repository-relative path is part of the Shepherd source. */
 export function isSourcePath(path: string): boolean {
@@ -369,7 +279,7 @@ export function readWorktreeSource(
 		}
 	}
 	if (problems.size > 0) throw new ShepherdSourceError([...problems]);
-	return buildManifest(files);
+	return buildManifest(SOURCE_DOMAIN, files);
 }
 
 const REGULAR_MODES = new Set(["100644", "100755"]);
@@ -438,7 +348,7 @@ export function readCommitSource(
 		});
 		offset = newline + 1 + size + 1;
 	}
-	return buildManifest(files);
+	return buildManifest(SOURCE_DOMAIN, files);
 }
 
 /** Full `HEAD`; a repository without one cannot stamp a build. */

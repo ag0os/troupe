@@ -42,6 +42,7 @@ const STAGED_MEMBERS = [
 	"lib/agent-format/interpolate.ts",
 	"lib/agent-format/path-within.ts",
 	"lib/agent-format/preview.ts",
+	"lib/agent-format/provenance.ts",
 	"lib/agent-format/run.ts",
 	"lib/agent-format/schema.ts",
 	"lib/agent-format/template.ts",
@@ -143,8 +144,28 @@ const EXPECTED_SURFACE: Record<string, { values: string[]; types?: string[] }> =
 			],
 		},
 		"troupe/provenance": {
-			values: ["compareUtf8", "framedDigest", "sameSource", "createGitRunner"],
-			types: ["SourceFile", "ManifestEntry", "SourceManifest", "GitRunner"],
+			values: [
+				"compareUtf8",
+				"framedDigest",
+				"buildManifest",
+				"sameSource",
+				"createGitRunner",
+				"readSourceInputs",
+				"combineSourceInputs",
+				"SourceInputError",
+			],
+			types: [
+				"SourceFile",
+				"ManifestEntry",
+				"SourceManifest",
+				"GitRunner",
+				"FramingOptions",
+				"SourceTree",
+				"SourceInputDefinition",
+				"SourceInput",
+				"InputProvenance",
+				"CombinedSourceInputs",
+			],
 		},
 		"troupe/testing": {
 			values: ["installFakeClis", "readRecords"],
@@ -547,7 +568,7 @@ describe("staged distribution", () => {
 		const closure = relativeClosure(repo, entries).files;
 		expect(staged.members.map((member) => member.path)).toEqual(closure);
 		expect(closure).toEqual(STAGED_MEMBERS);
-		expect(STAGED_MEMBERS).toHaveLength(27);
+		expect(STAGED_MEMBERS).toHaveLength(28);
 		expect(closure).toContain("lib/text-imports.d.ts");
 		expect(closure).toContain("lib/agent-format/run.ts");
 		expect(closure.some((path) => path.endsWith(".test.ts"))).toBe(false);
