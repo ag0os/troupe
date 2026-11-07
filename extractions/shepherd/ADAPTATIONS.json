@@ -204,6 +204,7 @@
 		"scripts/eval-source-fixture.ts",
 		"scripts/eval-source.test.ts",
 		"scripts/eval-source.ts",
+		"scripts/imports.test.ts",
 		"scripts/install-forms.test.ts",
 		"scripts/resolution.ts",
 		"scripts/shared-core.test.ts",
