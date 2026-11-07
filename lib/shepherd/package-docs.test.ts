@@ -73,3 +73,37 @@ test("the docs describe software's guides and what a brief must still carry (O10
 		"carries the `publish-check`, `contract` and `builder-hooks` tools and four guides",
 	);
 });
+
+test("the eval guide describes both layouts, v2 stamps and C22 (A7)", () => {
+	const evals = doc("SHEPHERD-EVALS.md").replace(/\s+/g, " ");
+	expect(evals).toContain(
+		"in the original layout that is the repository top with an empty prefix, and in the extracted package it is `extractions/shepherd/` with the prefix `extractions/shepherd`",
+	);
+	expect(evals).toContain(
+		"The package root as the working directory (the repository root in the original layout, `extractions/shepherd/` in the extracted package)",
+	);
+	expect(evals).toContain(
+		"shepherd revision=<full-git-revision> dirty=<true|false> source=sha256:<64-lowercase-hex>",
+	);
+	expect(evals).toContain(
+		"shepherd troupe-agent-source-v2 framework/troupe=<rev>[+local|+dirty] package/shepherd=<rev>[+local|+dirty] source=sha256:<hex>",
+	);
+	const stamps = [...evals.matchAll(/\]\(([^)]*STAMPS\.md)\)/g)].map(
+		(match) => match[1] ?? "",
+	);
+	expect(stamps).toHaveLength(1);
+	expect(existsSync(resolve(repo, "docs", stamps[0] ?? ""))).toBe(true);
+	expect(evals).toContain(
+		"also hashes the executable status of runtime tools; its manifest records every entry's executable status",
+	);
+	expect(evals).toContain(
+		"In the extracted package eval provenance keeps both flags: `dirty` stays repository wide, so any uncommitted change in the repository, an uncommitted Troupe change included, marks an eval build dirty, while the v2 version line marks each origin from its own selected bytes and never prints `dirty`",
+	);
+	expect(evals).toContain(
+		"the eval seam `scripts/eval-source.ts` in the extracted package",
+	);
+	expect(evals).toContain(
+		"remove a retained run directory with `chmod -R u+w <run dir>` first",
+	);
+	expect(dashes.test(doc("SHEPHERD-EVALS.md"))).toBe(false);
+});

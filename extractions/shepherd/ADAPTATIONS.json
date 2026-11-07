@@ -175,8 +175,14 @@
 		},
 		{
 			"file": "docs/SHEPHERD-EVALS.md",
-			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line and the link to the package's `docs/STAMPS.md`.\n\n",
 			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD-EVALS.md",
+			"from": "[extractions/shepherd/docs/STAMPS.md](../extractions/shepherd/docs/STAMPS.md)",
+			"to": "[docs/STAMPS.md](STAMPS.md)",
 			"count": 1
 		},
 		{

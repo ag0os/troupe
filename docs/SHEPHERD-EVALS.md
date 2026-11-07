@@ -1,6 +1,6 @@
 # Shepherd evals
 
-> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.
+> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line and the link to the package's `docs/STAMPS.md`.
 
 Shepherd evals tell us whether Shepherd's behaviour is heading the right way. They run on demand, not on every pull request, and they block nothing. Six synthetic trials launch the current tree's Shepherd as a one turn Claude session in a fresh workspace, thirteen Musts are decided from the evidence, and the outcome is committed as a result file for the exact source hash. An informational CI check reports that result, when one exists, for a pull request that changes a gated path (see "The CI check" below). Everything lives in `evals/shepherd/`; the trial harness is Python, the wrapper, schema, scorer driver and verifier are TypeScript.
 
@@ -8,7 +8,7 @@ Shepherd evals tell us whether Shepherd's behaviour is heading the right way. Th
 
 - Bun, Python 3.10 or later, Git, and zsh. Subject sessions run zsh with a scratch `ZDOTDIR`; without zsh the harness falls back to `$SHELL`, whose own startup files then apply, and the session-shell resolution check below still refuses any run whose shells do not find the scratch binary.
 - A `claude` CLI on `PATH` that is logged in. Subjects keep the real `HOME` and its authentication.
-- The repository root as the working directory, with every intended new Shepherd source file staged (`git add`) or committed. Untracked source files are hashed and marked, but a qualifying result should not depend on files the PR will not contain.
+- The package root as the working directory (the repository root in the original layout, `extractions/shepherd/` in the extracted package), with every intended new Shepherd source file staged (`git add`) or committed. Untracked source files are hashed and marked, but a qualifying result should not depend on files the PR will not contain.
 - A local time before 23:40, so no fixture build crosses midnight.
 
 ## Running
@@ -26,7 +26,7 @@ bun evals/shepherd/verify.ts --base <rev> --head <rev>   # the CI check, locally
 
 ### Layout
 
-Run, verifier, recovery, trend and export read every location from one explicit layout (`evals/shepherd/layout.ts`): the package root, which holds `agents/`, `packages/` and `evals/shepherd/`; the Git root, the top level of the repository holding the package; the prefix, the package's path within that repository (empty when the package is the repository top); the evals directory, `<package root>/evals/shepherd`, which holds results, artifacts and validation output; and the subject directory, where a run installs its subject relative to its run directory. Nothing guesses the repository from the evals directory or a subject's `bin/`. The default, chosen in one place, is the package holding the evals code, in the repository Git finds for it, with the subject at the run directory itself; in this repository that is the repository top with an empty prefix. Flags name the layout explicitly:
+Run, verifier, recovery, trend and export read every location from one explicit layout (`evals/shepherd/layout.ts`): the package root, which holds `agents/`, `packages/` and `evals/shepherd/`; the Git root, the top level of the repository holding the package; the prefix, the package's path within that repository (empty when the package is the repository top); the evals directory, `<package root>/evals/shepherd`, which holds results, artifacts and validation output; and the subject directory, where a run installs its subject relative to its run directory. Nothing guesses the repository from the evals directory or a subject's `bin/`. The default, chosen in one place, is the package holding the evals code, in the repository Git finds for it, with the subject at the run directory itself; in the original layout that is the repository top with an empty prefix, and in the extracted package it is `extractions/shepherd/` with the prefix `extractions/shepherd`. Flags name the layout explicitly:
 
 ```sh
 bun run evals:shepherd --package-root <dir> --git-root <dir> --subject-dir <relative dir>
@@ -34,7 +34,7 @@ bun run evals:shepherd --trend --package-root <dir> --git-root <dir>
 bun evals/shepherd/verify.ts --base <rev> --head <rev> --package-root <dir> --git-root <dir>
 ```
 
-Without `--git-root`, Git names the repository holding the package root. The package root must lie inside the Git root, and the subject directory must be relative, without `..`. The checks need a Git root: the verifier, the trend and every run (the source and evaluation identities are read through Git) refuse a package outside Git with a message saying so; initialize a repository holding the package and commit it first. Under a nested prefix the verifier gates only changed paths inside the package, compared as package paths, and the trend and the newest result notice read only the package's own `evals/shepherd/results/`. A run with `--package-root` builds and identifies that package, while the harness scripts, policy and rubric it runs are the ones beside `run.ts`.
+Without `--git-root`, Git names the repository holding the package root. The package root must lie inside the Git root, and the subject directory must be relative, without `..`. The checks need a Git root: the verifier, the trend and every run (the source and evaluation identities are read through Git) refuse a package outside Git with a message saying so; initialize a repository holding the package and commit it first. Under a nested prefix the verifier gates only changed paths inside the package, compared as package paths, and the trend and the newest result notice read only the package's own `evals/shepherd/results/`. A run executes the harness scripts, policy and rubric beside `run.ts`, so it refuses, before preparing anything and naming both directories, a layout whose evals directory is another; run the `evals/shepherd/run.ts` beneath the package you evaluate. The trend and the verifier read any layout.
 
 One command runs the suite. It builds Shepherd, freezes the inputs, runs at most six subjects at once, checks and scores each finished trial, and publishes `evals/shepherd/results/<source-hash>.json` with its summary. A later invocation for the same source and evaluation identity continues where the earlier one stopped: trials that passed stay complete and only remaining allowances are spent. The wrapper exits 0 when every trial exited 0 and the frozen-input recheck was clean, 4 when the recheck failed, 2 on a usage error or refusal, 128 plus the signal number on a signal, and 1 otherwise. The result file, not the exit code, records the outcome.
 
@@ -63,15 +63,21 @@ Each subject session gets a fresh session ID, and its native log is found by tha
 
 ## Version output and source identity
 
-A stamped Shepherd prints exactly one line:
+A stamped Shepherd prints exactly one line. In the original layout it is the v1 line:
 
 ```text
 shepherd revision=<full-git-revision> dirty=<true|false> source=sha256:<64-lowercase-hex>
 ```
 
+In the extracted package it is the `troupe-agent-source-v2` line, whose origins, markers and framework part are described in the package's [extractions/shepherd/docs/STAMPS.md](../extractions/shepherd/docs/STAMPS.md):
+
+```text
+shepherd troupe-agent-source-v2 framework/troupe=<rev>[+local|+dirty] package/shepherd=<rev>[+local|+dirty] source=sha256:<hex>
+```
+
 `shepherd --version` needs no workspace, Git or backend. `shepherd -- --version` still passes through to the backend, and `--version` mixed with other arguments is a usage error.
 
-The source hash covers these repository paths, read from the working tree, listed by `git ls-files --cached --others --exclude-standard`:
+In the original layout the source hash covers these repository paths, read from the working tree, listed by `git ls-files --cached --others --exclude-standard`:
 
 | Paths | Selected |
 |---|---|
@@ -81,15 +87,15 @@ The source hash covers these repository paths, read from the working tree, liste
 | `scripts/compile.ts`, `scripts/compile-all.ts`, `scripts/agent-compiler.ts`, `scripts/binary-name.ts`, `scripts/shepherd-source.ts` | required |
 | `package.json`, `bun.lock`, `tsconfig.json` | required |
 
-`scripts/shepherd-source.ts` holds this membership and is shared by the repository's compile wrappers (which hand it to the compiler as `legacyStampPolicy`), the eval wrapper and CI. Source and evaluation identity also accept an explicit `layout: { gitRoot, prefix }` for a package nested in its repository; paths stay package-relative, so the same files keep the same hash. Ignored untracked files such as `.DS_Store` are left out; tracked files stay selected even when an ignore pattern matches them; untracked matches are included and marked `untracked` in the manifest. Symlinks at or above a selected path, nonregular entries, unreadable files and missing required files are errors; a deleted file in a recursive selection is simply absent. `package.json` is hashed whole, so script and development dependency changes invalidate results. A future Shepherd dependency outside this set must be added before it is imported.
+In the extracted package the source is v2's, over the Troupe it installs and the package's own files, with the membership table in `scripts/shepherd-source-v2.ts`; the evals reach either identity through `evals/shepherd/build-source.ts`, which the package points at `scripts/eval-source.ts`. In the original layout `scripts/shepherd-source.ts` holds this membership and is shared by the repository's compile wrappers (which hand it to the compiler as `legacyStampPolicy`), the eval wrapper and CI. Source and evaluation identity also accept an explicit `layout: { gitRoot, prefix }` for a package nested in its repository; paths stay package-relative, so the same files keep the same hash. Ignored untracked files such as `.DS_Store` are left out; tracked files stay selected even when an ignore pattern matches them; untracked matches are included and marked `untracked` in the manifest. Symlinks at or above a selected path, nonregular entries, unreadable files and missing required files are errors; a deleted file in a recursive selection is simply absent. `package.json` is hashed whole, so script and development dependency changes invalidate results. A future Shepherd dependency outside this set must be added before it is imported.
 
-The hash is SHA-256 over `troupe-shepherd-source-v1\0` followed by each path, sorted by UTF-8 bytes, framed as the path's byte length, the path, the content's byte length and the raw content (lengths as unsigned 64 bit big endian). Nothing is normalized; timestamps, permissions, revisions, dirty flags and the untracked mark are not hashed. The manifest records path, byte length, content SHA-256 and the untracked mark.
+The v1 hash is SHA-256 over `troupe-shepherd-source-v1\0` followed by each path, sorted by UTF-8 bytes, framed as the path's byte length, the path, the content's byte length and the raw content (lengths as unsigned 64 bit big endian). Nothing is normalized; timestamps, permissions, revisions, dirty flags and the untracked mark are not hashed. The manifest records path, byte length, content SHA-256 and the untracked mark. The v2 hash of the extracted package uses the same framing under `troupe-agent-source-v2` and also hashes the executable status of runtime tools; its manifest records every entry's executable status and no untracked mark, and the verifier compares the recorded executable status with the head's.
 
-There are two dirty flags. `dirty` in the stamp means staged, unstaged or nonignored untracked changes anywhere in the repository, captured before any temporary build file exists. `sourceDirty` in the result means the selected source paths or bytes differ from `HEAD`. Result commits and evidence can make `dirty` true without touching `sourceDirty`. Neither flag rejects a result; both are reported. The compiler captures the manifest before building and refuses to publish if the source changed during the build.
+There are two dirty flags. `dirty` in the stamp means staged, unstaged or nonignored untracked changes anywhere in the repository, captured before any temporary build file exists. `sourceDirty` in the result means the selected source paths or bytes differ from `HEAD`. Result commits and evidence can make `dirty` true without touching `sourceDirty`. Neither flag rejects a result; both are reported. In the extracted package eval provenance keeps both flags: `dirty` stays repository wide, so any uncommitted change in the repository, an uncommitted Troupe change included, marks an eval build dirty, while the v2 version line marks each origin from its own selected bytes and never prints `dirty`, and `sourceDirty` is the package origin's `dirty` marker. The compiler captures the manifest before building and refuses to publish if the source changed during the build.
 
 ## Evaluation identity
 
-The evaluation identity is SHA-256, with the same framing under the domain `troupe-shepherd-evals-v1`, of the regular files beneath `evals/shepherd/` except `results/`, `artifacts/`, `validation/`, `__pycache__/` and `*.pyc`. `harnessVersion: 1` is recorded beside the hash, not hashed. It covers the wrapper, harness, fixtures, rubric, policy (`policy.json`), scorer prompt, schema, checkers, verifier and their tests. Changing any of them invalidates certification even when the source hash is unchanged. The binary hash, version stamp, source manifest, evaluation identity, rubric hash and effective policy are frozen before any subject launches and rechecked after execution; a change voids the invocation's attempts.
+The evaluation identity is SHA-256, with the same framing under the domain `troupe-shepherd-evals-v1`, of the regular files beneath `evals/shepherd/` except `results/`, `artifacts/`, `validation/`, `__pycache__/` and `*.pyc`, and of each always gated module the build identity does not select: none in the original layout, the eval seam `scripts/eval-source.ts` in the extracted package. `harnessVersion: 1` is recorded beside the hash, not hashed. It covers the wrapper, harness, fixtures, rubric, policy (`policy.json`), scorer prompt, schema, checkers, verifier and their tests. Changing any of them invalidates certification even when the source hash is unchanged. The binary hash, version stamp, source manifest, evaluation identity, rubric hash and effective policy are frozen before any subject launches and rechecked after execution; a change voids the invocation's attempts.
 
 ## The six trials
 
