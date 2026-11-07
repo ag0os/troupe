@@ -1630,7 +1630,10 @@ async function publishResolved(
 		: undefined;
 	const workDir = await mkdtemp(join(dirname(outDir), ".troupe-build-"));
 	try {
-		if (existsSync(outDir) && statSync(outDir).dev !== statSync(workDir).dev) {
+		if (
+			existsSync(outDir) &&
+			internalDeviceProbe.device(outDir) !== internalDeviceProbe.device(workDir)
+		) {
 			throw new Error(
 				`${workDir} is not on the same filesystem as ${outDir}; cannot publish by rename`,
 			);
@@ -1698,6 +1701,15 @@ async function publishResolved(
 		await rm(workDir, { recursive: true, force: true });
 	}
 }
+
+/**
+ * Internal, not part of `troupe/compiler`: the device a path lives on, read
+ * by the same-filesystem check before publication. Tests replace `device`
+ * to simulate an output directory on another filesystem.
+ */
+export const internalDeviceProbe = {
+	device: (path: string): number => statSync(path).dev,
+};
 
 /**
  * Checks made before the first rename, so a failure here still leaves the
