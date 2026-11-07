@@ -330,8 +330,12 @@ console.log(
 // O3, O11, O18 and C1: a consumer build script compiles its own agents
 // through troupe/compiler with the real Bun builder, from an unrelated
 // working directory, with declarations outside agents/.
-const BUILD = `import {
+const BUILD = `import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import {
 	type AgentBuildDefinition,
+	type AgentSourceDefinition,
+	compileAgent,
 	describePublishFailure,
 	generateEntry,
 	planBuild,
@@ -352,7 +356,17 @@ const definition: AgentBuildDefinition = {
 	watchRoots: ["defs", "prompts"],
 };
 try {
-	if (mode === "entry") {
+	if (mode === "compile") {
+		const { roster: _, ...rest } = definition;
+		const source: AgentSourceDefinition = rest;
+		mkdirSync(outDir, { recursive: true });
+		const agent = await compileAgent({
+			definition: source,
+			file: "defs/solo/one.md",
+			outFile: join(outDir, "solo:one"),
+		});
+		console.log(JSON.stringify({ id: agent.id, file: agent.file }));
+	} else if (mode === "entry") {
 		const plan = await planBuild({ definition });
 		const [entry] = plan.entries;
 		if (!entry) throw new Error("no entry");
@@ -391,6 +405,13 @@ includes:
   - ../../prompts/guide.md
 ---
 Say hello from defs.
+`;
+
+const SOLO = `---
+description: A declaration in no roster.
+backends: [claude]
+---
+Solo body outside the roster.
 `;
 
 const HELLO_EXTENSION = `export function dispatch(argv: readonly string[]) {
@@ -574,7 +595,7 @@ describe("staged distribution", () => {
 		// node_modules, and would auto-install them from its global cache at
 		// whatever version is newest there. Resolve them from the consumer's
 		// lockfile instead, and fail rather than auto-install.
-		const build = (mode: string) => {
+		const build = (mode: string, target = out) => {
 			const child = Bun.spawnSync(
 				[
 					process.execPath,
@@ -582,7 +603,7 @@ describe("staged distribution", () => {
 					join(consumer, "build.ts"),
 					consumer,
 					mode,
-					out,
+					target,
 				],
 				{
 					cwd: unrelated,
@@ -673,6 +694,32 @@ describe("staged distribution", () => {
 
 			const dispatched = run([binary, "tool"], unrelated);
 			expect(dispatched.code).toBe(7);
+			expect(stageInventory()).toEqual(before);
+		}, 120_000);
+
+		test("compileAgent builds a declaration outside the roster from the installed package", () => {
+			const before = stageInventory();
+			const solo = join(parent, "solo-out");
+			put(consumer, "defs/solo/one.md", SOLO);
+			try {
+				const result = build("compile", solo);
+				expect(result.stderr).toBe("");
+				expect(result.code).toBe(0);
+				expect(JSON.parse(result.stdout)).toEqual({
+					id: "solo:one",
+					file: "defs/solo/one.md",
+				});
+				// No .agent-build- directory is left beside the output.
+				expect(readdirSync(solo)).toEqual(["solo:one"]);
+				const preview = run(
+					[join(solo, "solo:one"), "--show-prompt", "hi"],
+					unrelated,
+				);
+				expect(preview.code).toBe(0);
+				expect(preview.stdout).toContain("Solo body outside the roster.");
+			} finally {
+				rmSync(join(consumer, "defs/solo"), { recursive: true, force: true });
+			}
 			expect(stageInventory()).toEqual(before);
 		}, 120_000);
 
