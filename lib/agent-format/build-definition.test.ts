@@ -21,6 +21,7 @@ import {
 	type BuildRequest,
 	compileAgent,
 	describePublishFailure,
+	generateEntry,
 	inspectExtension,
 	loadAgentDefinition,
 	PartialPublishError,
@@ -130,6 +131,34 @@ const fakeStamp = {
 	capture: () => fakeProvenance,
 	recheck: () => fakeProvenance.manifest,
 };
+
+type Listener = (event: string, filename: string | null) => void;
+function fakeWatch() {
+	const watched: { dir: string; listener: Listener; closed: boolean }[] = [];
+	return {
+		watched,
+		watch: (
+			dir: string,
+			_options: { recursive: boolean },
+			listener: Listener,
+		) => {
+			const entry = { dir, listener, closed: false };
+			watched.push(entry);
+			return {
+				close() {
+					entry.closed = true;
+				},
+			};
+		},
+		emit(dir: string, filename: string) {
+			for (const entry of watched) {
+				if (entry.dir === dir && !entry.closed) {
+					entry.listener("change", filename);
+				}
+			}
+		},
+	};
+}
 
 describe("O6 declaration roots", () => {
 	test("nested declarations under a non-agents root get colon names everywhere", async () => {
@@ -716,34 +745,6 @@ describe("O12 publication", () => {
 });
 
 describe("O18 configured watching", () => {
-	type Listener = (event: string, filename: string | null) => void;
-	function fakeWatch() {
-		const watched: { dir: string; listener: Listener; closed: boolean }[] = [];
-		return {
-			watched,
-			watch: (
-				dir: string,
-				_options: { recursive: boolean },
-				listener: Listener,
-			) => {
-				const entry = { dir, listener, closed: false };
-				watched.push(entry);
-				return {
-					close() {
-						entry.closed = true;
-					},
-				};
-			},
-			emit(dir: string, filename: string) {
-				for (const entry of watched) {
-					if (entry.dir === dir && !entry.closed) {
-						entry.listener("change", filename);
-					}
-				}
-			},
-		};
-	}
-
 	test("explicit watch roots are watched and a burst publishes the roster once", async () => {
 		addAgent("defs/a.md");
 		addAgent("defs/b.md");
@@ -912,4 +913,270 @@ describe("O18 configured watching", () => {
 			watcher.close();
 		}
 	});
+});
+
+describe("canonical consumer boundary (O6 to O9)", () => {
+	let outside: string;
+	beforeEach(() => {
+		outside = realpathSync(mkdtempSync(join(tmpdir(), "build-outside-")));
+	});
+	afterEach(() => {
+		rmSync(outside, { recursive: true, force: true });
+	});
+
+	test("a symlinked root leading outside is refused for every field", async () => {
+		symlinkSync(outside, join(root, "link"));
+		const fields = [
+			"declarationRoot",
+			"includeRoots",
+			"extensionCodeRoots",
+			"extensionTextRoots",
+			"watchRoots",
+		] as const;
+		for (const field of fields) {
+			const extra: Partial<AgentBuildDefinition> =
+				field === "declarationRoot"
+					? { declarationRoot: "link" }
+					: { [field]: ["link"] };
+			const issues = await issuesOf(
+				planBuild({ definition: definition({ roster: [], ...extra }) }),
+			);
+			expect([field, issues]).toEqual([
+				field,
+				[
+					{
+						file: "link",
+						field,
+						message: `root "link" resolves to ${outside}, outside the consumer root ${root}`,
+					},
+				],
+			]);
+		}
+	});
+
+	test("an absent root beneath a link leading outside is refused", async () => {
+		symlinkSync(outside, join(root, "link"));
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({ roster: [], includeRoots: ["link/absent"] }),
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				file: "link/absent",
+				field: "includeRoots",
+				message: `root "link/absent" resolves to ${join(outside, "absent")}, outside the consumer root ${root}`,
+			},
+		]);
+	});
+
+	test("a dangling link to an absent outside path is refused", async () => {
+		symlinkSync(join(outside, "gone"), join(root, "dangling"));
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({ roster: [], watchRoots: ["dangling"] }),
+			}),
+		);
+		expect(issues.map((issue) => issue.field)).toEqual(["watchRoots"]);
+	});
+
+	test("an absent watch root inside the consumer is accepted and skipped", () => {
+		const watcher = startWatcher({
+			definition: definition({ roster: [], watchRoots: ["defs", "absent"] }),
+			watch: fakeWatch().watch,
+		});
+		expect(watcher.roots).toEqual([join(root, "defs")]);
+		watcher.close();
+	});
+
+	test("a consumer root reached through a symlink plans, loads and publishes", async () => {
+		addAgent("defs/a.md");
+		const alias = join(outside, "alias");
+		symlinkSync(root, alias);
+		const def = definition({ consumerRoot: alias, roster: ["a"] });
+		expect((await planBuild({ definition: def })).entries[0]?.id).toBe("a");
+		expect((await loadAgentDefinition(def, "defs/a.md")).id).toBe("a");
+		const result = await publish({ definition: def, build: fakeBuilder() });
+		expect(result.built).toEqual(["a"]);
+		expect(readFileSync(join(root, "out/a"), "utf8")).toBe(
+			"binary for defs/a.md\n",
+		);
+	});
+});
+
+describe("owned locations (O12, O18)", () => {
+	test("an outDir containing the consumer root is refused and nothing is removed", async () => {
+		addAgent("defs/a.md");
+		write("prompts/p.md", "Prompt\n");
+		write("package.json", "{}\n");
+		const before = snapshot(root);
+		const failure = await publish({
+			definition: definition({ roster: ["a"], outDir: "." }),
+			build: fakeBuilder(),
+		}).then(
+			() => undefined,
+			(error) => error,
+		);
+		expect(failure).toBeInstanceOf(AgentSourceError);
+		expect((failure as AgentSourceError).issues).toEqual([
+			{
+				file: ".",
+				field: "outDir",
+				message: `output directory "." contains the consumer root ${root}; pruning would remove its sources`,
+			},
+		]);
+		expect(snapshot(root)).toEqual(before);
+	});
+
+	test("an input root inside outDir is refused, naming the root", async () => {
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({
+					roster: [],
+					outDir: "out",
+					includeRoots: ["out/prompts"],
+				}),
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				file: "out/prompts",
+				field: "includeRoots",
+				message: 'root "out/prompts" lies inside the output directory "out"',
+			},
+		]);
+	});
+
+	test("an outDir equal to a watch root is refused, naming the root", async () => {
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({
+					roster: [],
+					outDir: "generated",
+					watchRoots: ["generated"],
+				}),
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				file: "generated",
+				field: "watchRoots",
+				message:
+					'root "generated" lies inside the output directory "generated"',
+			},
+		]);
+	});
+
+	test("a root under a temporary build name beside outDir is refused", async () => {
+		const issues = await issuesOf(
+			planBuild({
+				definition: definition({
+					roster: [],
+					outDir: "out",
+					extensionCodeRoots: [".troupe-build-keep/lib"],
+					extensionTextRoots: [".agent-build-x"],
+				}),
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				file: ".troupe-build-keep/lib",
+				field: "extensionCodeRoots",
+				message:
+					'root ".troupe-build-keep/lib" lies inside the temporary build directory .troupe-build-keep beside the output directory "out"',
+			},
+			{
+				file: ".agent-build-x",
+				field: "extensionTextRoots",
+				message:
+					'root ".agent-build-x" lies inside the temporary build directory .agent-build-x beside the output directory "out"',
+			},
+		]);
+	});
+});
+
+describe("one naming coordinate (O6)", () => {
+	test("a symlinked declaration root names agents from its real location", async () => {
+		mkdirSync(join(root, "sources/team"), { recursive: true });
+		rmSync(join(root, "defs"), { recursive: true });
+		symlinkSync(join(root, "sources"), join(root, "defs"));
+		addAgent("defs/team/a.md");
+		const def = definition({ roster: ["team:a"] });
+		const plan = await planBuild({ definition: def });
+		expect(
+			plan.entries.map((entry) => [entry.id, entry.agent.spec.id]),
+		).toEqual([["team:a", "team:a"]]);
+		expect((await loadAgentDefinition(def, "defs/team/a.md")).id).toBe(
+			"team:a",
+		);
+		expect(resolveAgentName(def, "defs/team/a.md", root)).toBe("team:a");
+		mkdirSync(join(root, "out"));
+		const built = await compileAgent({
+			definition: def,
+			file: "defs/team/a.md",
+			outFile: "out/team:a",
+			build: fakeBuilder(),
+		});
+		expect(built.id).toBe("team:a");
+		const entry = plan.entries[0];
+		if (!entry) throw new Error("no entry");
+		expect(generateEntry(entry.agent)).toContain('"id": "team:a"');
+	});
+});
+
+describe("watcher filter in canonical coordinates (O18)", () => {
+	test("output and temp writes seen through a symlinked root schedule nothing", async () => {
+		mkdirSync(join(root, "generated"));
+		symlinkSync(join(root, "generated"), join(root, "watched"));
+		const fake = fakeWatch();
+		let runs = 0;
+		const watcher = startWatcher({
+			definition: definition({
+				roster: [],
+				outDir: "generated/out",
+				watchRoots: ["watched", "defs"],
+			}),
+			watch: fake.watch,
+			debounceMs: 1,
+			rebuild: async () => {
+				runs++;
+			},
+		});
+		fake.emit(join(root, "watched"), "out/a");
+		fake.emit(join(root, "watched"), ".troupe-build-x/bin/a");
+		await sleep(20);
+		expect(runs).toBe(0);
+		fake.emit(join(root, "defs"), "a.md");
+		await sleep(20);
+		await watcher.queue.idle();
+		expect(runs).toBe(1);
+		watcher.close();
+	});
+
+	for (const [name, extra] of [
+		["a watch root of the consumer root", { watchRoots: ["."] }],
+		["an include root of the consumer root", { includeRoots: ["."] }],
+	] as const) {
+		test(`local/ events from ${name} schedule nothing`, async () => {
+			mkdirSync(join(root, "defs/local"));
+			const fake = fakeWatch();
+			let runs = 0;
+			const watcher = startWatcher({
+				definition: definition({ roster: [], ...extra }),
+				watch: fake.watch,
+				debounceMs: 1,
+				rebuild: async () => {
+					runs++;
+				},
+			});
+			fake.emit(root, "defs/local/p.md");
+			await sleep(20);
+			expect(runs).toBe(0);
+			fake.emit(root, "defs/p.md");
+			await sleep(20);
+			await watcher.queue.idle();
+			expect(runs).toBe(1);
+			watcher.close();
+		});
+	}
 });

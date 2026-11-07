@@ -43,7 +43,7 @@ import {
 } from "../../scripts/shepherd-source";
 import { toBinaryName } from "./binary-name";
 import { AgentSourceError, formatIssue, type SourceIssue } from "./errors";
-import { isWithin } from "./path-within";
+import { canonical, isWithin } from "./path-within";
 import {
 	type IncludeText,
 	materializeAgentSpec,
@@ -159,8 +159,13 @@ interface ResolvedDefinition {
 const RESOLVED = Symbol("resolved build definition");
 
 /**
- * Resolve a definition once. Configured roots are refused, naming the root,
- * when they lie outside the consumer root.
+ * Resolve a definition once. Configured roots are refused, naming the root
+ * and field, when they lie outside the consumer root, lexically or through a
+ * symlink (compared in canonical coordinates, so an absent root beneath a
+ * link that leads outside is refused too). The output directory may be
+ * anywhere, but never where publication would destroy or ignore inputs:
+ * pruning removes every non-roster entry of `outDir`, and the watcher drops
+ * events under it and under the temporary build directories beside it.
  */
 function resolveDefinition(
 	definition: AgentSourceDefinition | ResolvedDefinition,
@@ -168,15 +173,26 @@ function resolveDefinition(
 	if (RESOLVED in definition) return definition as ResolvedDefinition;
 	const source = definition as AgentSourceDefinition;
 	const root = resolve(source.consumerRoot);
+	const realRoot = canonical(root);
 	const issues: SourceIssue[] = [];
+	const checked: { field: string; path: string; real: string }[] = [];
 	const configured = (field: string, path: string): ConfiguredRoot => {
 		const absolute = resolve(root, path);
+		const real = canonical(absolute);
 		if (!isWithin(root, absolute)) {
 			issues.push({
 				file: path,
 				field,
 				message: `root "${path}" lies outside the consumer root ${root}`,
 			});
+		} else if (!isWithin(realRoot, real)) {
+			issues.push({
+				file: path,
+				field,
+				message: `root "${path}" resolves to ${real}, outside the consumer root ${realRoot}`,
+			});
+		} else {
+			checked.push({ field, path, real });
 		}
 		return { path: absolute, label: relative(root, absolute) || "." };
 	};
@@ -184,9 +200,10 @@ function resolveDefinition(
 		"declarationRoot",
 		source.declarationRoot ?? "agents",
 	);
-	const includeRoots = (
-		source.includeRoots ?? [declarationRoot.path, "system-prompts"]
-	).map((path) => configured("includeRoots", path));
+	// The default reuses the declaration root as already checked.
+	const includeRoots = source.includeRoots
+		? source.includeRoots.map((path) => configured("includeRoots", path))
+		: [declarationRoot, configured("includeRoots", "system-prompts")];
 	const extensionCodeRoots = (source.extensionCodeRoots ?? []).map((path) =>
 		configured("extensionCodeRoots", path),
 	);
@@ -205,6 +222,33 @@ function resolveDefinition(
 					].map((entry) => entry.path),
 				),
 			];
+	const outDir = resolve(root, source.outDir ?? "bin");
+	const realOut = canonical(outDir);
+	const outLabel = source.outDir ?? "bin";
+	if (isWithin(realOut, realRoot)) {
+		issues.push({
+			file: outLabel,
+			field: "outDir",
+			message: `output directory "${outLabel}" contains the consumer root ${realRoot}; pruning would remove its sources`,
+		});
+	} else {
+		for (const entry of checked) {
+			const beside = relative(dirname(realOut), entry.real).split(sep)[0] ?? "";
+			const problem = isWithin(realOut, entry.real)
+				? `lies inside the output directory "${outLabel}"`
+				: isWithin(dirname(realOut), entry.real) &&
+						/^\.(troupe|agent)-build-/.test(beside)
+					? `lies inside the temporary build directory ${beside} beside the output directory "${outLabel}"`
+					: undefined;
+			if (problem) {
+				issues.push({
+					file: entry.path,
+					field: entry.field,
+					message: `root "${entry.path}" ${problem}`,
+				});
+			}
+		}
+	}
 	if (issues.length > 0) throw new AgentSourceError(issues);
 	const resolved: ResolvedDefinition & { [RESOLVED]: true } = {
 		[RESOLVED]: true,
@@ -214,7 +258,7 @@ function resolveDefinition(
 		extensionCodeRoots,
 		extensionTextRoots,
 		roster: source.roster,
-		outDir: resolve(root, source.outDir ?? "bin"),
+		outDir,
 		watchRoots,
 		protectedOutputs: () => new Set(source.protectedOutputs ?? []),
 	};
@@ -229,7 +273,10 @@ function requireRoster(definition: ResolvedDefinition): readonly string[] {
 	return definition.roster;
 }
 
-/** Realpaths of the configured roots that exist, beneath the real consumer root. */
+/**
+ * Realpaths of the configured roots that exist. Resolution already refused
+ * any root whose real location is outside the real consumer root.
+ */
 function realRoots(
 	repoRoot: string,
 	roots: readonly ConfiguredRoot[],
@@ -299,11 +346,8 @@ async function loadResolved(
 		display,
 		parsed,
 	);
-	const id = toBinaryName(
-		declaration,
-		repoRoot,
-		join(repoRoot, declarationLabel),
-	);
+	// Named in the same real coordinates the containment check used.
+	const id = toBinaryName(declaration, repoRoot, agentsRoot);
 	const spec = materializeAgentSpec(parsed, { id, includes });
 
 	const sibling = declaration.replace(/\.md$/, ".ts");
@@ -1815,11 +1859,16 @@ export function startWatcher(options: WatcherOptions): {
 				);
 			}
 		});
-	const ownWrite = (path: string) =>
-		isWithin(outDir, path) ||
-		(isInside(dirname(outDir), path) &&
+	// Events are judged in canonical coordinates, so a watch root reached
+	// through a symlink filters the same paths as the real one.
+	const realOut = canonical(outDir);
+	const realLocal = join(canonical(definition.declarationRoot.path), "local");
+	const ignored = (path: string) =>
+		isWithin(realOut, path) ||
+		isWithin(realLocal, path) ||
+		(isInside(dirname(realOut), path) &&
 			/^\.(troupe|agent)-build-/.test(
-				relative(dirname(outDir), path).split(sep)[0] ?? "",
+				relative(dirname(realOut), path).split(sep)[0] ?? "",
 			));
 	const queue = createSerialQueue(rebuild);
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1832,20 +1881,15 @@ export function startWatcher(options: WatcherOptions): {
 	};
 
 	const roots = definition.watchRoots.filter((dir) => existsSync(dir));
-	const watchers = roots.map((dir) =>
-		watch(dir, { recursive: true }, (_event, filename) => {
+	const watchers = roots.map((dir) => {
+		const real = realpathSync(dir);
+		return watch(dir, { recursive: true }, (_event, filename) => {
 			const name = filename?.toString() ?? "";
-			if (
-				dir === definition.declarationRoot.path &&
-				(name === "local" || name.startsWith("local/"))
-			) {
-				return;
-			}
-			if (ownWrite(join(dir, name))) return;
+			if (ignored(canonical(join(real, name)))) return;
 			log(`change: ${relative(root, join(dir, name))}`);
 			schedule();
-		}),
-	);
+		});
+	});
 	return {
 		queue,
 		roots,
