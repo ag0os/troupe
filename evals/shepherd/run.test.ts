@@ -13,14 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Builder } from "../../scripts/agent-compiler";
-import { gitStamp, versionLine } from "../../scripts/shepherd-source";
-import {
-	git,
-	initShepherdRepo,
-	testGit,
-	writeAt,
-} from "../../scripts/shepherd-source-fixture";
+import { type Builder, gitStamp, versionLine } from "./build-source";
 import {
 	buildSubject,
 	claimArtifactRoot,
@@ -38,6 +31,7 @@ import {
 	scoreJobs,
 	subjectEnv,
 } from "./run";
+import { git, initShepherdRepo, testGit, writeAt } from "./source-fixture";
 
 let scratch: string;
 

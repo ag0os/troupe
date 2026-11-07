@@ -22,12 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { readWorktreeSource } from "../../scripts/shepherd-source";
-import {
-	git as fixtureGit,
-	initShepherdRepo,
-	testGit,
-} from "../../scripts/shepherd-source-fixture";
+import { readWorktreeSource, versionLine } from "./build-source";
 import { PATH_MARKER, REDACTED } from "./export";
 import {
 	findNativeLog,
@@ -48,6 +43,7 @@ import {
 	validateResult,
 } from "./schema";
 import { validateDecisions } from "./scorer";
+import { git as fixtureGit, initShepherdRepo, testGit } from "./source-fixture";
 import { invocation, projectDirName, scorerOutput } from "./testing";
 import { verifyResults } from "./verify";
 
@@ -1641,7 +1637,7 @@ describe("honest gate results verify (fix round 2, R1-1 to R1-3)", () => {
 				...base.build,
 				revision,
 				dirty: false,
-				version: `shepherd revision=${revision} dirty=false source=${source.source}\n`,
+				version: `${versionLine({ revision, dirty: false, sourceDirty: false, manifest: source })}\n`,
 			},
 		};
 	}

@@ -99,10 +99,17 @@ export class ShepherdSourceError extends Error {
 
 export const runGit = createGitRunner();
 
-export function gitStamp(git: GitRunner = runGit): StampSource {
+/** This module's path: a change to it always needs an eval result. */
+export const IDENTITY_MODULE = "scripts/shepherd-source.ts";
+
+/** The v1 stamp; with `layout`, of the package at its prefix. */
+export function gitStamp(
+	git: GitRunner = runGit,
+	layout?: SourceLayout,
+): StampSource {
 	return {
-		capture: (root) => captureProvenance(root, { git }),
-		recheck: (root) => readWorktreeSource(root, { git }),
+		capture: (root) => captureProvenance(root, { git, layout }),
+		recheck: (root) => readWorktreeSource(root, { git, layout }),
 	};
 }
 

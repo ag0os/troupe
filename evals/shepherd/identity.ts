@@ -18,7 +18,7 @@ import {
 	ShepherdSourceError,
 	type SourceFile,
 	type SourceLayout,
-} from "../../scripts/shepherd-source";
+} from "./build-source";
 
 export const EVALUATION_DOMAIN = "troupe-shepherd-evals-v1";
 export const HARNESS_VERSION = 1;

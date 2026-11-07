@@ -31,10 +31,12 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type GitRunner,
+	IDENTITY_MODULE,
 	readWorktreeSource,
 	runGit,
 	type SourceManifest,
-} from "../../scripts/shepherd-source";
+	versionLine,
+} from "./build-source";
 import {
 	CHECKER_FAILED,
 	type ChecksOutput,
@@ -76,13 +78,14 @@ import {
  * verified. A change to any of them always needs a result, whatever the
  * path policy says, so a broken predicate cannot exempt its own change. All
  * four are in the adopted set already. This guards honest mistakes only:
- * the job, the verifier and the policy all run from the PR head.
+ * the job, the verifier and the policy all run from the PR head. The
+ * identity module is whichever the build seam names.
  */
 export const ALWAYS_GATED: readonly string[] = [
 	"evals/shepherd/gated-paths.ts",
 	"evals/shepherd/identity.ts",
 	"evals/shepherd/verify.ts",
-	"scripts/shepherd-source.ts",
+	IDENTITY_MODULE,
 ];
 
 /** Native logs name this pseudo model for local messages; it is no model. */
@@ -930,7 +933,12 @@ export function verifyResults(
 
 	const unrechecked = new Set<string>();
 	for (const { runId, build, recheck } of evaluation.invocations) {
-		const expected = `shepherd revision=${build.revision} dirty=${build.dirty} source=${result.source.hash}\n`;
+		const expected = `${versionLine({
+			revision: build.revision,
+			dirty: build.dirty,
+			sourceDirty: build.sourceDirty,
+			manifest: { source: result.source.hash, entries: [] },
+		})}\n`;
 		if (build.version !== expected)
 			report(
 				`run ${runId}: version output ${JSON.stringify(build.version)} does not match its build record and source`,

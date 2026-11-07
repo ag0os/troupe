@@ -16,15 +16,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createGitRunner,
+	IDENTITY_MODULE,
 	readWorktreeSource,
-} from "../../scripts/shepherd-source";
-import {
-	git,
-	initShepherdRepo,
-	TEST_GIT_ENV,
-	testGit,
-	writeAt,
-} from "../../scripts/shepherd-source-fixture";
+	versionLine,
+} from "./build-source";
 import { artifactType } from "./export";
 import {
 	binaryValues,
@@ -49,6 +44,15 @@ import {
 	totalCost,
 } from "./schema";
 import { buildPacket, PACKET_FILES, validateDecisions } from "./scorer";
+import {
+	FIXTURE_FRAMEWORK_PATH,
+	git,
+	initShepherdRepo,
+	SAMPLE_SOURCE_PATHS,
+	TEST_GIT_ENV,
+	testGit,
+	writeAt,
+} from "./source-fixture";
 import {
 	attempt,
 	behavioral,
@@ -171,7 +175,7 @@ function writeResult(
 		build.revision = revision;
 		build.dirty = false;
 		build.sourceDirty = false;
-		build.version = `shepherd revision=${revision} dirty=false source=${source.source}\n`;
+		build.version = `${versionLine({ revision, dirty: false, sourceDirty: false, manifest: source })}\n`;
 	}
 	for (const trial of evaluation.trials) {
 		for (const attempt of trial.attempts) {
@@ -338,22 +342,7 @@ function runManifest(attempt: Attempt) {
 }
 
 describe("gated paths (7.3)", () => {
-	const SOURCE = [
-		"agents/shepherd.md",
-		"agents/shepherd.ts",
-		"system-prompts/shepherd/core.md",
-		"system-prompts/shepherd/integrations/herdr.md",
-		"lib/shepherd/tool.ts",
-		"lib/agent-format/cli.ts",
-		"scripts/compile.ts",
-		"scripts/compile-all.ts",
-		"scripts/agent-compiler.ts",
-		"scripts/binary-name.ts",
-		"scripts/shepherd-source.ts",
-		"package.json",
-		"bun.lock",
-		"tsconfig.json",
-	];
+	const SOURCE = SAMPLE_SOURCE_PATHS;
 	const EVALUATION = [
 		"evals/shepherd/policy.json",
 		"evals/shepherd/rubric.json",
@@ -447,7 +436,7 @@ describe("changed paths (7.2)", () => {
 		const base = head();
 		git(root, "mv", "lib/shepherd/tool.ts", "docs/tool.ts");
 		git(root, "mv", "docs/notes.md", "system-prompts/shepherd/notes.md");
-		git(root, "rm", "-q", "lib/agent-format/run.ts");
+		git(root, "rm", "-q", FIXTURE_FRAMEWORK_PATH);
 		writeAt(root, "docs/odd name\twith tab é.md", "odd\n");
 		const tip = commitAll("renames");
 		const { paths } = changedPaths(root, base, tip, { git: testGit });
@@ -456,16 +445,18 @@ describe("changed paths (7.2)", () => {
 				"docs/notes.md",
 				"docs/odd name\twith tab é.md",
 				"docs/tool.ts",
-				"lib/agent-format/run.ts",
+				FIXTURE_FRAMEWORK_PATH,
 				"lib/shepherd/tool.ts",
 				"system-prompts/shepherd/notes.md",
 			].sort(),
 		);
-		expect(paths.filter((path) => isGatedPath(path)).sort()).toEqual([
-			"lib/agent-format/run.ts",
-			"lib/shepherd/tool.ts",
-			"system-prompts/shepherd/notes.md",
-		]);
+		expect(paths.filter((path) => isGatedPath(path)).sort()).toEqual(
+			[
+				FIXTURE_FRAMEWORK_PATH,
+				"lib/shepherd/tool.ts",
+				"system-prompts/shepherd/notes.md",
+			].sort(),
+		);
 	});
 
 	test("an unresolvable revision or a missing merge base fails closed", () => {
@@ -842,7 +833,12 @@ describe("verification (7.4)", () => {
 			if (build) {
 				build.dirty = true;
 				build.sourceDirty = true;
-				build.version = build.version.replace("dirty=false", "dirty=true");
+				build.version = `${versionLine({
+					revision: build.revision,
+					dirty: true,
+					sourceDirty: true,
+					manifest: { source: value.source.hash, entries: [] },
+				})}\n`;
 			}
 		});
 		const outcome = verify();
@@ -940,12 +936,14 @@ describe("fix round 1 (review-c4)", () => {
 		writeFileSync(join(dir, name), text);
 
 	test("F1: the core files are gated whatever the policy predicates say", () => {
-		expect([...ALWAYS_GATED].sort()).toEqual([
-			"evals/shepherd/gated-paths.ts",
-			"evals/shepherd/identity.ts",
-			"evals/shepherd/verify.ts",
-			"scripts/shepherd-source.ts",
-		]);
+		expect([...ALWAYS_GATED].sort()).toEqual(
+			[
+				"evals/shepherd/gated-paths.ts",
+				"evals/shepherd/identity.ts",
+				"evals/shepherd/verify.ts",
+				IDENTITY_MODULE,
+			].sort(),
+		);
 		for (const path of ALWAYS_GATED) {
 			const base = head();
 			writeAt(root, path, `// changed ${path}\n`);

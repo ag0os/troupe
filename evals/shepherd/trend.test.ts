@@ -12,15 +12,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createGitRunner } from "../../scripts/shepherd-source";
-import {
-	git,
-	TEST_GIT_ENV,
-	testGit,
-	writeAt,
-} from "../../scripts/shepherd-source-fixture";
+import { createGitRunner } from "./build-source";
 import { parseOptions, REPO_ROOT } from "./run";
 import type { Result } from "./schema";
+import { git, TEST_GIT_ENV, testGit, writeAt } from "./source-fixture";
 import { behavioral, result } from "./testing";
 import { trendLines } from "./trend";
 

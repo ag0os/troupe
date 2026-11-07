@@ -42,9 +42,10 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { type Builder, compileAgent } from "../../scripts/agent-compiler";
 import {
+	type Builder,
 	type BuildProvenance,
+	compileAgent,
 	type GitRunner,
 	readWorktreeSource,
 	runGit,
@@ -53,7 +54,7 @@ import {
 	type StampSource,
 	sameSource,
 	versionLine,
-} from "../../scripts/shepherd-source";
+} from "./build-source";
 import { runGate, type ScoreJob } from "./gate";
 import { type EvaluationIdentity, evaluationIdentity } from "./identity";
 import { canonicalJson, GATE_TRIALS, loadRubric, policyHash } from "./schema";

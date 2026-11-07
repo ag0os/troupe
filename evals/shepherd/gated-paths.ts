@@ -6,7 +6,7 @@
  * kept beside it as the documented alternative.
  */
 
-import { isSourcePath } from "../../scripts/shepherd-source";
+import { isSourcePath } from "./build-source";
 import { isEvaluationPath } from "./identity";
 
 export type GatedPathPolicy = "expanded" | "narrower";

@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { type GitRunner, runGit } from "../../scripts/shepherd-source";
+import { type GitRunner, runGit } from "./build-source";
 import { EVALUATION_DIR } from "./identity";
 import { MUST_IDS } from "./schema";
 import { RESULT_FILE } from "./verify";
