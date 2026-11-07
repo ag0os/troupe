@@ -376,7 +376,14 @@ async function readIncludes(
 			issue(`"${include}" does not exist`);
 			continue;
 		}
-		const real = realpathSync(target);
+		let real: string;
+		try {
+			// Bun's realpath opens the file, so an unreadable include fails here.
+			real = realpathSync(target);
+		} catch (error) {
+			issue(`"${include}" could not be read: ${(error as Error).message}`);
+			continue;
+		}
 		if (!roots.some((dir) => isInside(dir, real))) {
 			issue(
 				`"${include}" resolves outside ${listRoots(definition.includeRoots, "and")}`,

@@ -21,6 +21,7 @@ import {
 	createSerialQueue,
 	describePublishFailure,
 	LOCAL_AGENTS_WARNING,
+	legacyDefinition,
 	PartialPublishError,
 	PruneError,
 	type PublishOptions,
@@ -149,6 +150,9 @@ describe("roster", () => {
 		// D-036: personas:github was removed from the hub.
 		expect(ROSTER as readonly string[]).not.toContain("personas:github");
 		const repo = resolve(import.meta.dir, "..");
+		// The roster is the legacy wrapper's: the library planner has no
+		// default, and the wrapper's definition carries ROSTER.
+		expect(legacyDefinition(repo).roster).toBe(ROSTER);
 		return planBuild({ root: repo }).then((plan) => {
 			expect(plan.entries.map((entry) => entry.id)).toEqual([...ROSTER].sort());
 			for (const entry of plan.entries) {
