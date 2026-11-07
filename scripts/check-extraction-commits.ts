@@ -94,10 +94,7 @@ async function main(): Promise<number> {
 			logs.push(version);
 			const expected = expectedVersionLine(slot, commit);
 			logs.push(expected.ran);
-			const versionIssue =
-				version.code === 0
-					? versionProblem(version.stdout, expected.line)
-					: `--version exit ${version.code}`;
+			const versionIssue = versionProblem(version, expected.line);
 			if (versionIssue) problems.push(versionIssue);
 
 			const workspaces = buildWorkspaces(

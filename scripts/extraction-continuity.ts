@@ -326,13 +326,14 @@ export function expectedVersionLine(
 	};
 }
 
-/** A problem when the candidate's whole `--version` line is not `expected`. */
+/** A problem unless `--version` exited 0 and printed exactly `expected`. */
 export function versionProblem(
-	actual: string,
+	version: { code: number | null; stdout: string },
 	expected: string | undefined,
 ): string | undefined {
+	if (version.code !== 0) return `--version exit ${version.code}`;
 	if (expected === undefined) return "expected --version line unavailable";
-	const line = actual.trim();
+	const line = version.stdout.trim();
 	return line === expected
 		? undefined
 		: `--version ${JSON.stringify(line)} is not ${JSON.stringify(expected)}`;

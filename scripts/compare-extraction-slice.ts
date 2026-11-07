@@ -266,7 +266,7 @@ async function main(): Promise<number> {
 		writeEvidence(evidence, "candidate-version.txt", describeRan(version));
 		const expected = expectedVersionLine(slot, head);
 		writeEvidence(evidence, "expected-version.log", describeRan(expected.ran));
-		const versionIssue = versionProblem(version.stdout, expected.line);
+		const versionIssue = versionProblem(version, expected.line);
 		if (versionIssue) failures.push(versionIssue);
 		summary.push(
 			"## Candidate --version",

@@ -215,16 +215,29 @@ describe("version line", () => {
 	const expected = `shepherd revision=${commit} dirty=false source=sha256:${"1".repeat(64)}`;
 
 	test("accepts the exact expected line", () => {
-		expect(versionProblem(`${expected}\n`, expected)).toBeUndefined();
+		expect(
+			versionProblem({ code: 0, stdout: `${expected}\n` }, expected),
+		).toBeUndefined();
 	});
 
 	test("rejects a right revision and dirty flag with a wrong digest", () => {
 		const wrong = `shepherd revision=${commit} dirty=false source=sha256:${"2".repeat(64)}`;
-		expect(versionProblem(wrong, expected)).toContain("is not");
+		expect(versionProblem({ code: 0, stdout: wrong }, expected)).toContain(
+			"is not",
+		);
+	});
+
+	test("rejects the exact line when the command exits nonzero", () => {
+		expect(versionProblem({ code: 1, stdout: `${expected}\n` }, expected)).toBe(
+			"--version exit 1",
+		);
+		expect(versionProblem({ code: null, stdout: expected }, expected)).toBe(
+			"--version exit null",
+		);
 	});
 
 	test("rejects a missing expectation", () => {
-		expect(versionProblem(expected, undefined)).toBe(
+		expect(versionProblem({ code: 0, stdout: expected }, undefined)).toBe(
 			"expected --version line unavailable",
 		);
 	});
