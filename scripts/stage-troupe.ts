@@ -28,7 +28,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { relativeClosure } from "./import-closure";
 import { isWithin } from "./path-within";
 
