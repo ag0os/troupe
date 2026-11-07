@@ -205,7 +205,7 @@ The watcher observes exactly `agents/` and `system-prompts/` and rebuilds the fu
 
 ### Building from another package
 
-`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it; a root outside it is refused with a diagnostic naming the root.
+`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it, judged at its real location, so a symlink leading outside is refused too; a refusal names the root and field. `outDir` may be anywhere except where publication would destroy or ignore inputs: it may not contain the consumer root or any configured root, and no root may sit under a `.troupe-build-` or `.agent-build-` name beside it.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -218,6 +218,8 @@ The watcher observes exactly `agents/` and `system-prompts/` and rebuilds the fu
 | `outDir` | `bin` | Output directory |
 | `protectedOutputs` | none | Names in `outDir` that pruning never removes |
 | `watchRoots` | every root above except `outDir` | Directories the watcher watches |
+
+Under a `file:` folder dependency Bun installs the package as per-file links into the folder and runs its modules from the folder's real location, where no `node_modules` exists. Run the consumer's build scripts with `bun --no-install` and `NODE_PATH=<consumer>/node_modules`: without them Bun auto-installs the compiler's own imports from its global cache, at whatever versions are newest there rather than the consumer's locked ones. The bundler never auto-installs, so the default builder sets `NODE_PATH` for `bun build` itself whenever the runtime lies outside the consumer root (`BuildRequest.dependencyRoot` tells a custom builder the same). The compiled-consumer tests in `scripts/stage-troupe.test.ts` run this way.
 
 `compileAgent` builds one declaration under the declaration root and needs no roster. The watcher ignores its own writes to `outDir` and the temporary build directories beside it. Generated entries import the CLI and runner from the compiler's installed distribution and fail before building when either file is missing. This repository's wrappers in `scripts/` supply its definition: the roots and roster above, `lib/agent-format/` and `lib/shepherd/` as code roots, outputs of other `compile:*` scripts protected, and `agents/` and `system-prompts/` watched.
 
