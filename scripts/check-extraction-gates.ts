@@ -80,8 +80,10 @@ export function testFile(place: Place): string {
 
 const TYPE_TEXT = '\nexport const gatePlantType: number = "not a number";\n';
 const LINT_TEXT = "\nexport function gatePlantLint(): void {\n\tdebugger;\n}\n";
+/** The name of the failing plant's test, which detection must find in the gate's output. */
+export const SENTINEL = "gate plant sentinel";
 const testText = (pass: boolean) =>
-	`import { expect, test } from "bun:test";\n\ntest("gate plant", () => {\n\texpect(1).toBe(${pass ? 1 : 2});\n});\n`;
+	`import { expect, test } from "bun:test";\n\ntest("${pass ? "gate plant" : SENTINEL}", () => {\n\texpect(1).toBe(${pass ? 1 : 2});\n});\n`;
 
 /** Every plant: three kinds in each of three places. */
 export function plans(): Plant[] {
@@ -119,10 +121,15 @@ export function plans(): Plant[] {
 	});
 }
 
+/** The bare `bun test` filter the test gates pass: discovery, not a named path. */
+export const TEST_FILTER = "gate-plant";
+
 /**
  * The command and cwd (relative to the copy) of each gate. The test gates
- * run every place's test file, so on the clean copy they run the passing
- * versions, and under a plant the failing one.
+ * pass a bare filter, so the plant files are found by ordinary discovery
+ * from the gate's directory (a filter matching nothing exits nonzero).
+ * On the clean copy they run the passing versions, under a plant the
+ * failing one.
  */
 export function gateCommand(gate: Gate): { argv: string[]; cwd: string } {
 	const bun = process.execPath;
@@ -132,30 +139,28 @@ export function gateCommand(gate: Gate): { argv: string[]; cwd: string } {
 		case "root biome":
 			return { argv: [bun, "run", "check"], cwd: "." };
 		case "root test":
-			return {
-				argv: [
-					bun,
-					"test",
-					...(["root framework", "root shepherd", "package"] as Place[]).map(
-						(place) => `./${testFile(place)}`,
-					),
-				],
-				cwd: ".",
-			};
+			return { argv: [bun, "test", TEST_FILTER], cwd: "." };
 		case "package typecheck":
 			return { argv: [bun, "run", "typecheck"], cwd: PACKAGE_DIR };
 		case "package biome":
 			return { argv: [bun, "run", "check"], cwd: PACKAGE_DIR };
 		case "package test":
-			return {
-				argv: [
-					bun,
-					"test",
-					`./${testFile("package").slice(PACKAGE_DIR.length + 1)}`,
-				],
-				cwd: PACKAGE_DIR,
-			};
+			return { argv: [bun, "test", TEST_FILTER], cwd: PACKAGE_DIR };
 	}
+}
+
+/**
+ * Whether a test gate's output shows it ran the planted file: the plant's
+ * path relative to the gate's directory as Bun's file header, and the
+ * sentinel test's failure. Another failure is not detection.
+ */
+export function detected(plant: Plant, gate: Gate, output: string): boolean {
+	const { cwd } = gateCommand(gate);
+	const path = cwd === "." ? plant.file : plant.file.slice(cwd.length + 1);
+	return (
+		output.split("\n").includes(`${path}:`) &&
+		output.includes(`(fail) ${SENTINEL}`)
+	);
 }
 
 export interface Row {
@@ -166,15 +171,22 @@ export interface Row {
 	ok: boolean;
 }
 
-function run(argv: string[], cwd: string): number | null {
+function run(
+	argv: string[],
+	cwd: string,
+): { exit: number | null; output: string } {
 	const [command, ...args] = argv;
 	const result = spawnSync(command ?? "", args, {
 		cwd,
 		stdio: ["ignore", "pipe", "pipe"],
 		env: { ...process.env, NO_COLOR: "1" },
+		encoding: "utf8",
 		maxBuffer: 1 << 28,
 	});
-	return result.status;
+	return {
+		exit: result.status,
+		output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+	};
 }
 
 function git(args: string[], cwd: string): string {
@@ -198,7 +210,7 @@ export function disposableCopy(repo: string, parent: string): string {
 		}
 	}
 	symlinkSync(join(repo, "node_modules"), join(copy, "node_modules"));
-	if (run([process.execPath, "run", "setup:extractions"], copy) !== 0) {
+	if (run([process.execPath, "run", "setup:extractions"], copy).exit !== 0) {
 		throw new Error(`setup:extractions failed in ${copy}`);
 	}
 	return copy;
@@ -220,7 +232,7 @@ function cleanTests(copy: string): void {
 function clean(copy: string, round: string): Row[] {
 	return GATES.map((gate) => {
 		const { argv, cwd } = gateCommand(gate);
-		const exit = run(argv, join(copy, cwd));
+		const { exit } = run(argv, join(copy, cwd));
 		return {
 			plant: `clean (${round})`,
 			gate,
@@ -250,13 +262,16 @@ export function checkGates(
 		try {
 			for (const gate of plant.gates) {
 				const { argv, cwd } = gateCommand(gate);
-				const exit = run(argv, join(copy, cwd));
+				const { exit, output } = run(argv, join(copy, cwd));
 				record({
 					plant: label(plant),
 					gate,
 					expected: "fail",
 					exit,
-					ok: exit !== 0 && exit !== null,
+					ok:
+						exit !== 0 &&
+						exit !== null &&
+						(plant.kind !== "test" || detected(plant, gate, output)),
 				});
 			}
 		} finally {

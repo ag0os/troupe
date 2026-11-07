@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+	detected,
 	GATES,
 	gateCommand,
 	PACKAGE_DIR,
 	plans,
+	SENTINEL,
 	SOURCES,
+	TEST_FILTER,
 	table,
 	testFile,
 } from "./check-extraction-gates";
@@ -67,21 +72,61 @@ describe("check-extraction-gates plans (O25)", () => {
 		expect(text("test")).toContain("toBe(2)");
 	});
 
-	test("package gates run in the package; the root test gate runs every place's test file", () => {
+	test("package gates run in the package; the test gates find plants by discovery", () => {
 		for (const gate of GATES) {
 			expect([gate, gateCommand(gate).cwd]).toEqual([
 				gate,
 				gate.startsWith("package") ? PACKAGE_DIR : ".",
 			]);
 		}
-		expect(gateCommand("root test").argv.slice(2)).toEqual([
-			`./${testFile("root framework")}`,
-			`./${testFile("root shepherd")}`,
-			`./${testFile("package")}`,
-		]);
-		expect(gateCommand("package test").argv.slice(2)).toEqual([
-			"./lib/shepherd/gate-plant.test.ts",
-		]);
+		for (const gate of ["root test", "package test"] as const) {
+			expect(gateCommand(gate).argv.slice(1)).toEqual(["test", TEST_FILTER]);
+		}
+		for (const place of ["root framework", "root shepherd", "package"] as const)
+			expect(testFile(place)).toEndWith(`/${TEST_FILTER}.test.ts`);
+	});
+
+	test("a bare filter that matches no test file fails", () => {
+		const dir = mkdtempSync(join(tmpdir(), "gate-filter-"));
+		try {
+			writeFileSync(join(dir, "package.json"), "{}");
+			const result = spawnSync(process.execPath, ["test", TEST_FILTER], {
+				cwd: dir,
+				encoding: "utf8",
+			});
+			expect(result.status).not.toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("detection needs the plant's path from the gate's directory and the sentinel failure", () => {
+		const plant = plans().find(
+			(each) => each.place === "package" && each.kind === "test",
+		);
+		if (plant === undefined) throw new Error("no package test plant");
+		expect(plant.text).toContain(SENTINEL);
+		const fail = (path: string, name: string) =>
+			`bun test\n\n${path}:\nerror: expect(received).toBe(expected)\n(fail) ${name} [1ms]\n 1 fail\n`;
+		expect(detected(plant, "root test", fail(plant.file, SENTINEL))).toBeTrue();
+		expect(
+			detected(
+				plant,
+				"package test",
+				fail("lib/shepherd/gate-plant.test.ts", SENTINEL),
+			),
+		).toBeTrue();
+		// An unrelated failure, or the sentinel from another path, is not detection.
+		expect(
+			detected(plant, "root test", fail(plant.file, "something else")),
+		).toBeFalse();
+		expect(
+			detected(
+				plant,
+				"root test",
+				fail("lib/shepherd/gate-plant.test.ts", SENTINEL),
+			),
+		).toBeFalse();
 	});
 
 	test("the table marks a miss", () => {
