@@ -1,5 +1,7 @@
 # Shepherd evals
 
+> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.
+
 Shepherd evals tell us whether Shepherd's behaviour is heading the right way. They run on demand, not on every pull request, and they block nothing. Six synthetic trials launch the current tree's Shepherd as a one turn Claude session in a fresh workspace, thirteen Musts are decided from the evidence, and the outcome is committed as a result file for the exact source hash. An informational CI check reports that result, when one exists, for a pull request that changes a gated path (see "The CI check" below). Everything lives in `evals/shepherd/`; the trial harness is Python, the wrapper, schema, scorer driver and verifier are TypeScript.
 
 ## Prerequisites

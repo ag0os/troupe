@@ -160,6 +160,30 @@
 			"from": "} from \"../lib/entries/provenance\";\n",
 			"to": "} from \"troupe/provenance\";\n",
 			"count": 1
+		},
+		{
+			"file": "docs/PACKAGES.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/PACKAGES.md](../extractions/shepherd/docs/PACKAGES.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD.md](../extractions/shepherd/docs/SHEPHERD.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD-EVALS.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SETUP.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SETUP.md](../extractions/shepherd/docs/SETUP.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
 		}
 	],
 	"extractionOnly": [

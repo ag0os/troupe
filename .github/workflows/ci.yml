@@ -30,7 +30,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Stage Troupe and run the extracted package's frozen install before
-      # any root check (scripts/setup-extractions.ts).
+      # any root check (docs/AGENT-FORMAT.md, "Building from another package").
       - name: Set up extractions
         run: bun run setup:extractions
 
