@@ -205,7 +205,7 @@ The watcher observes exactly `agents/` and `system-prompts/` and rebuilds the fu
 
 ### Building from another package
 
-`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it, judged at its real location, so a symlink leading outside is refused too; a refusal names the root and field. `outDir` may be anywhere except where publication would destroy or ignore inputs: it may not contain the consumer root or any configured root, and no root may sit under a `.troupe-build-` or `.agent-build-` name beside it.
+`troupe/compiler` takes an `AgentBuildDefinition`. Relative paths resolve against `consumerRoot`, and every root except `outDir` must lie within it, judged at its real location, so a symlink leading outside is refused too; a refusal names the root and field. `outDir` may be anywhere except where publication would destroy or ignore inputs: it may not contain the consumer root or any configured root, and no root may sit under a `.troupe-build-` or `.agent-build-` name beside it. A root may contain `outDir`, but no declaration, include, extension or imported file may come from inside `outDir` or those temporary directories. No configured input or watch root may sit under the declaration root's `local/`, which is never compiled or watched.
 
 | Field | Default | Meaning |
 |---|---|---|
