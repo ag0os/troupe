@@ -14,6 +14,14 @@
 			"!evals/shepherd/results/**",
 			"!evals/shepherd/artifacts/**",
 			"!evals/shepherd/validation/**",
+			"./extractions/shepherd/agents/**/*",
+			"./extractions/shepherd/lib/**/*",
+			"./extractions/shepherd/scripts/**/*",
+			"./extractions/shepherd/packages/**/*.ts",
+			"./extractions/shepherd/evals/**/*",
+			"!extractions/shepherd/evals/shepherd/results/**",
+			"!extractions/shepherd/evals/shepherd/artifacts/**",
+			"!extractions/shepherd/evals/shepherd/validation/**",
 			"!**/*.md"
 		]
 	},

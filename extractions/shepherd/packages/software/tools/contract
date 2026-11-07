@@ -1,0 +1,25 @@
+#!/bin/sh
+# contract: lint Contract files, count their proof coverage, map their
+# components and report a PR's Contract changes. Read only. The work is in
+# contract.d/main.ts, run by bun from contract.d/, a directory this package
+# owns that holds no bunfig.toml or .env, so the caller's configuration,
+# preloads and environment files never load; main.ts inspects the caller's
+# directory, recorded in CONTRACT_TARGET_CWD. Contract: docs/PACKAGES.md
+# (contract 1).
+
+case $0 in
+*/*) dir=${0%/*} ;;
+*) dir=. ;;
+esac
+dir=$(cd "$dir/contract.d" 2>/dev/null && pwd -P) || {
+	printf 'contract: cannot find contract.d beside %s\n' "$0" >&2
+	exit 2
+}
+command -v bun >/dev/null 2>&1 || {
+	printf 'contract: bun is not on PATH; this tool requires bun and git\n' >&2
+	exit 2
+}
+CONTRACT_TARGET_CWD=$PWD
+export CONTRACT_TARGET_CWD
+cd "$dir" || exit 2
+exec bun --no-install --env-file=/dev/null "$dir/main.ts" "$@"

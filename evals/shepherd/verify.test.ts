@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
 	createGitRunner,
 	IDENTITY_MODULE,
+	RECORDS_UNTRACKED,
 	readWorktreeSource,
 	versionLine,
 } from "./build-source";
@@ -882,7 +883,10 @@ describe("verification (7.4)", () => {
 		commitAll("stage the new source");
 		const outcome = verify();
 		expect(outcome.problems).toEqual([]);
-		expect(text(outcome.notes)).toContain("lib/shepherd/new.ts");
+		// Reported where the identity records untracked entries (v1).
+		expect(text(outcome.notes).includes("lib/shepherd/new.ts")).toBe(
+			RECORDS_UNTRACKED,
+		);
 	});
 
 	test("an untracked source entry cannot silently disappear", () => {

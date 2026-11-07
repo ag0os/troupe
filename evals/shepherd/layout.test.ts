@@ -14,7 +14,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Builder, gitStamp, versionLine } from "./build-source";
+import {
+	type Builder,
+	entryPackagePath,
+	gitStamp,
+	versionLine,
+} from "./build-source";
 import { exportAttempt, REDACTED, redactText } from "./export";
 import {
 	defaultLayout,
@@ -320,9 +325,9 @@ describe("a nested prefix (O24b)", () => {
 			packages,
 			git: testGit,
 		});
-		expect(frozen.manifest.entries.map((e) => e.path)).toContain(
-			"lib/shepherd/tool.ts",
-		);
+		expect(
+			frozen.manifest.entries.map((e) => entryPackagePath(e.path)),
+		).toContain("lib/shepherd/tool.ts");
 		expect(recheck(frozen, { root: layout, git: testGit })).toEqual([]);
 		writeAt(layout.gitRoot, "OUTSIDE.md", "changed outside\n");
 		expect(recheck(frozen, { root: layout, git: testGit })).toEqual([]);
@@ -350,13 +355,13 @@ describe("a nested prefix (O24b)", () => {
 describe("a nonstandard subject directory (O24b)", () => {
 	test("the subject installs beneath the layout's subject directory, never the package's bin", async () => {
 		const layout = { ...nested(), subject: "install/x" };
-		const { run, subject, packages } = await built(layout);
+		const { run, subject, packages, provenance } = await built(layout);
 		const install = join(realpathSync(run.runDir), "install/x");
 		expect(subject).toBe(join(install, "bin/shepherd"));
 		expect(packages.dir).toBe(join(install, "packages"));
 		expect(readdirSync(run.runDir).sort()).toEqual(["artifacts", "install"]);
 		expect(existsSync(join(layout.packageRoot, "bin"))).toBe(false);
-		expect(readVersion(subject)).toMatch(/^shepherd revision=/);
+		expect(readVersion(subject)).toBe(`${versionLine(provenance)}\n`);
 	});
 });
 

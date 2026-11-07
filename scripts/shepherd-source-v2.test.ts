@@ -16,7 +16,7 @@ import {
 	createGitRunner,
 	readSourceInputs,
 	SourceInputError,
-} from "../lib/agent-format/provenance";
+} from "../lib/entries/provenance";
 import {
 	dependencyIdentity,
 	evaluationInputs,
@@ -45,6 +45,7 @@ const PACKAGE: Record<string, string> = {
 	"scripts/watch.ts": "watch\n",
 	"scripts/shepherd-definition.ts": "definition\n",
 	"scripts/shepherd-source-v2.ts": "policy\n",
+	"scripts/eval-source.ts": "eval seam\n",
 };
 
 /** Table rows: created in the fixture, selected or not. */
@@ -72,6 +73,7 @@ const ROWS: [string, boolean, string][] = [
 	["extractions/.troupe-dist/troupe/package.json", false, "staging"],
 	["evals/shepherd/results/x.json", false, "eval evidence"],
 	["evals/shepherd/rubric.yaml", false, "evaluation input (own selector)"],
+	["scripts/eval-source.ts", false, "eval build seam (evaluation input)"],
 	["packages/software/.DS_Store", false, "host byproduct"],
 	["packages/software/node_modules/x.ts", false, "installed module"],
 	["packages/software/tools/__pycache__/x.pyc", false, "bytecode"],
@@ -251,6 +253,7 @@ describe("v2 identity on miniature fixtures (O14, O15, O16)", () => {
 	test("evaluation inputs are a separate selector without evidence", () => {
 		const evaluation = readSourceInputs(evaluationInputs(layout.packageRoot));
 		expect(evaluation.files.map((file) => file.path)).toEqual([
+			"scripts/eval-source.ts",
 			"evals/shepherd/rubric.yaml",
 		]);
 	});

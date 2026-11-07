@@ -318,6 +318,8 @@ const resultSchema = z.strictObject({
 				bytes: z.number().int().nonnegative(),
 				sha256: hex,
 				untracked: z.boolean(),
+				/** Framed only by identities that record executable status (v2). */
+				executable: z.boolean().optional(),
 			}),
 		),
 	}),

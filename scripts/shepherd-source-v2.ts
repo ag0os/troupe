@@ -2,9 +2,11 @@
  * Shepherd source identity, v2: package-relative, table-driven membership
  * over two origins, `framework/troupe` (the installed Troupe bytes the build
  * selects) and `package/shepherd` (the Shepherd package). It is Shepherd
- * policy, built on Troupe's generic `troupe/provenance` helpers; PR 4 moves
- * it with the package. The shipped binary is still stamped by v1
- * (`scripts/shepherd-source.ts`), whose identities are never relabeled.
+ * policy, built on Troupe's generic `troupe/provenance` helpers. The
+ * extracted package holds a checked copy at `scripts/shepherd-source-v2.ts`
+ * (ADAPTATIONS.json); phase 3 deletes this one. The live binary is still
+ * stamped by v1 (`scripts/shepherd-source.ts`), whose identities are never
+ * relabeled.
  *
  * Membership is explicit. Git ignore rules play no part: the package's own
  * `.gitignore` is an input, and a host's global excludes cannot change what
@@ -33,7 +35,7 @@ import type {
 	BuildStampPolicy,
 	CapturedBuildStamp,
 	StampJson,
-} from "../lib/agent-format/compiler";
+} from "../lib/entries/compiler";
 import {
 	combineSourceInputs,
 	createGitRunner,
@@ -43,7 +45,7 @@ import {
 	type SourceInput,
 	type SourceInputDefinition,
 	type SourceManifest,
-} from "../lib/agent-format/provenance";
+} from "../lib/entries/provenance";
 
 export const SOURCE_DOMAIN_V2 = "troupe-agent-source-v2";
 export const FRAMEWORK_ORIGIN = "framework/troupe";
@@ -125,11 +127,18 @@ export function isSourcePath(path: string): boolean {
 	);
 }
 
+/**
+ * The package's eval build seam, which gives the evals their build identity
+ * and compiler. The build never reads it, so it is an evaluation input.
+ */
+export const EVAL_SEAM = "scripts/eval-source.ts";
+
 /** The evaluation harness's inputs: a selector separate from source. */
 export function evaluationInputs(packageRoot: string): SourceInputDefinition {
 	return {
 		origin: "evaluation/shepherd",
 		root: packageRoot,
+		files: [EVAL_SEAM],
 		trees: [{ dir: "evals/shepherd" }],
 		exclude: excluded,
 	};

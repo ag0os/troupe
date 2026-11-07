@@ -141,6 +141,17 @@ export function legacyStampPolicy(
 	};
 }
 
+/**
+ * The package-relative path a manifest entry names, or undefined for an
+ * entry outside the package. v1 entries are package paths already.
+ */
+export function entryPackagePath(entryPath: string): string | undefined {
+	return entryPath;
+}
+
+/** Whether manifest entries record that a file was untracked. v1's do. */
+export const RECORDS_UNTRACKED = true;
+
 /** The one line `shepherd --version` prints, without its newline. */
 export function versionLine(provenance: BuildProvenance): string {
 	return `shepherd revision=${provenance.revision} dirty=${provenance.dirty} source=${provenance.manifest.source}`;

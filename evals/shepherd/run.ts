@@ -47,6 +47,7 @@ import {
 	type Builder,
 	type BuildProvenance,
 	compileAgent,
+	entryPackagePath,
 	type GitRunner,
 	gitStamp,
 	readWorktreeSource,
@@ -220,21 +221,22 @@ export function snapshotPackages(options: {
 	mkdirSync(options.into);
 	const files: PackageSnapshot["files"] = [];
 	for (const entry of options.manifest.entries) {
-		if (!entry.path.startsWith(`${PACKAGES}/`)) continue;
-		const bytes = readFileSync(join(options.packageRoot, entry.path));
+		const path = entryPackagePath(entry.path);
+		if (path === undefined || !path.startsWith(`${PACKAGES}/`)) continue;
+		const bytes = readFileSync(join(options.packageRoot, path));
 		if (sha256(bytes) !== entry.sha256) {
 			throw new Error(
-				`Runtime package file changed after the build read it: ${entry.path}`,
+				`Runtime package file changed after the build read it: ${path}`,
 			);
 		}
 		const executable =
 			entry.executable ??
-			(lstatSync(join(options.packageRoot, entry.path)).mode & 0o100) !== 0;
-		const to = join(options.into, entry.path.slice(PACKAGES.length + 1));
+			(lstatSync(join(options.packageRoot, path)).mode & 0o100) !== 0;
+		const to = join(options.into, path.slice(PACKAGES.length + 1));
 		mkdirSync(dirname(to), { recursive: true });
 		writeFileSync(to, bytes, { flag: "wx" });
 		chmodSync(to, executable ? 0o555 : 0o444);
-		files.push({ path: entry.path, sha256: entry.sha256, executable });
+		files.push({ path, sha256: entry.sha256, executable });
 	}
 	for (const item of walk(options.into)) {
 		if (item.dir) chmodSync(join(options.into, item.path), 0o555);

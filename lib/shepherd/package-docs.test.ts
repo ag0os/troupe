@@ -41,17 +41,11 @@ const dashes = new RegExp(`[${String.fromCodePoint(0x2013, 0x2014)}]`);
 test("the docs name the SHEPHERD_WORKSPACE leak and use no em or en dashes (D11)", () => {
 	const packages = doc("PACKAGES.md");
 	expect(packages).toContain("nested sessions and forks");
-	for (const name of [
-		"PACKAGES.md",
-		"SHEPHERD.md",
-		"AGENT-FORMAT.md",
-		"SETUP.md",
-	])
+	for (const name of ["PACKAGES.md", "SHEPHERD.md", "SETUP.md"])
 		expect({ name, dashes: dashes.test(doc(name)) }).toEqual({
 			name,
 			dashes: false,
 		});
-	expect(doc("AGENT-FORMAT.md")).toContain("dispatch");
 	expect(doc("SHEPHERD.md")).toContain("packages/software/MODULE.md");
 });
 
