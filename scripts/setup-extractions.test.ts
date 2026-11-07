@@ -2,6 +2,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -51,8 +52,18 @@ const INDEX = readFileSync(join(source, "lib/index.ts"), "utf8");
 const EXTRA = "lib/agent-format/extra.ts";
 
 const setup = () => setupExtractions({ root: source, packages: [pkg] });
+/** Whether the installed tree holds an entry at `path`, a dangling link included. */
+const present = (path: string) => {
+	try {
+		lstatSync(join(pkg, "node_modules/troupe", path));
+		return true;
+	} catch {
+		return false;
+	}
+};
+/** Whether the entry is there and reaches a file. */
 const installed = (path: string) =>
-	existsSync(join(pkg, "node_modules/troupe", path));
+	present(path) && existsSync(join(pkg, "node_modules/troupe", path));
 const recorded = (): string[] =>
 	JSON.parse(readFileSync(join(pkg, INVENTORY_FILE), "utf8"));
 const RUNTIME = ["typescript", "yaml", "zod"];
@@ -181,7 +192,8 @@ describe("setup:extractions (C6)", () => {
 		writeFileSync(join(source, "lib/index.ts"), INDEX);
 		const [result] = setup();
 		expect(result).toMatchObject({ reason: "inventory", relinked: false });
-		expect(installed(EXTRA)).toBe(false);
+		// The entry itself is gone, not left as a dangling link.
+		expect(present(EXTRA)).toBe(false);
 		expect(recorded()).not.toContain(EXTRA);
 	});
 
