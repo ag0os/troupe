@@ -175,6 +175,32 @@ function put(root: string, path: string, text: string): void {
 	writeFileSync(join(root, path), text);
 }
 
+/**
+ * Runs a consumer script the way an installed consumer must under a `file:`
+ * folder dependency. Bun runs the stage's own imports from its real
+ * location, beside no node_modules, and would auto-install them from its
+ * global cache at whatever version is newest there. `--no-install` makes
+ * that fail instead, and `NODE_PATH` resolves them from the consumer's
+ * lockfile.
+ */
+function runConsumer(argv: string[], cwd: string) {
+	const child = Bun.spawnSync([process.execPath, "--no-install", ...argv], {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		env: {
+			...process.env,
+			NO_COLOR: "1",
+			NODE_PATH: join(consumer, "node_modules"),
+		},
+	});
+	return {
+		code: child.exitCode,
+		stdout: child.stdout.toString(),
+		stderr: child.stderr.toString(),
+	};
+}
+
 function run(argv: string[], cwd: string) {
 	const child = Bun.spawnSync(argv, {
 		cwd,
@@ -560,8 +586,28 @@ describe("staged distribution", () => {
 		}
 	});
 
+	test("the stage's packages resolve from the consumer's lockfile, not a cache", () => {
+		const from = join(dist, "lib/agent-format/compiler.ts");
+		const result = runConsumer(
+			[
+				"-e",
+				`for (const name of ["zod", "yaml", "typescript"]) console.log(Bun.resolveSync(name, ${JSON.stringify(from)}));`,
+			],
+			consumer,
+		);
+		expect(result.stderr).toBe("");
+		expect(result.code).toBe(0);
+		const resolved = result.stdout.trim().split("\n");
+		expect(resolved).toHaveLength(3);
+		for (const [index, name] of ["zod", "yaml", "typescript"].entries()) {
+			expect(resolved[index]).toStartWith(
+				join(consumer, "node_modules", name, ""),
+			);
+		}
+	});
+
 	test("a consumer parses, previews, executes and dispatches through subpaths", () => {
-		const result = run([process.execPath, "main.ts"], consumer);
+		const result = runConsumer(["main.ts"], consumer);
 		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({
@@ -591,37 +637,11 @@ describe("staged distribution", () => {
 		const unrelated = join(parent, "unrelated-cwd");
 		mkdirSync(unrelated, { recursive: true });
 		const out = join(parent, "consumer-out");
-		// Bun runs the stage's own imports from its real location, beside no
-		// node_modules, and would auto-install them from its global cache at
-		// whatever version is newest there. Resolve them from the consumer's
-		// lockfile instead, and fail rather than auto-install.
-		const build = (mode: string, target = out) => {
-			const child = Bun.spawnSync(
-				[
-					process.execPath,
-					"--no-install",
-					join(consumer, "build.ts"),
-					consumer,
-					mode,
-					target,
-				],
-				{
-					cwd: unrelated,
-					stdout: "pipe",
-					stderr: "pipe",
-					env: {
-						...process.env,
-						NO_COLOR: "1",
-						NODE_PATH: join(consumer, "node_modules"),
-					},
-				},
+		const build = (mode: string, target = out) =>
+			runConsumer(
+				[join(consumer, "build.ts"), consumer, mode, target],
+				unrelated,
 			);
-			return {
-				code: child.exitCode,
-				stdout: child.stdout.toString(),
-				stderr: child.stderr.toString(),
-			};
-		};
 
 		test("generated entries import the runtime from the installed distribution", () => {
 			const result = build("entry");
@@ -666,6 +686,8 @@ describe("staged distribution", () => {
 			});
 			expect(readdirSync(out)).toEqual(["greet:hello"]);
 			const binary = join(out, "greet:hello");
+			// O11: the compiled bytes name no checkout path.
+			expect(readFileSync(binary).includes(Buffer.from(repo))).toBe(false);
 
 			const preview = run([binary, "--show-prompt", "hi"], unrelated);
 			expect(preview.code).toBe(0);
@@ -772,7 +794,7 @@ describe("staged distribution", () => {
 	});
 
 	test("an installed consumer imports every member and each value is defined", () => {
-		const result = run([process.execPath, "surface.ts"], consumer);
+		const result = runConsumer(["surface.ts"], consumer);
 		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({
