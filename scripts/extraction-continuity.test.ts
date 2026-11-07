@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	expectedVersionLine,
 	formatSnapshot,
 	guardEvidence,
 	guardWorkspace,
@@ -239,6 +240,35 @@ describe("version line", () => {
 	test("rejects a missing expectation", () => {
 		expect(versionProblem({ code: 0, stdout: expected }, undefined)).toBe(
 			"expected --version line unavailable",
+		);
+	});
+});
+
+describe("expected --version line per commit (C5)", () => {
+	const source = `sha256:${"0".repeat(64)}`;
+	const commit = "c".repeat(40);
+	function slot(name: string, module: string): string {
+		const dir = join(root, "c5", name);
+		mkdirSync(join(dir, "scripts"), { recursive: true });
+		writeFileSync(join(dir, "scripts/shepherd-source.ts"), module);
+		return dir;
+	}
+	const reader = `export function readCommitSource() {\n\treturn { source: "${source}", entries: [] };\n}\n`;
+
+	test("a commit with BuildStampPolicy gets its policy's line", () => {
+		const dir = slot(
+			"policy",
+			`${reader}export function legacyStampPolicy() {\n\treturn { versionLine: (id: string, s: { manifest: { source: string }; provenance: { revision: string } }) => \`\${id} policy \${s.provenance.revision} \${s.manifest.source}\` };\n}\n`,
+		);
+		expect(expectedVersionLine(dir, commit).line).toBe(
+			`shepherd policy ${commit} ${source}`,
+		);
+	});
+
+	test("an older commit without the policy keeps the derived v1 line", () => {
+		const dir = slot("older", reader);
+		expect(expectedVersionLine(dir, commit).line).toBe(
+			`shepherd revision=${commit} dirty=false source=${source}`,
 		);
 	});
 });

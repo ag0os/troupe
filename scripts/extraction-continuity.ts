@@ -303,7 +303,9 @@ export function checkoutSlot(slot: string, rev: string): SlotCheckout {
 /**
  * The truthful `--version` line for `commit` built in the slot, from the
  * slot's own legacy source module run in a child process, so older commits
- * are driven from outside.
+ * are driven from outside. A commit whose module exports
+ * `legacyStampPolicy` (PR 3 on) gets the line from that policy's
+ * `versionLine`; an older one gets the line its module implied.
  */
 export function expectedVersionLine(
 	slot: string,
@@ -314,14 +316,22 @@ export function expectedVersionLine(
 		[
 			process.execPath,
 			"-e",
-			`const m = await import(${JSON.stringify(module)}); console.log(m.readCommitSource(${JSON.stringify(slot)}, ${JSON.stringify(commit)}).source);`,
+			[
+				`const m = await import(${JSON.stringify(module)});`,
+				`const manifest = m.readCommitSource(${JSON.stringify(slot)}, ${JSON.stringify(commit)});`,
+				"console.log(manifest.source);",
+				'if (typeof m.legacyStampPolicy === "function") {',
+				`\tconsole.log(m.legacyStampPolicy().versionLine("shepherd", { manifest, provenance: { revision: ${JSON.stringify(commit)}, dirty: false, sourceDirty: false } }));`,
+				"}",
+			].join("\n"),
 		],
 		slot,
 	);
-	const source = ran.stdout.trim();
+	const [source = "", policyLine] = ran.stdout.trim().split("\n");
 	if (ran.code !== 0 || !/^sha256:[0-9a-f]{64}$/.test(source)) return { ran };
 	return {
-		line: `shepherd revision=${commit} dirty=false source=${source}`,
+		line:
+			policyLine ?? `shepherd revision=${commit} dirty=false source=${source}`,
 		ran,
 	};
 }
