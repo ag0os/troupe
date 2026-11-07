@@ -324,6 +324,13 @@ describe("membership (1.4)", () => {
 	});
 });
 
+describe("v1 keeps packages selected (R13)", () => {
+	test("the live v1 identity selects MODULE.md and tools/publish-check", () => {
+		expect(isSourcePath("packages/software/MODULE.md")).toBe(true);
+		expect(isSourcePath("packages/software/tools/publish-check")).toBe(true);
+	});
+});
+
 describe("commit manifests", () => {
 	test("a clean tree's manifest equals HEAD's", () => {
 		const revision = initShepherdRepo(root);

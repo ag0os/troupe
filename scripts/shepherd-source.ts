@@ -200,7 +200,6 @@ function gitOk(
 	return result.stdout;
 }
 
-/** The repository root, which must be `root` itself. */
 /**
  * Where a package sits in its repository: `gitRoot` is the repository's
  * top level and `prefix` the package directory relative to it (`""` for
@@ -261,6 +260,7 @@ function scope(prefix: string): string[] {
 	return prefix === "" ? [] : ["--", prefix];
 }
 
+/** The repository root, which must be `root` itself. */
 function repositoryRoot(root: string, git: GitRunner): string {
 	const result = git(["rev-parse", "--show-toplevel"], root);
 	if (result.code !== 0) {
