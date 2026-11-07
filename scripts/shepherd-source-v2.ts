@@ -10,6 +10,13 @@
  * `.gitignore` is an input, and a host's global excludes cannot change what
  * is hashed. Outputs, the staged distribution and generated eval evidence
  * are never selected; evaluation inputs have their own selector.
+ *
+ * The table is the extracted package's (design.md section 4): its build
+ * definition, build and watch scripts and this policy, not the repository's
+ * legacy wrappers or the v1 adapter. `biome.json` and `ADAPTATIONS.json`
+ * are not build inputs and are left out. One implementation selects:
+ * `isSourcePath` decides, and the reader walks the trees and keeps exactly
+ * the paths it accepts.
  */
 
 import { readFileSync } from "node:fs";
@@ -38,13 +45,10 @@ export const PACKAGE_FILES = [
 	"agents/shepherd.ts",
 	"bun.lock",
 	"package.json",
-	"scripts/agent-compiler.ts",
-	"scripts/binary-name.ts",
-	"scripts/compile-all.ts",
-	"scripts/compile.ts",
+	"scripts/build.ts",
+	"scripts/shepherd-definition.ts",
 	"scripts/shepherd-source-v2.ts",
-	"scripts/shepherd-source.ts",
-	"scripts/watch-agents.ts",
+	"scripts/watch.ts",
 	"tsconfig.json",
 ] as const;
 
@@ -76,10 +80,12 @@ export function isRuntimeTool(path: string): boolean {
 	return /^packages\/[^/]+\/tools\//.test(path);
 }
 
+/** Judged on every path component, so a byproduct directory hides its contents. */
 function excluded(path: string): boolean {
-	const name = path.split("/").at(-1) ?? "";
+	const parts = path.split("/");
+	const name = parts.at(-1) ?? "";
 	return (
-		EXCLUDED_NAMES.has(name) ||
+		parts.some((part) => EXCLUDED_NAMES.has(part)) ||
 		name.endsWith(".pyc") ||
 		EXCLUDED_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`))
 	);
@@ -119,7 +125,13 @@ export function evaluationInputs(packageRoot: string): SourceInputDefinition {
 export interface V2Layout {
 	/** The package's directory. */
 	packageRoot: string;
-	/** The installed Troupe distribution the build selects. */
+	/**
+	 * The real directory the installed compiler runs from, derived from the
+	 * `realpath` of an installed file such as `lib/agent-format/compiler.ts`.
+	 * Never `node_modules/troupe` walked directly: Bun 1.2.22 installs a
+	 * `file:` dependency as per-file symlinks, which `readSourceInputs`
+	 * refuses (1.4.4 uses hardlinks).
+	 */
 	troupeRoot: string;
 	/** Where the package's Git revision is read, when known. */
 	revision?: { gitRoot: string; prefix: string; git?: GitRunner };
@@ -163,11 +175,9 @@ export function v2Inputs(layout: V2Layout): SourceInputDefinition[] {
 			origin: PACKAGE_ORIGIN,
 			root: layout.packageRoot,
 			files: PACKAGE_FILES,
-			trees: PACKAGE_TREES.map((tree) => ({
-				dir: tree.dir,
-				...(tree.tests ? {} : { exclude: isTestPath }),
-			})),
-			exclude: excluded,
+			trees: PACKAGE_TREES.map((tree) => ({ dir: tree.dir })),
+			// The reader keeps exactly what `isSourcePath` accepts.
+			exclude: (path) => !isSourcePath(path),
 			executables: isRuntimeTool,
 			...(layout.revision ? { revision: layout.revision } : {}),
 		},
