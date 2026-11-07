@@ -255,14 +255,34 @@ describe("expected --version line per commit (C5)", () => {
 	}
 	const reader = `export function readCommitSource() {\n\treturn { source: "${source}", entries: [] };\n}\n`;
 
-	test("a commit with BuildStampPolicy gets its policy's line", () => {
+	const template = `shepherd revision=${commit} dirty=false source=${source}`;
+	const policy = (body: string) =>
+		`${reader}export function legacyStampPolicy() {\n\treturn { versionLine: (id: string, s: { manifest: { source: string }; provenance: { revision: string } }) => ${body} };\n}\n`;
+
+	test("a policy whose line differs from the v1 template fails", () => {
 		const dir = slot(
-			"policy",
-			`${reader}export function legacyStampPolicy() {\n\treturn { versionLine: (id: string, s: { manifest: { source: string }; provenance: { revision: string } }) => \`\${id} policy \${s.provenance.revision} \${s.manifest.source}\` };\n}\n`,
+			"policy-differs",
+			policy(
+				'id + " policy " + s.provenance.revision + " " + s.manifest.source',
+			),
 		);
-		expect(expectedVersionLine(dir, commit).line).toBe(
-			`shepherd policy ${commit} ${source}`,
+		const expected = expectedVersionLine(dir, commit);
+		expect(expected.line).toBe(template);
+		expect(expected.problem).toBe(
+			`legacyStampPolicy line ${JSON.stringify(`shepherd policy ${commit} ${source}`)} is not the v1 template ${JSON.stringify(template)}`,
 		);
+	});
+
+	test("a policy that prints the v1 template passes", () => {
+		const dir = slot(
+			"policy-template",
+			policy(
+				'id + " revision=" + s.provenance.revision + " dirty=false source=" + s.manifest.source',
+			),
+		);
+		const expected = expectedVersionLine(dir, commit);
+		expect(expected.line).toBe(template);
+		expect(expected.problem).toBeUndefined();
 	});
 
 	test("an older commit without the policy keeps the derived v1 line", () => {

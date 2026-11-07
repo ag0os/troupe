@@ -96,6 +96,7 @@ async function main(): Promise<number> {
 			logs.push(expected.ran);
 			const versionIssue = versionProblem(version, expected.line);
 			if (versionIssue) problems.push(versionIssue);
+			if (expected.problem) problems.push(expected.problem);
 
 			const workspaces = buildWorkspaces(
 				join(slot, "agents/__fixtures__/shepherd/workspaces.json"),

@@ -303,14 +303,15 @@ export function checkoutSlot(slot: string, rev: string): SlotCheckout {
 /**
  * The truthful `--version` line for `commit` built in the slot, from the
  * slot's own legacy source module run in a child process, so older commits
- * are driven from outside. A commit whose module exports
- * `legacyStampPolicy` (PR 3 on) gets the line from that policy's
- * `versionLine`; an older one gets the line its module implied.
+ * are driven from outside. The expected line is always the v1 template
+ * `shepherd revision=<commit> dirty=false source=<source>`. A commit whose
+ * module exports `legacyStampPolicy` (PR 3 on) must produce exactly that
+ * template through the policy's `versionLine`; a difference is a problem.
  */
 export function expectedVersionLine(
 	slot: string,
 	commit: string,
-): { line?: string; ran: Ran } {
+): { line?: string; problem?: string; ran: Ran } {
 	const module = join(slot, "scripts/shepherd-source.ts");
 	const ran = run(
 		[
@@ -329,11 +330,15 @@ export function expectedVersionLine(
 	);
 	const [source = "", policyLine] = ran.stdout.trim().split("\n");
 	if (ran.code !== 0 || !/^sha256:[0-9a-f]{64}$/.test(source)) return { ran };
-	return {
-		line:
-			policyLine ?? `shepherd revision=${commit} dirty=false source=${source}`,
-		ran,
-	};
+	const line = `shepherd revision=${commit} dirty=false source=${source}`;
+	if (policyLine !== undefined && policyLine !== line) {
+		return {
+			line,
+			problem: `legacyStampPolicy line ${JSON.stringify(policyLine)} is not the v1 template ${JSON.stringify(line)}`,
+			ran,
+		};
+	}
+	return { line, ran };
 }
 
 /** A problem unless `--version` exited 0 and printed exactly `expected`. */
