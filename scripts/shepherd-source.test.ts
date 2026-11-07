@@ -105,7 +105,7 @@ describe("framing (1.5)", () => {
 	});
 
 	test("the manifest records path, length, content hash and tracking, outside the hash", () => {
-		const tracked = buildManifest([
+		const tracked = buildManifest(SOURCE_DOMAIN, [
 			{ path: "b", content: bytes("two") },
 			{ path: "a", content: bytes("one"), untracked: true },
 		]);
@@ -119,7 +119,7 @@ describe("framing (1.5)", () => {
 				{ path: "b", bytes: 3, sha256: sha("two"), untracked: false },
 			],
 		});
-		const committed = buildManifest([
+		const committed = buildManifest(SOURCE_DOMAIN, [
 			{ path: "a", content: bytes("one") },
 			{ path: "b", content: bytes("two") },
 		]);
@@ -128,7 +128,7 @@ describe("framing (1.5)", () => {
 		expect(
 			sameSource(
 				tracked,
-				buildManifest([{ path: "a", content: bytes("one") }]),
+				buildManifest(SOURCE_DOMAIN, [{ path: "a", content: bytes("one") }]),
 			),
 		).toBe(false);
 	});
@@ -321,6 +321,13 @@ describe("membership (1.4)", () => {
 				readWorktreeSource(join(root, "lib"), { git: testGit }),
 			).join("\n"),
 		).toContain("repository root");
+	});
+});
+
+describe("v1 keeps packages selected (R13)", () => {
+	test("the live v1 identity selects MODULE.md and tools/publish-check", () => {
+		expect(isSourcePath("packages/software/MODULE.md")).toBe(true);
+		expect(isSourcePath("packages/software/tools/publish-check")).toBe(true);
 	});
 });
 

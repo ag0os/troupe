@@ -5,6 +5,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	expectedVersionLine,
 	formatSnapshot,
 	guardEvidence,
 	guardWorkspace,
@@ -161,6 +163,16 @@ describe("evidence destination", () => {
 	});
 });
 
+describe("evidence files name the Bun version (R2)", () => {
+	test("the first line is the evidence script's Bun version", () => {
+		const dir = join(root, "evidence-header");
+		const file = writeEvidence(dir, "run.log", "$ cmd\noutput\n");
+		expect(readFileSync(file, "utf8")).toBe(
+			`# bun ${Bun.version} (Bun.version of the evidence script)\n$ cmd\noutput\n`,
+		);
+	});
+});
+
 describe("live snapshots", () => {
 	test("lists packages with bytes, modes and content hashes, sorted", () => {
 		const live = makeLive();
@@ -239,6 +251,55 @@ describe("version line", () => {
 	test("rejects a missing expectation", () => {
 		expect(versionProblem({ code: 0, stdout: expected }, undefined)).toBe(
 			"expected --version line unavailable",
+		);
+	});
+});
+
+describe("expected --version line per commit (C5)", () => {
+	const source = `sha256:${"0".repeat(64)}`;
+	const commit = "c".repeat(40);
+	function slot(name: string, module: string): string {
+		const dir = join(root, "c5", name);
+		mkdirSync(join(dir, "scripts"), { recursive: true });
+		writeFileSync(join(dir, "scripts/shepherd-source.ts"), module);
+		return dir;
+	}
+	const reader = `export function readCommitSource() {\n\treturn { source: "${source}", entries: [] };\n}\n`;
+
+	const template = `shepherd revision=${commit} dirty=false source=${source}`;
+	const policy = (body: string) =>
+		`${reader}export function legacyStampPolicy() {\n\treturn { versionLine: (id: string, s: { manifest: { source: string }; provenance: { revision: string } }) => ${body} };\n}\n`;
+
+	test("a policy whose line differs from the v1 template fails", () => {
+		const dir = slot(
+			"policy-differs",
+			policy(
+				'id + " policy " + s.provenance.revision + " " + s.manifest.source',
+			),
+		);
+		const expected = expectedVersionLine(dir, commit);
+		expect(expected.line).toBe(template);
+		expect(expected.problem).toBe(
+			`legacyStampPolicy line ${JSON.stringify(`shepherd policy ${commit} ${source}`)} is not the v1 template ${JSON.stringify(template)}`,
+		);
+	});
+
+	test("a policy that prints the v1 template passes", () => {
+		const dir = slot(
+			"policy-template",
+			policy(
+				'id + " revision=" + s.provenance.revision + " dirty=false source=" + s.manifest.source',
+			),
+		);
+		const expected = expectedVersionLine(dir, commit);
+		expect(expected.line).toBe(template);
+		expect(expected.problem).toBeUndefined();
+	});
+
+	test("an older commit without the policy keeps the derived v1 line", () => {
+		const dir = slot("older", reader);
+		expect(expectedVersionLine(dir, commit).line).toBe(
+			`shepherd revision=${commit} dirty=false source=${source}`,
 		);
 	});
 });

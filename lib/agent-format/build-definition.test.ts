@@ -19,6 +19,7 @@ import {
 	type AgentBuildDefinition,
 	type Builder,
 	type BuildRequest,
+	type BuildStampPolicy,
 	compileAgent,
 	describePublishFailure,
 	generateEntry,
@@ -123,15 +124,14 @@ function buildLeftovers(): string[] {
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-const fakeProvenance = {
-	revision: "f".repeat(40),
-	dirty: false,
-	sourceDirty: false,
+const fakeCaptured = {
 	manifest: { source: "sha256:fixture", entries: [] },
+	provenance: { revision: "f".repeat(40) },
 };
-const fakeStamp = {
-	capture: () => fakeProvenance,
-	recheck: () => fakeProvenance.manifest,
+const fakeStamp: BuildStampPolicy = {
+	capture: () => fakeCaptured,
+	recheck: () => fakeCaptured.manifest,
+	versionLine: (id) => `${id} fixture`,
 };
 
 type Listener = (event: string, filename: string | null) => void;
@@ -211,16 +211,25 @@ describe("O6 declaration roots", () => {
 	test("traversal and symlink escapes from the declaration root fail", async () => {
 		addAgent("outside.md");
 		symlinkSync(join(root, "outside.md"), join(root, "defs/link.md"));
-		for (const file of ["defs/../outside.md", "defs/link.md"]) {
-			const issues = await issuesOf(loadAgentDefinition(definition(), file));
-			expect(issues).toEqual([
-				{
-					file: "outside.md",
-					field: "path",
-					message: "declarations live under defs/",
-				},
-			]);
-		}
+		expect(
+			await issuesOf(loadAgentDefinition(definition(), "defs/../outside.md")),
+		).toEqual([
+			{
+				file: "outside.md",
+				field: "path",
+				message: "declarations live under defs/",
+			},
+		]);
+		// C11: a symlinked declaration is refused as such, wherever it leads.
+		expect(
+			await issuesOf(loadAgentDefinition(definition(), "defs/link.md")),
+		).toEqual([
+			{
+				file: "defs/link.md",
+				field: "path",
+				message: "a declaration must not be a symlink",
+			},
+		]);
 	});
 
 	test("duplicate IDs and unpaired TypeScript under the root are rejected", async () => {
@@ -522,23 +531,25 @@ describe("O10 roster", () => {
 		const seen: BuildRequest[] = [];
 		const entries: string[] = [];
 		const record = fakeBuilder(seen);
-		const def = definition({ roster: ["shepherd"] });
+		const def = definition({
+			roster: ["shepherd"],
+			stamps: { shepherd: fakeStamp },
+		});
 		const plan = await planBuild({ definition: def });
 		expect(plan.entries.map((entry) => entry.id)).toEqual(["shepherd"]);
 		const result = await publish({
 			definition: def,
-			stamp: fakeStamp,
 			build: async (request) => {
 				entries.push(readFileSync(request.entry, "utf8"));
 				await record(request);
 			},
 		});
 		expect(result.built).toEqual(["shepherd"]);
-		expect(result.provenance).toEqual(fakeProvenance);
+		expect(result.stamps).toEqual({ shepherd: fakeCaptured });
 		expect(readdirSync(join(root, "out"))).toEqual(["shepherd"]);
 		expect(seen.map((request) => request.label)).toEqual(["defs/shepherd.md"]);
 		expect(entries[0]).toContain("resolveVersion(spec.id");
-		expect(entries[0]).toContain(`revision=${"f".repeat(40)}`);
+		expect(entries[0]).toContain(`resolveVersion(spec.id, "shepherd fixture"`);
 	});
 
 	test("missing, extra and malformed sibling declarations fail", async () => {
@@ -1406,7 +1417,7 @@ describe("one declaration coordinate (R3)", () => {
 		expect(built.id).toBe("team:a");
 	});
 
-	test("compileAgent through the real path still stamps Shepherd first", async () => {
+	test("compileAgent through the real path still stamps a stamped agent first", async () => {
 		mkdirSync(join(root, "sources"), { recursive: true });
 		rmSync(join(root, "defs"), { recursive: true });
 		symlinkSync(join(root, "sources"), join(root, "defs"));
@@ -1414,16 +1425,19 @@ describe("one declaration coordinate (R3)", () => {
 		mkdirSync(join(root, "out"));
 		const order: string[] = [];
 		const built = await compileAgent({
-			definition: definition(),
+			definition: definition({
+				stamps: {
+					shepherd: {
+						...fakeStamp,
+						capture: () => {
+							order.push("capture");
+							return fakeCaptured;
+						},
+					},
+				},
+			}),
 			file: "sources/shepherd.md",
 			outFile: "out/shepherd",
-			stamp: {
-				capture: () => {
-					order.push("capture");
-					return fakeProvenance;
-				},
-				recheck: () => fakeProvenance.manifest,
-			},
 			build: async (request) => {
 				order.push("build");
 				writeFileSync(request.outFile, "x");

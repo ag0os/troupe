@@ -34,16 +34,10 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import {
-	type BuildProvenance,
-	gitStamp,
-	SHEPHERD_ID,
-	type StampSource,
-	versionLine,
-} from "../../scripts/shepherd-source";
 import { toBinaryName } from "./binary-name";
 import { AgentSourceError, formatIssue, type SourceIssue } from "./errors";
 import { canonical, isWithin } from "./path-within";
+import type { SourceManifest } from "./provenance";
 import {
 	type IncludeText,
 	materializeAgentSpec,
@@ -112,8 +106,8 @@ export interface LoadedAgent {
 /**
  * Where a consumer's agents and their inputs live, what is built and where it
  * goes. Relative paths resolve against `consumerRoot`, and every root except
- * `outDir` must lie within it. Per-agent stamp policies are not part of it
- * yet; Shepherd's stamp still comes from `CompilerOptions.stamp`.
+ * `outDir` must lie within it. An agent is stamped only when `stamps`
+ * names its ID.
  */
 export interface AgentBuildDefinition {
 	/** The consumer package root. Relative to the working directory if relative. */
@@ -134,6 +128,51 @@ export interface AgentBuildDefinition {
 	protectedOutputs?: readonly string[];
 	/** Directories the watcher watches. Defaults to every root above except `outDir`. */
 	watchRoots?: readonly string[];
+	/** Per-agent stamp policies by binary name. Unnamed agents are unstamped. */
+	stamps?: Readonly<Record<string, BuildStampPolicy>>;
+}
+
+/** A JSON value: what a captured stamp's provenance may hold. */
+export type StampJson =
+	| string
+	| number
+	| boolean
+	| null
+	| StampJson[]
+	| { [key: string]: StampJson };
+
+/** What a stamp policy sees: the agent and the resolved consumer locations. */
+export interface StampContext {
+	agentId: string;
+	consumerRoot: string;
+	declarationRoot: string;
+	outDir: string;
+}
+
+/** A stamp captured before any declaration is read. */
+export interface CapturedBuildStamp {
+	/** The source identity the build is made from. */
+	manifest: SourceManifest;
+	/** Serializable revision and origin facts the policy records. */
+	provenance: { [key: string]: StampJson };
+}
+
+/**
+ * How one agent is stamped. `capture` runs before the declaration is read;
+ * `recheck` returns the current identity before the first output is
+ * renamed into place, and publication is refused unless its `source`
+ * equals the captured one; `versionLine` is the text `--version` prints.
+ * The compiler interprets nothing else.
+ */
+export interface BuildStampPolicy {
+	capture(
+		context: StampContext,
+	): CapturedBuildStamp | Promise<CapturedBuildStamp>;
+	recheck(
+		context: StampContext,
+		captured: CapturedBuildStamp,
+	): SourceManifest | Promise<SourceManifest>;
+	versionLine(agentId: string, captured: CapturedBuildStamp): string;
 }
 
 /** What loading and direct compilation need: a definition without a roster. */
@@ -199,6 +238,7 @@ interface ResolvedDefinition {
 	/** `canonical(<declarationRoot>/local)`: never discovered, compiled or watched. */
 	realLocal: string;
 	watchRoots: string[];
+	stamps: Readonly<Record<string, BuildStampPolicy>>;
 	/** Read when pruning is decided, not when the definition is resolved. */
 	protectedOutputs(): ReadonlySet<string>;
 }
@@ -314,6 +354,7 @@ function resolveDefinition(
 		owned,
 		realLocal,
 		watchRoots,
+		stamps: { ...(source.stamps ?? {}) },
 		protectedOutputs: () => new Set(source.protectedOutputs ?? []),
 	};
 	return resolved;
@@ -374,6 +415,17 @@ async function loadResolved(
 ): Promise<LoadedAgent> {
 	const root = definition.root;
 	const repoRoot = realpathSync(root);
+	if (
+		lstatSync(resolve(root, file), { throwIfNoEntry: false })?.isSymbolicLink()
+	) {
+		throw new AgentSourceError([
+			{
+				file: relative(root, resolve(root, file)),
+				field: "path",
+				message: "a declaration must not be a symlink",
+			},
+		]);
+	}
 	const declaration = realpathOrSelf(resolve(root, file));
 	const display = relative(repoRoot, declaration);
 
@@ -480,6 +532,21 @@ async function loadResolved(
 	}
 	if (inspection.sideEffects.length > 0) {
 		throw new AgentSourceError(inspection.sideEffects);
+	}
+	const transitive = helperClosureProblems(
+		definition,
+		repoRoot,
+		realpathSync(sibling),
+		frameworkDirs,
+	);
+	if (transitive.length > 0) {
+		throw new AgentSourceError(
+			transitive.map((message) => ({
+				file: siblingDisplay,
+				field: "import",
+				message,
+			})),
+		);
 	}
 	return {
 		id,
@@ -631,6 +698,189 @@ function unestablishedModule(path: string): string | undefined {
 	return stat(join(path, "index.ts"))?.isFile()
 		? undefined
 		: "the directory has no index.ts";
+}
+
+/**
+ * The relative module specifiers a file's code loads, as written: static
+ * imports and re-exports that are not type-only, and literal dynamic
+ * `import()` or `require()`. A dynamic load whose specifier is not a
+ * string literal cannot be established and is reported in `opaque`.
+ */
+interface ModuleLoad {
+	specifier: string;
+	/** The import, when it carries attributes: judged as a text import. */
+	attributed?: ts.ImportDeclaration;
+}
+
+/** The callee with parentheses, type assertions and `!` removed. */
+function bareCallee(expression: ts.Expression): ts.Expression {
+	let current = expression;
+	while (
+		ts.isParenthesizedExpression(current) ||
+		ts.isAsExpression(current) ||
+		ts.isTypeAssertionExpression(current) ||
+		ts.isNonNullExpression(current) ||
+		ts.isSatisfiesExpression(current)
+	) {
+		current = current.expression;
+	}
+	return current;
+}
+
+function relativeLoads(
+	file: string,
+	text: string,
+): { loads: ModuleLoad[]; opaque: string[] } {
+	const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+	const loads: ModuleLoad[] = [];
+	const opaque: string[] = [];
+	const visit = (node: ts.Node) => {
+		const callee = ts.isCallExpression(node)
+			? bareCallee(node.expression)
+			: undefined;
+		if (
+			ts.isImportDeclaration(node) &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			!node.importClause?.isTypeOnly
+		) {
+			loads.push({
+				specifier: node.moduleSpecifier.text,
+				...(node.attributes ? { attributed: node } : {}),
+			});
+		} else if (
+			ts.isImportEqualsDeclaration(node) &&
+			!node.isTypeOnly &&
+			ts.isExternalModuleReference(node.moduleReference) &&
+			ts.isStringLiteralLike(node.moduleReference.expression)
+		) {
+			loads.push({ specifier: node.moduleReference.expression.text });
+		} else if (
+			ts.isExportDeclaration(node) &&
+			node.moduleSpecifier &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			!node.isTypeOnly
+		) {
+			loads.push({ specifier: node.moduleSpecifier.text });
+		} else if (
+			ts.isCallExpression(node) &&
+			callee &&
+			(callee.kind === ts.SyntaxKind.ImportKeyword ||
+				(ts.isIdentifier(callee) && callee.text === "require"))
+		) {
+			const [first] = node.arguments;
+			if (first && ts.isStringLiteralLike(first)) {
+				loads.push({ specifier: first.text });
+			} else {
+				const { line } = source.getLineAndCharacterOfPosition(node.getStart());
+				opaque.push(`${file}:${line + 1}`);
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	return {
+		// Attributed imports are judged whatever their specifier, so a bare
+		// text specifier is refused rather than dropped.
+		loads: loads.filter(
+			(load) =>
+				load.attributed !== undefined ||
+				load.specifier.startsWith("./") ||
+				load.specifier.startsWith("../") ||
+				load.specifier.startsWith("/") ||
+				load.specifier.startsWith("file:"),
+		),
+		opaque,
+	};
+}
+
+/**
+ * Problems in the transitive relative import closure of an accepted
+ * extension (C13). Every module an accepted helper loads by path is judged
+ * by the rules its direct imports are: one of the three established forms,
+ * real location under an extension code root, never in the compiler's own
+ * locations; text imports by the text-import rules. Absolute and `file:`
+ * specifiers and non-literal dynamic loads cannot be established and are
+ * refused. Bare package imports are not checked.
+ */
+/** Inspection rules a helper's text import does not consult. */
+const HELPER_RULES: ImportRules = {
+	isFrameworkImport: () => false,
+	textImportProblem: () => undefined,
+	importProblem: () => undefined,
+	codeRoots: [],
+	textRoots: [],
+};
+
+function helperClosureProblems(
+	definition: ResolvedDefinition,
+	repoRoot: string,
+	extension: string,
+	codeRoots: readonly string[],
+): string[] {
+	const problems: string[] = [];
+	const seen = new Set<string>([extension]);
+	const queue = [extension];
+	const label = (path: string) => relative(repoRoot, path);
+	while (queue.length > 0) {
+		const file = queue.shift() as string;
+		const base = dirname(file);
+		const { loads, opaque } = relativeLoads(file, readFileSync(file, "utf8"));
+		for (const where of opaque) {
+			problems.push(
+				`${label(where)}: a dynamic load whose module cannot be established`,
+			);
+		}
+		for (const load of loads) {
+			const from = label(file);
+			if (load.attributed) {
+				// The extension's own text imports were judged by inspection.
+				if (file === extension) continue;
+				const text = load.attributed.importClause
+					? textImportShapeProblem(load.attributed, load.specifier, {
+							...HELPER_RULES,
+							textRoots: definition.extensionTextRoots.map(
+								(entry) => entry.label,
+							),
+							textImportProblem: (specifier) =>
+								textImportProblem(definition, repoRoot, base, specifier),
+						})
+					: `text import "${load.specifier}" must be a single default import`;
+				if (text) problems.push(`${from}: ${text}`);
+				continue;
+			}
+			if (!load.specifier.startsWith(".")) {
+				problems.push(
+					`${from}: import "${load.specifier}" names an absolute location; use a relative path`,
+				);
+				continue;
+			}
+			const target = resolve(base, load.specifier);
+			const unknown = unestablishedModule(target);
+			if (unknown) {
+				problems.push(
+					`${from}: value import "${load.specifier}": its selected module cannot be established (${unknown}); name the file explicitly`,
+				);
+				continue;
+			}
+			const module = moduleFile(target) as string;
+			if (!codeRoots.some((dir) => isInside(dir, module))) {
+				problems.push(
+					`${from}: value import "${load.specifier}" resolves outside ${listRoots(definition.extensionCodeRoots, "and")}`,
+				);
+				continue;
+			}
+			const owned = ownedProblem(definition.owned, module);
+			if (owned) {
+				problems.push(`${from}: value import "${load.specifier}" ${owned}`);
+				continue;
+			}
+			if (!seen.has(module)) {
+				seen.add(module);
+				queue.push(module);
+			}
+		}
+	}
+	return problems;
 }
 
 /** Strictly beneath `dir`; `dir` itself is not inside. */
@@ -1166,15 +1416,15 @@ function runtimeFiles(): { cli: string; run: string } {
  * and may claim the run (D1). Otherwise it parses its argv with the shared CLI (help
  * and parse errors exit there), serves `--show-prompt` through the runner's
  * preview and otherwise hands the invocation to the runner's lifecycle.
- * Given provenance, Shepherd's entry answers `--version` with the stamp
- * before anything else; other agents ignore it.
+ * Given a version line (from the agent's stamp policy), the entry answers
+ * `--version` with it after any dispatch and before parsing.
  */
 export function generateEntry(
 	agent: LoadedAgent,
-	provenance?: BuildProvenance,
+	versionLine?: string,
 ): string {
 	const { cli, run } = runtimeFiles();
-	const stamped = agent.id === SHEPHERD_ID && provenance !== undefined;
+	const stamped = versionLine !== undefined;
 	const names = agent.extension?.exports ?? [];
 	const dispatched = names.includes("dispatch");
 	const lines: string[] = [
@@ -1198,7 +1448,7 @@ export function generateEntry(
 	}
 	if (stamped) {
 		lines.push(
-			`const versioned = resolveVersion(spec.id, ${JSON.stringify(versionLine(provenance))}, process.argv.slice(2), {`,
+			`const versioned = resolveVersion(spec.id, ${JSON.stringify(versionLine)}, process.argv.slice(2), {`,
 			"\tstdout: (text) => process.stdout.write(text),",
 			"\tstderr: (text) => process.stderr.write(text),",
 			"});",
@@ -1224,8 +1474,8 @@ export function generateEntry(
 /**
  * Validate one declaration and build its binary at `outFile`. The binary is
  * built in a temporary directory beside `outFile` and renamed into place, so
- * any failure or abort leaves `outFile` untouched. Shepherd is stamped as
- * `publish` stamps it.
+ * any failure or abort leaves `outFile` untouched. An agent the definition
+ * stamps is stamped as `publish` stamps it.
  */
 export async function compileAgent(options: {
 	/** Roster-independent: any declaration under the declaration root builds. */
@@ -1234,32 +1484,27 @@ export async function compileAgent(options: {
 	file: string;
 	/** Relative to the consumer root. */
 	outFile: string;
-	stamp?: StampSource;
 	build?: Builder;
 	signal?: AbortSignal;
-}): Promise<LoadedAgent & { provenance?: BuildProvenance }> {
+}): Promise<LoadedAgent & { stamp?: CapturedBuildStamp }> {
 	const definition = resolveDefinition(options.definition);
 	const root = definition.root;
-	const stamp = options.stamp ?? gitStamp();
-	const early =
+	const early = await captureStamps(definition, [
 		toBinaryName(
 			declarationCoordinate(resolve(root, options.file)),
 			root,
 			definition.declarationRoot.real,
-		) === SHEPHERD_ID
-			? await settle(() => stamp.capture(root))
-			: undefined;
+		),
+	]);
 	const agent = await loadResolved(definition, options.file);
 	const outFile = resolve(root, options.outFile);
-	const provenance =
-		agent.id === SHEPHERD_ID
-			? unwrap(early ?? (await settle(() => stamp.capture(root))))
-			: undefined;
+	const stamps = await settleStamps(definition, [agent.id], early);
+	const captured = stamps.get(agent.id);
 	const workDir = await mkdtemp(join(dirname(outFile), ".agent-build-"));
 	try {
 		const entry = join(workDir, "entry.ts");
 		const built = join(workDir, "binary");
-		await writeFile(entry, generateEntry(agent, provenance));
+		await writeFile(entry, generateEntry(agent, captured?.line));
 		await (options.build ?? bunBuild)({
 			entry,
 			outFile: built,
@@ -1268,10 +1513,10 @@ export async function compileAgent(options: {
 			signal: options.signal,
 			...dependencyRoot(root),
 		});
-		if (provenance) await recheckSource(stamp, root, provenance);
+		await recheckStamps(stamps);
 		options.signal?.throwIfAborted();
 		await rename(built, outFile);
-		return provenance ? { ...agent, provenance } : agent;
+		return captured ? { ...agent, stamp: captured.stamp } : agent;
 	} finally {
 		await rm(workDir, { recursive: true, force: true });
 	}
@@ -1280,9 +1525,8 @@ export async function compileAgent(options: {
 type Settled<T> = { value: T } | { error: unknown };
 
 /**
- * Shepherd's provenance is captured before its sources are read, so the
- * stamp covers what is built; a capture error is reported only after any
- * source error.
+ * A stamp is captured before its sources are read, so it covers what is
+ * built; a capture error is reported only after any source error.
  */
 async function settle<T>(capture: () => T | Promise<T>): Promise<Settled<T>> {
 	try {
@@ -1297,17 +1541,88 @@ function unwrap<T>(settled: Settled<T>): T {
 	return settled.value;
 }
 
-/** Refuse publication when the Shepherd source changed during the build. */
-async function recheckSource(
-	stamp: StampSource,
-	root: string,
-	provenance: BuildProvenance,
-): Promise<void> {
-	const now = await stamp.recheck(root);
-	if (now.source !== provenance.manifest.source) {
-		throw new Error(
-			`Shepherd source changed during the build (captured ${provenance.manifest.source}, now ${now.source})`,
+interface SettledStamp {
+	policy: BuildStampPolicy;
+	context: StampContext;
+	stamp: CapturedBuildStamp;
+	line: string;
+}
+
+function stampContext(
+	definition: ResolvedDefinition,
+	agentId: string,
+): StampContext {
+	return {
+		agentId,
+		consumerRoot: definition.root,
+		declarationRoot: definition.declarationRoot.path,
+		outDir: definition.outDir,
+	};
+}
+
+function policyFor(
+	definition: ResolvedDefinition,
+	id: string,
+): BuildStampPolicy | undefined {
+	return Object.hasOwn(definition.stamps, id)
+		? definition.stamps[id]
+		: undefined;
+}
+
+/** Capture, without throwing, every stamp the named agents select. */
+async function captureStamps(
+	definition: ResolvedDefinition,
+	ids: readonly string[],
+): Promise<Map<string, Settled<CapturedBuildStamp>>> {
+	const early = new Map<string, Settled<CapturedBuildStamp>>();
+	for (const id of ids) {
+		const policy = policyFor(definition, id);
+		if (!policy || early.has(id)) continue;
+		early.set(
+			id,
+			await settle(() => policy.capture(stampContext(definition, id))),
 		);
+	}
+	return early;
+}
+
+/**
+ * The stamps of the agents being built, from the early captures (an agent
+ * not captured early is captured now), each with its version line. The
+ * first capture error is thrown.
+ */
+async function settleStamps(
+	definition: ResolvedDefinition,
+	ids: readonly string[],
+	early: Map<string, Settled<CapturedBuildStamp>>,
+): Promise<Map<string, SettledStamp>> {
+	const stamps = new Map<string, SettledStamp>();
+	for (const id of ids) {
+		const policy = policyFor(definition, id);
+		if (!policy) continue;
+		const context = stampContext(definition, id);
+		const stamp = unwrap(
+			early.get(id) ?? (await settle(() => policy.capture(context))),
+		);
+		stamps.set(id, {
+			policy,
+			context,
+			stamp,
+			line: policy.versionLine(id, stamp),
+		});
+	}
+	return stamps;
+}
+
+/** Refuse publication when any stamped source changed during the build. */
+async function recheckStamps(stamps: Map<string, SettledStamp>): Promise<void> {
+	for (const [id, { policy, context, stamp }] of stamps) {
+		const now = await policy.recheck(context, stamp);
+		if (now.source !== stamp.manifest.source) {
+			throw new Error(
+				`${id} source changed during the build (captured ${stamp.manifest.source}, now ${now.source})`,
+			);
+		}
 	}
 }
 
@@ -1431,8 +1746,6 @@ function localWarning(label: string): string {
 export interface CompilerOptions {
 	/** Roots, roster and output; resolved once per call. */
 	definition: AgentBuildDefinition;
-	/** Shepherd's provenance. Defaults to the Git repository at the consumer root. */
-	stamp?: StampSource;
 	/** Defaults to `bun build --compile`; tests pass a fake. */
 	build?: Builder;
 }
@@ -1489,6 +1802,14 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
 					: undefined;
 			if (!kind) continue;
 			const file = relative(root, full);
+			if (kind === found.markdown && entry.isSymbolicLink()) {
+				found.issues.push({
+					file,
+					field: "path",
+					message: "a declaration must not be a symlink",
+				});
+				continue;
+			}
 			const id = toBinaryName(declarationCoordinate(full), root, realAgents);
 			const previous = kind.get(id);
 			if (previous) {
@@ -1510,7 +1831,7 @@ function discoverSources(definition: ResolvedDefinition): DiscoveredSources {
  * A source path in the declaration root's canonical coordinate: its
  * directory canonicalized, its own name kept. Naming and membership compare
  * this with the canonical declaration root. A declaration file that is
- * itself a symlink keeps its link name here (C11 decides that policy).
+ * itself a symlink is refused by discovery and loading.
  */
 function declarationCoordinate(path: string): string {
 	return join(canonical(dirname(path)), basename(path));
@@ -1732,8 +2053,8 @@ export interface PublishResult {
 	built: string[];
 	pruned: string[];
 	dryRun: boolean;
-	/** The stamp embedded in Shepherd, when Shepherd was built. */
-	provenance?: BuildProvenance;
+	/** The stamps embedded in the built agents, by ID, when any were stamped. */
+	stamps?: Record<string, CapturedBuildStamp>;
 }
 
 /**
@@ -1745,9 +2066,9 @@ export interface PublishResult {
  * pruned. Builds run one at a time: concurrent `bun build --compile`
  * children were seen to lose and corrupt outputs under load. A validation
  * error, build failure, failed output check or abort removes the temporary
- * directory and leaves the output directory untouched. Shepherd's provenance
- * is captured before any source is read or temporary directory exists, and
- * publication is refused if its source changed by the end of the builds. An error after the
+ * directory and leaves the output directory untouched. Each stamped agent's
+ * stamp is captured before any source is read or temporary directory exists,
+ * and publication is refused if its source changed by the end of the builds. An error after the
  * first rename throws `PartialPublishError`; a prune error after every rename
  * throws `PruneError`. There is no cross-process lock (D-023).
  */
@@ -1765,12 +2086,12 @@ async function publishResolved(
 	const log = options.log ?? (() => {});
 	const warn = options.warn ?? log;
 	const prune = options.prune !== false && !options.only;
-	const stamp = options.stamp ?? gitStamp();
-	const early =
-		!options.dryRun &&
-		(options.only ? options.only === SHEPHERD_ID : roster.has(SHEPHERD_ID))
-			? await settle(() => stamp.capture(root))
-			: undefined;
+	const early = options.dryRun
+		? new Map<string, Settled<CapturedBuildStamp>>()
+		: await captureStamps(
+				definition,
+				options.only ? [options.only] : [...roster],
+			);
 
 	const plan = await planResolved(definition, options.only);
 	for (const warning of plan.warnings) warn(warning);
@@ -1791,9 +2112,11 @@ async function publishResolved(
 	}
 
 	options.signal?.throwIfAborted();
-	const provenance = plan.entries.some((entry) => entry.id === SHEPHERD_ID)
-		? unwrap(early ?? (await settle(() => stamp.capture(root))))
-		: undefined;
+	const stamps = await settleStamps(
+		definition,
+		plan.entries.map((entry) => entry.id),
+		early,
+	);
 	const workDir = await mkdtemp(join(dirname(outDir), ".troupe-build-"));
 	try {
 		if (
@@ -1812,7 +2135,10 @@ async function publishResolved(
 		for (const entry of plan.entries) {
 			options.signal?.throwIfAborted();
 			const file = join(entryDir, `${entry.id}.ts`);
-			await writeFile(file, generateEntry(entry.agent, provenance));
+			await writeFile(
+				file,
+				generateEntry(entry.agent, stamps.get(entry.id)?.line),
+			);
 			await (options.build ?? bunBuild)({
 				entry: file,
 				outFile: join(builtDir, entry.id),
@@ -1824,7 +2150,7 @@ async function publishResolved(
 			log(`built ${entry.id}`);
 		}
 
-		if (provenance) await recheckSource(stamp, root, provenance);
+		await recheckStamps(stamps);
 		options.signal?.throwIfAborted();
 		preflightPublish(plan.entries, builtDir, outDir);
 		await mkdir(outDir, { recursive: true });
@@ -1861,7 +2187,13 @@ async function publishResolved(
 			built: plan.entries.map((entry) => entry.id),
 			pruned: orphans,
 			dryRun: false,
-			...(provenance ? { provenance } : {}),
+			...(stamps.size > 0
+				? {
+						stamps: Object.fromEntries(
+							[...stamps].map(([id, { stamp }]) => [id, stamp]),
+						),
+					}
+				: {}),
 		};
 	} finally {
 		await rm(workDir, { recursive: true, force: true });

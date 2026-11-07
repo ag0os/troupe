@@ -12,6 +12,11 @@
  * changed bytes in an existing member need no reinstall, but an added member
  * appears in the consumer only after it reinstalls.
  *
+ * Do not restage while a consumer build runs. A stamp policy that hashes the
+ * installed distribution compares identity once, after every binary is built
+ * and before the first rename: a change still present then refuses
+ * publication, but one reverted earlier or made later goes undetected.
+ *
  * Usage:
  *   bun scripts/stage-troupe.ts [--out <dir>]
  *   (default: extractions/.troupe-dist/troupe)
@@ -39,15 +44,10 @@ export const DEFAULT_STAGE = "extractions/.troupe-dist/troupe";
 export const STAGE_MANIFEST = "troupe-stage.json";
 
 /**
- * Members allowed although they are not framework library code. The legacy
- * Shepherd source module is reached from the compiler for the stamp and backs
- * `troupe/provenance` until PR 3 relocates E8; it is the distribution's one
- * temporary policy exception.
+ * Any member path naming Shepherd is refused, even inside an allowed
+ * directory: the distribution holds no Shepherd policy or asset.
  */
-export const TEMPORARY_MEMBERS = {
-	"scripts/shepherd-source.ts":
-		"legacy Shepherd source module: reached from the compiler for the stamp, and it backs troupe/provenance until PR 3 relocates E8 and removes this member",
-} as const;
+const SHEPHERD_PATH = /shepherd/i;
 
 /** The library members the distribution may hold: directories and files. */
 const ALLOWED_DIRS = ["lib/agent-format/", "lib/entries/"] as const;
@@ -72,7 +72,6 @@ export interface StagedMember {
 	path: string;
 	bytes: number;
 	sha256: string;
-	temporary?: string;
 }
 
 export interface StageResult {
@@ -145,9 +144,10 @@ export function planStage(root: string): {
 			problems.push(`closure leaves the root: ${path}`);
 			continue;
 		}
-		const temporary = path in TEMPORARY_MEMBERS;
-		if (!temporary && (!isAllowed(path) || isTestPath(path))) {
+		if (!isAllowed(path) || isTestPath(path)) {
 			problems.push(`unexpected file ${path}`);
+		} else if (SHEPHERD_PATH.test(path)) {
+			problems.push(`Shepherd member ${path}`);
 		}
 		const full = join(root, path);
 		if (lstatSync(full).isSymbolicLink()) {
@@ -247,13 +247,7 @@ export function stageTroupe(root: string, out: string): StageResult {
 		mkdirSync(dirname(target), { recursive: true });
 		const current = existsSync(target) ? readFileSync(target) : undefined;
 		if (!current?.equals(bytes)) writeFileSync(target, bytes);
-		const temporary = (TEMPORARY_MEMBERS as Record<string, string>)[path];
-		staged.push({
-			path,
-			bytes: bytes.length,
-			sha256: sha256(bytes),
-			...(temporary ? { temporary } : {}),
-		});
+		staged.push({ path, bytes: bytes.length, sha256: sha256(bytes) });
 	}
 	const pkgText = `${JSON.stringify(pkg, null, "\t")}\n`;
 	writeFileSync(join(out, "package.json"), pkgText);
@@ -306,11 +300,6 @@ if (import.meta.main) {
 		console.log(
 			`staged ${result.members.length} members into ${result.out}\nsha256 ${result.digest}`,
 		);
-		for (const member of result.members) {
-			if (member.temporary) {
-				console.log(`temporary: ${member.path} (${member.temporary})`);
-			}
-		}
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exit(1);

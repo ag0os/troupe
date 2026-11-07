@@ -16,14 +16,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 import { installFakeClis, readRecords } from "../lib/agent-format/fake-cli";
-import { relativeClosure } from "./import-closure";
+import { importClosure, relativeClosure } from "./import-closure";
 import { readSurface, surfaceModule } from "./stage-surface";
 import {
 	DEFAULT_STAGE,
 	STAGE_MANIFEST,
 	StageError,
 	stageTroupe,
-	TEMPORARY_MEMBERS,
 } from "./stage-troupe";
 
 /** The staged inventory, pinned: any change to it is a reviewed change. */
@@ -42,6 +41,7 @@ const STAGED_MEMBERS = [
 	"lib/agent-format/interpolate.ts",
 	"lib/agent-format/path-within.ts",
 	"lib/agent-format/preview.ts",
+	"lib/agent-format/provenance.ts",
 	"lib/agent-format/run.ts",
 	"lib/agent-format/schema.ts",
 	"lib/agent-format/template.ts",
@@ -54,7 +54,6 @@ const STAGED_MEMBERS = [
 	"lib/entries/testing.ts",
 	"lib/index.ts",
 	"lib/text-imports.d.ts",
-	"scripts/shepherd-source.ts",
 ];
 
 /** The public surface per subpath (design.md section 2, E1 to E9; PR 2 adds the definition types). */
@@ -140,11 +139,35 @@ const EXPECTED_SURFACE: Record<string, { values: string[]; types?: string[] }> =
 				"WatcherOptions",
 				"AgentBuildDefinition",
 				"AgentSourceDefinition",
+				"BuildStampPolicy",
+				"CapturedBuildStamp",
+				"StampContext",
+				"StampJson",
 			],
 		},
 		"troupe/provenance": {
-			values: ["compareUtf8", "framedDigest", "sameSource", "createGitRunner"],
-			types: ["SourceFile", "ManifestEntry", "SourceManifest", "GitRunner"],
+			values: [
+				"compareUtf8",
+				"framedDigest",
+				"buildManifest",
+				"sameSource",
+				"createGitRunner",
+				"readSourceInputs",
+				"combineSourceInputs",
+				"SourceInputError",
+			],
+			types: [
+				"SourceFile",
+				"ManifestEntry",
+				"SourceManifest",
+				"GitRunner",
+				"FramingOptions",
+				"SourceTree",
+				"SourceInputDefinition",
+				"SourceInput",
+				"InputProvenance",
+				"CombinedSourceInputs",
+			],
 		},
 		"troupe/testing": {
 			values: ["installFakeClis", "readRecords"],
@@ -565,19 +588,28 @@ describe("staged distribution", () => {
 		]);
 	});
 
-	test("labels the legacy stamp module as the one temporary member", () => {
+	test("O17b: the stage holds no Shepherd policy or asset", () => {
 		const manifest = JSON.parse(
 			readFileSync(join(dist, STAGE_MANIFEST), "utf8"),
 		);
-		const temporary = manifest.members
-			.filter((member: { temporary?: string }) => member.temporary)
-			.map((member: { path: string }) => member.path);
-		expect(temporary).toEqual(Object.keys(TEMPORARY_MEMBERS));
-		expect(temporary).toEqual(["scripts/shepherd-source.ts"]);
-		// The label names both reasons the member is still reached.
-		const label = TEMPORARY_MEMBERS["scripts/shepherd-source.ts"];
-		expect(label).toContain("compiler");
-		expect(label).toContain("troupe/provenance");
+		for (const member of manifest.members) {
+			expect(Object.keys(member).sort()).toEqual(["bytes", "path", "sha256"]);
+			expect(member.path).not.toMatch(/shepherd/i);
+			expect(member.path).not.toStartWith("scripts/");
+		}
+		// Transitively: nothing the staged members import names Shepherd.
+		const closure = importClosure(
+			manifest.members
+				.map((member: { path: string }) => join(dist, member.path))
+				.filter((path: string) => path.endsWith(".ts")),
+		);
+		for (const file of closure.files) {
+			expect(file).not.toMatch(/shepherd/i);
+		}
+		for (const member of manifest.members) {
+			const text = readFileSync(join(dist, member.path), "utf8");
+			expect(text).not.toMatch(/from\s+["'][^"']*shepherd/i);
+		}
 	});
 
 	test("installs without the repository's development tools", () => {
@@ -928,6 +960,26 @@ describe("stage refusals", () => {
 			"agents/x.ts": "export const x = 1;\n",
 		});
 		expect(problems(root)).toEqual(["unexpected file agents/x.ts"]);
+	});
+
+	test("a Shepherd module inside an allowed directory", () => {
+		const root = fixture("shepherd-in-framework", {
+			"lib/index.ts": 'export * from "./agent-format/shepherd-stamp";\n',
+			"lib/agent-format/shepherd-stamp.ts": "export const s = 1;\n",
+		});
+		expect(problems(root)).toEqual([
+			"Shepherd member lib/agent-format/shepherd-stamp.ts",
+		]);
+	});
+
+	test("the former temporary stamp member is refused", () => {
+		const root = fixture("legacy-stamp", {
+			"lib/index.ts": 'export * from "../scripts/shepherd-source";\n',
+			"scripts/shepherd-source.ts": "export const s = 1;\n",
+		});
+		expect(problems(root)).toEqual([
+			"unexpected file scripts/shepherd-source.ts",
+		]);
 	});
 
 	test("a self-contained lib/shepherd dependency", () => {

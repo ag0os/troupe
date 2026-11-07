@@ -10,10 +10,33 @@
  * working-tree bytes, unnormalized.
  */
 
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import type {
+	BuildStampPolicy,
+	CapturedBuildStamp,
+} from "../lib/agent-format/compiler";
+import {
+	buildManifest,
+	createGitRunner,
+	type GitRunner,
+	type SourceFile,
+	type SourceManifest,
+	sameSource,
+} from "../lib/agent-format/provenance";
+
+/** The generic helpers, re-exported for this module's existing importers. */
+export {
+	buildManifest,
+	compareUtf8,
+	createGitRunner,
+	framedDigest,
+	type GitRunner,
+	type ManifestEntry,
+	type SourceFile,
+	type SourceManifest,
+	sameSource,
+} from "../lib/agent-format/provenance";
 
 /** The binary name whose builds are stamped. */
 export const SHEPHERD_ID = "shepherd";
@@ -47,26 +70,6 @@ export const SOURCE_TREES = [
 	{ dir: "packages", tests: true },
 ] as const;
 
-export interface ManifestEntry {
-	path: string;
-	bytes: number;
-	sha256: string;
-	untracked: boolean;
-}
-
-export interface SourceManifest {
-	/** `sha256:<hex>` over the framed entries. */
-	source: string;
-	/** Sorted by unsigned UTF-8 path bytes. */
-	entries: ManifestEntry[];
-}
-
-export interface SourceFile {
-	path: string;
-	content: Uint8Array;
-	untracked?: boolean;
-}
-
 export interface BuildProvenance {
 	/** Full build-time `HEAD`. */
 	revision: string;
@@ -94,36 +97,6 @@ export class ShepherdSourceError extends Error {
 	}
 }
 
-export type GitRunner = (
-	args: readonly string[],
-	cwd: string,
-	input?: Uint8Array,
-) => { code: number; stdout: Uint8Array; stderr: string };
-
-/**
- * A Git runner that drops inherited `GIT_*` routing variables, so the
- * repository is always the one at `cwd`, then applies `env`.
- */
-export function createGitRunner(env: Record<string, string> = {}): GitRunner {
-	return (args, cwd, input) => {
-		const clean: Record<string, string> = {};
-		for (const [key, value] of Object.entries(process.env)) {
-			if (value !== undefined && !key.startsWith("GIT_")) clean[key] = value;
-		}
-		const child = spawnSync("git", ["--no-optional-locks", ...args], {
-			cwd,
-			env: { ...clean, ...env },
-			input,
-			maxBuffer: 1 << 30,
-		});
-		return {
-			code: child.error ? 127 : (child.status ?? 1),
-			stdout: child.stdout ?? new Uint8Array(),
-			stderr: child.error?.message ?? child.stderr?.toString() ?? "",
-		};
-	};
-}
-
 export const runGit = createGitRunner();
 
 export function gitStamp(git: GitRunner = runGit): StampSource {
@@ -133,71 +106,40 @@ export function gitStamp(git: GitRunner = runGit): StampSource {
 	};
 }
 
+/** Shepherd's v1 provenance, read back from a stamp `legacyStampPolicy` captured. */
+export function provenanceOf(stamp: CapturedBuildStamp): BuildProvenance {
+	const { revision, dirty, sourceDirty } = stamp.provenance;
+	return {
+		revision: String(revision),
+		dirty: dirty === true,
+		sourceDirty: sourceDirty === true,
+		manifest: stamp.manifest,
+	};
+}
+
+/**
+ * The v1 Shepherd stamp as a `BuildStampPolicy`: the repository wrappers
+ * hand it to the compiler for `shepherd`, and only through this interface.
+ */
+export function legacyStampPolicy(
+	source: StampSource = gitStamp(),
+): BuildStampPolicy {
+	return {
+		async capture(context) {
+			const { manifest, ...facts } = await source.capture(context.consumerRoot);
+			return { manifest, provenance: { ...facts } };
+		},
+		recheck: (context) => source.recheck(context.consumerRoot),
+		versionLine: (_agentId, captured) => versionLine(provenanceOf(captured)),
+	};
+}
+
 /** The one line `shepherd --version` prints, without its newline. */
 export function versionLine(provenance: BuildProvenance): string {
 	return `shepherd revision=${provenance.revision} dirty=${provenance.dirty} source=${provenance.manifest.source}`;
 }
 
 const encoder = new TextEncoder();
-
-/** Order by unsigned UTF-8 bytes. */
-export function compareUtf8(a: string, b: string): number {
-	return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
-}
-
-function uint64(value: number): Buffer {
-	const buffer = Buffer.alloc(8);
-	buffer.writeBigUInt64BE(BigInt(value));
-	return buffer;
-}
-
-/**
- * SHA-256, as lowercase hex, of `UTF8(domain + "\0")` followed by each file
- * in UTF-8 path order as a big-endian uint64 path length, the path bytes, a
- * big-endian uint64 content length and the raw content.
- */
-export function framedDigest(
-	domain: string,
-	files: readonly { path: string; content: Uint8Array }[],
-): string {
-	const sorted = [...files].sort((a, b) => compareUtf8(a.path, b.path));
-	const hash = createHash("sha256").update(encoder.encode(`${domain}\0`));
-	sorted.forEach((file, i) => {
-		if (i > 0 && sorted[i - 1]?.path === file.path) {
-			throw new Error(`duplicate source path ${file.path}`);
-		}
-		const path = encoder.encode(file.path);
-		hash.update(uint64(path.byteLength));
-		hash.update(path);
-		hash.update(uint64(file.content.byteLength));
-		hash.update(file.content);
-	});
-	return hash.digest("hex");
-}
-
-export function buildManifest(files: readonly SourceFile[]): SourceManifest {
-	return {
-		source: `sha256:${framedDigest(SOURCE_DOMAIN, files)}`,
-		entries: [...files]
-			.sort((a, b) => compareUtf8(a.path, b.path))
-			.map((file) => ({
-				path: file.path,
-				bytes: file.content.byteLength,
-				sha256: createHash("sha256").update(file.content).digest("hex"),
-				untracked: file.untracked ?? false,
-			})),
-	};
-}
-
-/**
- * Same source identity: the same paths with the same content hashes. The
- * `untracked` mark is reported, never compared.
- */
-export function sameSource(a: SourceManifest, b: SourceManifest): boolean {
-	if (a.entries.length !== b.entries.length) return false;
-	const hashes = new Map(a.entries.map((entry) => [entry.path, entry.sha256]));
-	return b.entries.every((entry) => hashes.get(entry.path) === entry.sha256);
-}
 
 /** Whether a repository-relative path is part of the Shepherd source. */
 export function isSourcePath(path: string): boolean {
@@ -258,6 +200,66 @@ function gitOk(
 	return result.stdout;
 }
 
+/**
+ * Where a package sits in its repository: `gitRoot` is the repository's
+ * top level and `prefix` the package directory relative to it (`""` for
+ * the root layout). Manifest paths stay package-relative, so a nested
+ * package's identity equals the same files' root-layout identity.
+ */
+export interface SourceLayout {
+	gitRoot: string;
+	prefix: string;
+}
+
+interface Located {
+	/** The repository's top level. */
+	top: string;
+	/** The package directory: `top` joined with the prefix. */
+	base: string;
+	/** Normalized prefix without slashes at either end, or `""`. */
+	prefix: string;
+}
+
+/**
+ * The repository and package directory for `root`. Without a layout,
+ * `root` must be the repository root; with one, `gitRoot` must be the
+ * repository root and `root` its `prefix` directory.
+ */
+function locate(
+	root: string,
+	git: GitRunner,
+	layout: SourceLayout | undefined,
+): Located {
+	if (!layout) {
+		const top = repositoryRoot(root, git);
+		return { top, base: top, prefix: "" };
+	}
+	const prefix = layout.prefix.replace(/^\/+|\/+$/g, "");
+	if (prefix.split("/").some((part) => part === ".." || part === ".")) {
+		throw new ShepherdSourceError([`${layout.prefix}: not a package prefix`]);
+	}
+	const top = repositoryRoot(layout.gitRoot, git);
+	const base = prefix === "" ? top : join(top, prefix);
+	if (realpathSync(base) !== realpathSync(root)) {
+		throw new ShepherdSourceError([
+			`${root} is not ${prefix || "the root"} of the repository at ${top}`,
+		]);
+	}
+	return { top, base, prefix };
+}
+
+/** Paths under `prefix`, made package-relative; others dropped. */
+function underPrefix(paths: string[], prefix: string): string[] {
+	if (prefix === "") return paths;
+	return paths
+		.filter((path) => path.startsWith(`${prefix}/`))
+		.map((path) => path.slice(prefix.length + 1));
+}
+
+function scope(prefix: string): string[] {
+	return prefix === "" ? [] : ["--", prefix];
+}
+
 /** The repository root, which must be `root` itself. */
 function repositoryRoot(root: string, git: GitRunner): string {
 	const result = git(["rev-parse", "--show-toplevel"], root);
@@ -288,24 +290,47 @@ function lstatOrUndefined(path: string) {
  */
 export function readWorktreeSource(
 	root: string,
-	options: { git?: GitRunner } = {},
+	options: { git?: GitRunner; layout?: SourceLayout } = {},
 ): SourceManifest {
 	const git = options.git ?? runGit;
-	const top = repositoryRoot(root, git);
+	const { top, base, prefix } = locate(root, git, options.layout);
 	const listed = [
 		...new Set(
-			splitNul(
-				gitOk(
-					git,
-					["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-					top,
+			underPrefix(
+				splitNul(
+					gitOk(
+						git,
+						[
+							"ls-files",
+							"--cached",
+							"--others",
+							"--exclude-standard",
+							"-z",
+							...scope(prefix),
+						],
+						top,
+					),
 				),
+				prefix,
 			),
 		),
 	];
 	const untracked = new Set(
-		splitNul(
-			gitOk(git, ["ls-files", "--others", "--exclude-standard", "-z"], top),
+		underPrefix(
+			splitNul(
+				gitOk(
+					git,
+					[
+						"ls-files",
+						"--others",
+						"--exclude-standard",
+						"-z",
+						...scope(prefix),
+					],
+					top,
+				),
+			),
+			prefix,
 		),
 	);
 	const problems = new Set<string>();
@@ -320,7 +345,7 @@ export function readWorktreeSource(
 	const linkedDir = (dir: string): boolean => {
 		const known = checkedDirs.get(dir);
 		if (known !== undefined) return known;
-		const stat = lstatOrUndefined(join(top, dir));
+		const stat = lstatOrUndefined(join(base, dir));
 		const linked = stat?.isSymbolicLink() ?? false;
 		if (linked) problems.add(`${dir}: a symlink holds Shepherd source`);
 		checkedDirs.set(dir, linked);
@@ -328,7 +353,7 @@ export function readWorktreeSource(
 	};
 	for (const dir of selectionDirs()) {
 		if (linkedDir(dir)) continue;
-		const stat = lstatOrUndefined(join(top, dir));
+		const stat = lstatOrUndefined(join(base, dir));
 		if (stat && !stat.isDirectory()) {
 			problems.add(`${dir}: expected a directory of Shepherd source`);
 		}
@@ -342,7 +367,7 @@ export function readWorktreeSource(
 			if (linkedDir(parts.slice(0, i).join("/"))) underLink = true;
 		}
 		if (underLink) continue;
-		const full = join(top, path);
+		const full = join(base, path);
 		const stat = lstatOrUndefined(full);
 		if (!stat) {
 			if ((SOURCE_FILES as readonly string[]).includes(path)) {
@@ -369,7 +394,7 @@ export function readWorktreeSource(
 		}
 	}
 	if (problems.size > 0) throw new ShepherdSourceError([...problems]);
-	return buildManifest(files);
+	return buildManifest(SOURCE_DOMAIN, files);
 }
 
 const REGULAR_MODES = new Set(["100644", "100755"]);
@@ -382,20 +407,25 @@ const REGULAR_MODES = new Set(["100644", "100755"]);
 export function readCommitSource(
 	root: string,
 	revision: string,
-	options: { git?: GitRunner; strict?: boolean } = {},
+	options: { git?: GitRunner; strict?: boolean; layout?: SourceLayout } = {},
 ): SourceManifest {
 	const git = options.git ?? runGit;
 	const strict = options.strict ?? true;
-	const top = repositoryRoot(root, git);
+	const { top, prefix } = locate(root, git, options.layout);
 	const holders = new Set(selectionDirs());
 	const problems: string[] = [];
 	const blobs: { path: string; oid: string }[] = [];
 	for (const record of splitNul(
-		gitOk(git, ["ls-tree", "-r", "-z", "--full-tree", revision], top),
+		gitOk(
+			git,
+			["ls-tree", "-r", "-z", "--full-tree", revision, ...scope(prefix)],
+			top,
+		),
 	)) {
 		const tab = record.indexOf("\t");
 		const [mode = "", , oid = ""] = record.slice(0, tab).split(" ");
-		const path = record.slice(tab + 1);
+		const [path] = underPrefix([record.slice(tab + 1)], prefix);
+		if (path === undefined) continue;
 		if (!isSourcePath(path) && !holders.has(path)) continue;
 		if (mode === "120000") {
 			problems.push(`${path}: Shepherd source must not be a symlink`);
@@ -438,7 +468,7 @@ export function readCommitSource(
 		});
 		offset = newline + 1 + size + 1;
 	}
-	return buildManifest(files);
+	return buildManifest(SOURCE_DOMAIN, files);
 }
 
 /** Full `HEAD`; a repository without one cannot stamp a build. */
@@ -462,18 +492,20 @@ function headRevision(top: string, git: GitRunner): string {
  */
 export function captureProvenance(
 	root: string,
-	options: { git?: GitRunner } = {},
+	options: { git?: GitRunner; layout?: SourceLayout } = {},
 ): BuildProvenance {
 	const git = options.git ?? runGit;
-	const top = repositoryRoot(root, git);
+	const { top } = locate(root, git, options.layout);
+	const layout = options.layout;
 	const revision = headRevision(top, git);
 	const status = gitOk(
 		git,
 		["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
 		top,
 	);
-	const manifest = readWorktreeSource(top, { git });
-	const head = readCommitSource(top, revision, { git, strict: false });
+	// `dirty` stays repository-wide under an explicit layout.
+	const manifest = readWorktreeSource(root, { git, layout });
+	const head = readCommitSource(root, revision, { git, strict: false, layout });
 	return {
 		revision,
 		dirty: status.byteLength > 0,

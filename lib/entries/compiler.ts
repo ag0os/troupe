@@ -7,6 +7,8 @@ export {
 	type Builder,
 	type BuildPlan,
 	type BuildRequest,
+	type BuildStampPolicy,
+	type CapturedBuildStamp,
 	type CompilerOptions,
 	compileAgent,
 	describePublishFailure,
@@ -24,6 +26,8 @@ export {
 	preflightPublish,
 	publish,
 	resolveAgentName,
+	type StampContext,
+	type StampJson,
 	startWatcher,
 	type WatcherOptions,
 } from "../agent-format/compiler";

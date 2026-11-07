@@ -27,6 +27,7 @@ import {
 	buildManifest,
 	gitStamp,
 	readWorktreeSource,
+	SOURCE_DOMAIN,
 	type StampSource,
 	versionLine,
 } from "./shepherd-source";
@@ -55,7 +56,7 @@ const fixed: BuildProvenance = {
 	revision: "0123456789abcdef0123456789abcdef01234567",
 	dirty: true,
 	sourceDirty: false,
-	manifest: buildManifest([
+	manifest: buildManifest(SOURCE_DOMAIN, [
 		{ path: "agents/shepherd.md", content: new TextEncoder().encode("x") },
 	]),
 };

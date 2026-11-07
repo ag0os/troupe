@@ -268,6 +268,7 @@ async function main(): Promise<number> {
 		writeEvidence(evidence, "expected-version.log", describeRan(expected.ran));
 		const versionIssue = versionProblem(version, expected.line);
 		if (versionIssue) failures.push(versionIssue);
+		if (expected.problem) failures.push(expected.problem);
 		summary.push(
 			"## Candidate --version",
 			"",

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { toBinaryName } from "./binary-name";
+import { toBinaryName } from "../lib/agent-format/binary-name";
 
 test("Markdown declarations get the same path-derived name as launchers", () => {
 	const root = "/repo";

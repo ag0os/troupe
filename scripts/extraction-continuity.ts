@@ -303,27 +303,42 @@ export function checkoutSlot(slot: string, rev: string): SlotCheckout {
 /**
  * The truthful `--version` line for `commit` built in the slot, from the
  * slot's own legacy source module run in a child process, so older commits
- * are driven from outside.
+ * are driven from outside. The expected line is always the v1 template
+ * `shepherd revision=<commit> dirty=false source=<source>`. A commit whose
+ * module exports `legacyStampPolicy` (PR 3 on) must produce exactly that
+ * template through the policy's `versionLine`; a difference is a problem.
  */
 export function expectedVersionLine(
 	slot: string,
 	commit: string,
-): { line?: string; ran: Ran } {
+): { line?: string; problem?: string; ran: Ran } {
 	const module = join(slot, "scripts/shepherd-source.ts");
 	const ran = run(
 		[
 			process.execPath,
 			"-e",
-			`const m = await import(${JSON.stringify(module)}); console.log(m.readCommitSource(${JSON.stringify(slot)}, ${JSON.stringify(commit)}).source);`,
+			[
+				`const m = await import(${JSON.stringify(module)});`,
+				`const manifest = m.readCommitSource(${JSON.stringify(slot)}, ${JSON.stringify(commit)});`,
+				"console.log(manifest.source);",
+				'if (typeof m.legacyStampPolicy === "function") {',
+				`\tconsole.log(m.legacyStampPolicy().versionLine("shepherd", { manifest, provenance: { revision: ${JSON.stringify(commit)}, dirty: false, sourceDirty: false } }));`,
+				"}",
+			].join("\n"),
 		],
 		slot,
 	);
-	const source = ran.stdout.trim();
+	const [source = "", policyLine] = ran.stdout.trim().split("\n");
 	if (ran.code !== 0 || !/^sha256:[0-9a-f]{64}$/.test(source)) return { ran };
-	return {
-		line: `shepherd revision=${commit} dirty=false source=${source}`,
-		ran,
-	};
+	const line = `shepherd revision=${commit} dirty=false source=${source}`;
+	if (policyLine !== undefined && policyLine !== line) {
+		return {
+			line,
+			problem: `legacyStampPolicy line ${JSON.stringify(policyLine)} is not the v1 template ${JSON.stringify(line)}`,
+			ran,
+		};
+	}
+	return { line, ran };
 }
 
 /** A problem unless `--version` exited 0 and printed exactly `expected`. */
@@ -400,14 +415,23 @@ export function installFakes(slot: string, dir: string): string {
 	return dir;
 }
 
+/**
+ * Write one evidence file under `dir`, never through a symlink. Its first
+ * line names the Bun version, so every log carries it.
+ */
 export function writeEvidence(dir: string, name: string, text: string): string {
 	mkdirSync(dir, { recursive: true });
 	const file = join(dir, name);
 	if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
 		throw new Error(`refusing to write evidence through the symlink ${file}`);
 	}
-	writeFileSync(file, text);
+	writeFileSync(file, `${evidenceHeader()}\n${text}`);
 	return file;
+}
+
+/** The first line of every evidence file: the Bun that ran the script. */
+export function evidenceHeader(): string {
+	return `# bun ${Bun.version} (Bun.version of the evidence script)`;
 }
 
 export function describeRan(ran: Ran): string {

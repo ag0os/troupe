@@ -17,21 +17,29 @@ import {
 	FRAMEWORK_DIRS,
 	INCLUDE_ROOTS,
 	type PublishOptions as LibPublishOptions,
+	type PublishResult as LibPublishResult,
 	type WatcherOptions as LibWatcherOptions,
 	type LoadedAgent,
 	compileAgent as libCompileAgent,
+	generateEntry as libGenerateEntry,
 	loadAgentDefinition as libLoadAgentDefinition,
 	planBuild as libPlanBuild,
 	publish as libPublish,
 	resolveAgentName as libResolveAgentName,
 	startWatcher as libStartWatcher,
-	type PublishResult,
 	protectedBinaries,
 	ROSTER,
 	TEXT_IMPORT_DIR,
 	WATCH_ROOTS,
 } from "../lib/agent-format/compiler";
-import type { BuildProvenance, StampSource } from "./shepherd-source";
+import {
+	type BuildProvenance,
+	gitStamp,
+	legacyStampPolicy,
+	provenanceOf,
+	SHEPHERD_ID,
+	type StampSource,
+} from "./shepherd-source";
 
 export * from "../lib/agent-format/compiler";
 
@@ -41,7 +49,11 @@ export * from "../lib/agent-format/compiler";
  */
 export function legacyDefinition(
 	root: string,
-	options: { outDir?: string; roster?: readonly string[] } = {},
+	options: {
+		outDir?: string;
+		roster?: readonly string[];
+		stamp?: StampSource;
+	} = {},
 ): AgentBuildDefinition {
 	const consumerRoot = resolve(root);
 	return {
@@ -57,7 +69,43 @@ export function legacyDefinition(
 			return [...protectedBinaries(consumerRoot)];
 		},
 		watchRoots: WATCH_ROOTS,
+		stamps: {
+			[SHEPHERD_ID]: legacyStampPolicy(options.stamp ?? gitStamp()),
+		},
 	};
+}
+
+/**
+ * The legacy entry shape: given provenance, Shepherd's entry answers
+ * `--version` with the v1 line; other agents ignore it.
+ */
+export function generateEntry(
+	agent: LoadedAgent,
+	provenance?: BuildProvenance,
+): string {
+	return libGenerateEntry(
+		agent,
+		agent.id === SHEPHERD_ID && provenance
+			? legacyStampPolicy().versionLine(agent.id, {
+					manifest: provenance.manifest,
+					provenance: {
+						revision: provenance.revision,
+						dirty: provenance.dirty,
+						sourceDirty: provenance.sourceDirty,
+					},
+				})
+			: undefined,
+	);
+}
+
+export interface PublishResult extends LibPublishResult {
+	/** The stamp embedded in Shepherd, when Shepherd was built. */
+	provenance?: BuildProvenance;
+}
+
+function withProvenance(result: LibPublishResult): PublishResult {
+	const stamp = result.stamps?.[SHEPHERD_ID];
+	return stamp ? { ...result, provenance: provenanceOf(stamp) } : result;
 }
 
 export interface CompilerOptions {
@@ -74,11 +122,11 @@ export interface CompilerOptions {
 
 export interface PublishOptions
 	extends CompilerOptions,
-		Omit<LibPublishOptions, "definition" | "stamp" | "build"> {}
+		Omit<LibPublishOptions, "definition" | "build"> {}
 
 export interface WatcherOptions
 	extends CompilerOptions,
-		Omit<LibWatcherOptions, "definition" | "stamp" | "build"> {}
+		Omit<LibWatcherOptions, "definition" | "build"> {}
 
 export function loadAgentDefinition(
 	root: string,
@@ -104,7 +152,7 @@ export function planBuild(
 	});
 }
 
-export function compileAgent(options: {
+export async function compileAgent(options: {
 	root: string;
 	file: string;
 	outFile: string;
@@ -112,29 +160,32 @@ export function compileAgent(options: {
 	build?: Builder;
 	signal?: AbortSignal;
 }): Promise<LoadedAgent & { provenance?: BuildProvenance }> {
-	const { root, outFile, ...rest } = options;
-	return libCompileAgent({
+	const { root, outFile, stamp, ...rest } = options;
+	const { stamp: captured, ...agent } = await libCompileAgent({
 		...rest,
-		definition: legacyDefinition(root),
+		definition: legacyDefinition(root, { stamp }),
 		// Relative to the working directory, as before.
 		outFile: resolve(outFile),
 	});
+	return captured ? { ...agent, provenance: provenanceOf(captured) } : agent;
 }
 
-export function publish(options: PublishOptions): Promise<PublishResult> {
-	const { root, outDir, roster, ...rest } = options;
-	return libPublish({
-		...rest,
-		definition: legacyDefinition(root, { outDir, roster }),
-	});
+export async function publish(options: PublishOptions): Promise<PublishResult> {
+	const { root, outDir, roster, stamp, ...rest } = options;
+	return withProvenance(
+		await libPublish({
+			...rest,
+			definition: legacyDefinition(root, { outDir, roster, stamp }),
+		}),
+	);
 }
 
 export function startWatcher(
 	options: WatcherOptions,
 ): ReturnType<typeof libStartWatcher> {
-	const { root, outDir, roster, ...rest } = options;
+	const { root, outDir, roster, stamp, ...rest } = options;
 	return libStartWatcher({
 		...rest,
-		definition: legacyDefinition(root, { outDir, roster }),
+		definition: legacyDefinition(root, { outDir, roster, stamp }),
 	});
 }

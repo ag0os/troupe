@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isSourcePath } from "../../scripts/shepherd-source";
+import { isSourcePath } from "../../scripts/shepherd-source-v2";
 import { composeFragments, composeSession } from "./compose";
 import { dispatchPackageTool } from "./dispatch";
 import { GUIDES } from "./guides";
@@ -509,8 +509,8 @@ describe("reserved names (F7, N1)", () => {
 	});
 });
 
-describe("build identity covers packages (O10)", () => {
-	test("package files are source paths", () => {
+describe("build identity covers packages (O10, O15)", () => {
+	test("package files are v2 package-relative source paths", () => {
 		expect(isSourcePath("packages/software/MODULE.md")).toBe(true);
 		expect(isSourcePath("packages/software/tools/publish-check")).toBe(true);
 	});
