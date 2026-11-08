@@ -42,16 +42,39 @@ export async function replay(args: Record<string, string>): Promise<void> {
 	const ancestors = assertOutside(parent, repo);
 	const pkg = join(parent, "shepherd");
 	const stage = join(parent, ".troupe-dist/troupe");
-	if (existsSync(pkg) || existsSync(stage))
+	if (!args.resume && (existsSync(pkg) || existsSync(stage)))
 		throw new Error("Replay destinations must be fresh");
-	copyPackage(join(repo, "extractions/shepherd"), pkg);
-	const artifact = copyArtifact(
-		join(repo, "extractions/.troupe-dist/troupe"),
-		stage,
+	if (!args.resume) copyPackage(join(repo, "extractions/shepherd"), pkg);
+	else {
+		const clean = run(["git", "status", "--porcelain"], pkg);
+		if (clean.code !== 0 || clean.stdout !== "")
+			throw new Error(
+				"Resume requires the unchanged committed package snapshot",
+			);
+		const files = run(["git", "ls-files", "-z"], pkg);
+		if (files.code !== 0)
+			throw new Error("Cannot enumerate resumed package sources");
+		for (const path of files.stdout.split("\0").filter(Boolean)) {
+			assertEqual(
+				readFileSync(join(pkg, path)).toString("base64"),
+				readFileSync(join(repo, "extractions/shepherd", path)).toString(
+					"base64",
+				),
+				`resumed package ${path}`,
+			);
+		}
+	}
+	const artifact = args.resume
+		? treeManifest(stage)
+		: copyArtifact(join(repo, "extractions/.troupe-dist/troupe"), stage);
+	assertEqual(
+		artifact,
+		treeManifest(join(repo, "extractions/.troupe-dist/troupe")),
+		"same staged artifact on continuation",
 	);
 	const paths = join(parent, "proof-bin");
-	mkdirSync(paths);
-	symlinkSync(bun, join(paths, "bun"));
+	mkdirSync(paths, { recursive: true });
+	if (!existsSync(join(paths, "bun"))) symlinkSync(bun, join(paths, "bun"));
 	const env = isolatedEnv(parent, {
 		NODE_PATH: join(pkg, "node_modules"),
 		PATH: `${paths}:${process.env.PATH}`,
@@ -60,6 +83,44 @@ export async function replay(args: Record<string, string>): Promise<void> {
 	const deny = checkoutDenial(repo);
 	const records: { name: string; code: number | null }[] = [];
 	function step(name: string, argv: string[], cwd = pkg, expected = 0): string {
+		const saved = join(evidence, `${name}.json`);
+		if (
+			args.resume &&
+			existsSync(saved) &&
+			JSON.parse(readFileSync(saved, "utf8")).code !== expected
+		) {
+			for (const ext of ["json", "stdout", "stderr"]) {
+				const failed = join(evidence, `${name}.${ext}`);
+				writeFileSync(
+					join(evidence, `${name}-failed-${Date.now()}.${ext}`),
+					readFileSync(failed),
+				);
+			}
+		}
+		if (
+			args.resume &&
+			existsSync(saved) &&
+			JSON.parse(readFileSync(saved, "utf8")).code === expected
+		) {
+			const previous = JSON.parse(readFileSync(saved, "utf8"));
+			assertEqual(previous.argv, [...deny, ...argv], `${name} resumed command`);
+			assertEqual(previous.cwd, cwd, `${name} resumed cwd`);
+			assertEqual(previous.code, expected, `${name} resumed exit`);
+			assertEqual(previous.bun, Bun.version, `${name} resumed driver Bun`);
+			assertEqual(
+				previous.stdout,
+				readFileSync(join(evidence, `${name}.stdout`), "utf8"),
+				`${name} raw stdout`,
+			);
+			assertEqual(
+				previous.stderr,
+				readFileSync(join(evidence, `${name}.stderr`), "utf8"),
+				`${name} raw stderr`,
+			);
+			console.log(`reusing verified ${name}`);
+			records.push({ name, code: previous.code });
+			return previous.stdout;
+		}
 		console.log(`running ${name}`);
 		const result = run([...deny, ...argv], cwd, env);
 		saveRun(evidence, name, result);
@@ -84,7 +145,11 @@ export async function replay(args: Record<string, string>): Promise<void> {
 	step("install", [bun, "install", "--frozen-lockfile"]);
 	if (existsSync(join(stage, "node_modules")))
 		throw new Error("stage must not hold node_modules");
-	symlinkSync("../shepherd/node_modules", join(dirname(stage), "node_modules"));
+	if (!existsSync(join(dirname(stage), "node_modules")))
+		symlinkSync(
+			"../shepherd/node_modules",
+			join(dirname(stage), "node_modules"),
+		);
 	const assumptions = [
 		"one consumer",
 		"no node_modules in the stage",
@@ -134,19 +199,21 @@ console.log(JSON.stringify(runtime,null,2));
 		step("runtime-resolution", [bun, "--no-install", driver]),
 	);
 	// Bare-copy eval identity must refuse before any Git initialization.
-	const bare = run(
-		[
-			...deny,
-			bun,
-			"--no-install",
-			"evals/shepherd/run.ts",
-			"--check",
-			"--scratch",
-			join(parent, "eval-bare"),
-		],
-		pkg,
-		env,
-	);
+	const bare = args.resume
+		? JSON.parse(readFileSync(join(evidence, "eval-bare.json"), "utf8"))
+		: run(
+				[
+					...deny,
+					bun,
+					"--no-install",
+					"evals/shepherd/run.ts",
+					"--check",
+					"--scratch",
+					join(parent, "eval-bare"),
+				],
+				pkg,
+				env,
+			);
 	saveRun(evidence, "eval-bare", bare);
 	if (
 		bare.code === 0 ||
@@ -177,6 +244,7 @@ console.log(JSON.stringify(runtime,null,2));
 	step("typecheck", [bun, "--no-install", "run", "typecheck"]);
 	step("biome", [bun, "--no-install", "run", "check"]);
 	step("tests", [bun, "--no-install", "test"]);
+	mkdirSync(join(parent, "eval-own-repo"), { recursive: true });
 	step("eval-own-repo", [
 		bun,
 		"--no-install",
@@ -234,6 +302,7 @@ console.log(JSON.stringify(runtime,null,2));
 		throw new Error("binary-only doctor did not detect missing packages");
 	step("version", [binary, "--version"]);
 	const report = {
+		continued: Boolean(args.resume),
 		bun: version,
 		driverBun: Bun.version,
 		parent,
