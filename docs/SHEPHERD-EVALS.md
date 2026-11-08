@@ -308,3 +308,19 @@ So a record whose broken parts only the skipped checks would see passes as stale
 6. **Evidence committed per run.** Built: archived evidence per attempt, about 2 MB of native logs per six trial suite plus supporting files, under the export redaction rule. This is an addition to the original result and summary plan, for confirmation.
 7. **Self-certification.** The job, verifier and policy run from the PR head, so a result is an attestation that code review stands behind (see "What a result means").
 8. **Remaining recommendations.** The source membership, dirty build treatment, execution bounds, the initial $10 validation budget and the eleven plus two count correction, all described above.
+
+## Offline extraction replay configurations
+
+The offline check has two identity configurations. In the Troupe checkout, invoke the package harness with the real repository top and package prefix:
+
+```sh
+bun --no-install extractions/shepherd/evals/shepherd/run.ts --check --package-root <troupe-root>/extractions/shepherd --git-root <troupe-root> --scratch <outside-scratch>
+```
+
+The prefix is derived as `extractions/shepherd`. In an outside copied package, a bare directory must refuse eval identity. Initialize that copied package as its own Git repository and make one commit before running:
+
+```sh
+bun --no-install evals/shepherd/run.ts --check --package-root <copied-package> --git-root <copied-package> --scratch <outside-scratch>
+```
+
+Create the scratch parent before either invocation; the eval runner requires it to exist. The own-repository prefix is empty. The scratch parent remains separate from the copied package and every Git repository, outside `~/shepherds` and beneath no `.shepherd` ancestor. Both commands use the package's `NODE_PATH` and a scratch HOME/configuration; their session launches use fake backends. `scripts/replay-extraction-outside.ts` in the Troupe worktree asserts bare-copy refusal, creates the own-repository snapshot, and runs the second configuration. These checks prove offline identity and harness operation; they do not supply live model behavior evidence.

@@ -28,3 +28,17 @@ Follow these steps on a fresh machine. Shepherd keeps workspace state on disk; m
 8. **Workspaces.** Restore `.shepherd/` directories from backup, or run `shepherd tool init --master` in a root such as `~/shepherds` and `shepherd tool init` in each workspace beneath it. Launch `shepherd` in each and run the init conversation to agree its charter. Claude auto-memory is keyed by absolute path and does not travel with the workspace.
 
 9. **Check.** Run `shepherd tool doctor` and apply the edits it prints by hand. It reads settings without changing them. Then run `shepherd tool check` from the root to check workspace state.
+
+## Independent installation proof
+
+Bun 1.2.22 is the reference version for setup and replay. During extraction, from the Troupe worktree run:
+
+```sh
+bun scripts/replay-extraction-outside.ts --evidence <evidence-directory>
+```
+
+The replay copies `extractions/shepherd/` and the identical staged artifact at `extractions/.troupe-dist/troupe/` into fresh sibling directories under the system temporary directory. Run `bun run setup:extractions` first to prepare that artifact. The replay checks copied bytes and modes, refuses Git, `.shepherd` and `node_modules` ancestors, and denies reads of the original checkout with macOS `sandbox-exec`. It installs frozen, runs typecheck, Biome and the complete package suite, then builds exactly one `bin/shepherd` beside the copied `packages/`. Doctor checks both the complete installation and a binary-only copy; the latter must report the missing base packages.
+
+Consumer commands use `--no-install` and `NODE_PATH=<package>/node_modules`. The stage-parent `node_modules` link points to that one consumer. Its four assumptions are one consumer, no `node_modules` inside the stage, Bun 1.2.22 per-file links (the proof can also rehearse 1.4.4 hardlinks), and exactly `typescript`, `yaml` and `zod` as the staged runtime dependencies. Resolution is checked against the consumer lockfile by runtime probes and the stage-resolution test. The link exposes development dependencies too; it is a transitional extraction mechanism.
+
+Use `--bun <absolute-bun-path>` to repeat with another already available Bun release. The replay does not call setup in the outside copy, so it avoids setup's Bun 1.4.4 `Loader.registry` probe. Every output records its Bun version, scratch parent, artifact manifest, resolved dependency versions and generated-entry/binary checkout-path checks. Preserve `packages/` beside `bin/` when moving the complete installation.
