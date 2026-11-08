@@ -22,6 +22,7 @@ import {
 	assertOutside,
 	bundledVersions,
 	checkoutDenial,
+	checkoutPathScans,
 	committedRevision,
 	copyArtifact,
 	copyPackage,
@@ -248,8 +249,7 @@ console.log(JSON.stringify(runtime,null,2));
 	const binary = join(pkg, "bin/shepherd");
 	const entry = readFileSync(join(parent, "generated-entry.ts"));
 	const bytes = readFileSync(binary);
-	if (entry.includes(repo) || bytes.includes(repo))
-		throw new Error("entry or binary names original checkout");
+	const scannedPaths = checkoutPathScans(entry, bytes, repo);
 	assertEqual(
 		treeManifest(stage),
 		artifact,
@@ -309,6 +309,7 @@ console.log(JSON.stringify(runtime,null,2));
 		binary,
 		ancestors,
 		checkoutDenied: repo,
+		scannedPaths,
 		assumptions,
 		artifactDigest: digest(artifact.join("\n")),
 		artifact,

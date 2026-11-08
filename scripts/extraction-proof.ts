@@ -170,6 +170,26 @@ export function copyPackage(
 	return assertCommittedPackage(repo, prefix, target);
 }
 
+/** Scan both the driving checkout and its parent without rewriting either byte stream. */
+export function checkoutPathScans(
+	entry: Uint8Array,
+	binary: Uint8Array,
+	repo: string,
+) {
+	return [realpathSync(repo), dirname(realpathSync(repo))].map((path) => {
+		const result = {
+			path,
+			entryContains: Buffer.from(entry).includes(path),
+			binaryContains: Buffer.from(binary).includes(path),
+		};
+		if (result.entryContains || result.binaryContains)
+			throw new Error(
+				`entry or binary names checkout path: ${JSON.stringify(result)}`,
+			);
+		return result;
+	});
+}
+
 /** Raw observation only. Paths and clocks are never rewritten. */
 export function sameObservation(a: Ran, b: Ran): boolean {
 	return a.code === b.code && a.stdout === b.stdout && a.stderr === b.stderr;

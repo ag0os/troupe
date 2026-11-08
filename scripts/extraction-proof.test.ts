@@ -6,16 +6,18 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	assertCommittedPackage,
 	assertOutside,
 	bundledVersions,
+	checkoutPathScans,
 	committedRevision,
 	copyArtifact,
 	copyPackage,
@@ -275,4 +277,14 @@ test("pairing accepts an identical pair", async () => {
 	expect(result.code).toBe(0);
 	expect(pairs).toHaveLength(1);
 	expect(pairs[0]?.stdoutEqual).toBe(true);
+});
+
+test("checkout scan refuses parent-directory bytes in either generated input", () => {
+	const clean = Buffer.from("no checkout references");
+	const parent = Buffer.from(
+		`${dirname(realpathSync(root))}/another-checkout/lib.ts`,
+	);
+	expect(() => checkoutPathScans(parent, clean, root)).toThrow("checkout path");
+	expect(() => checkoutPathScans(clean, parent, root)).toThrow("checkout path");
+	expect(checkoutPathScans(clean, clean, root)).toHaveLength(2);
 });
