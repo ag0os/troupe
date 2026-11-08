@@ -64,7 +64,6 @@ export async function replay(args: Record<string, string>): Promise<void> {
 	const env = isolatedEnv(parent, {
 		NODE_PATH: join(pkg, "node_modules"),
 		PATH: `${paths}:${process.env.PATH}`,
-		BUN_INSTALL_AUTO: "disable",
 	});
 	const deny = checkoutDenial(repo);
 	const records: { name: string; code: number | null }[] = [];
@@ -141,6 +140,7 @@ export async function replay(args: Record<string, string>): Promise<void> {
 		"no node_modules in the stage",
 		"Bun 1.2.22 per-file links (1.4.4 hardlinks also replayed separately)",
 		"typescript, yaml, zod are the complete staged runtime set",
+		"Nested bun processes have no explicit --no-install control; the BUN_OPTIONS probe was not discriminating. Bun 1.2.22 default auto-install applies only without node_modules; the consumer and stage-parent link supply it. Resolution and bundled Zod are checked against locked inputs.",
 	];
 	const stageMetadata = JSON.parse(
 		readFileSync(join(stage, "package.json"), "utf8"),
