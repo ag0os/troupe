@@ -310,8 +310,10 @@ describe("real codex debug prompt-input (B-010; ACC-003)", () => {
 				items
 					.filter((item) => item.role === "developer")
 					.map((item) => item.text);
-			expect(developer(baseline)[0]).toBe(userText);
-			expect(developer(run)[0]).toBe(spec.systemPrompt);
+			// Codex 0.164.0 renders its base instructions as the first developer
+			// item, so the user's text and the canary are found by value.
+			expect(developer(baseline)).toContain(userText);
+			expect(developer(run)).toContain(spec.systemPrompt);
 			expect(run.some((item) => item.text.includes(userText))).toBe(false);
 		},
 		60_000,
