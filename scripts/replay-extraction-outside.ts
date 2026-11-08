@@ -236,6 +236,10 @@ console.log(JSON.stringify(runtime,null,2));
 		"--no-install",
 		"evals/shepherd/run.ts",
 		"--check",
+		"--package-root",
+		pkg,
+		"--git-root",
+		pkg,
 		"--scratch",
 		join(parent, "eval-own-repo"),
 	]);
