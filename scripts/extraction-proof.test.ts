@@ -3,6 +3,7 @@ import {
 	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -11,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	assertOutside,
+	bundledVersions,
 	copyArtifact,
 	sameObservation,
 	treeManifest,
@@ -69,4 +71,19 @@ describe("outside proof boundaries", () => {
 		])
 			expect(sameObservation(a, b)).toBe(false);
 	});
+});
+
+test("bundled dependencies are distinct from compiler-only dependencies", () => {
+	const file = join(root, "bundle");
+	writeFileSync(
+		file,
+		"// node_modules/zod/v4/core/versions.js\nvar version={major:4,minor:6,patch:5};",
+	);
+	expect(bundledVersions(file)).toEqual({ zod: "4.6.5", typescript: null });
+	writeFileSync(
+		file,
+		readFileSync(file, "utf8") +
+			'\n// node_modules/typescript/lib/typescript.js\nvar version = "5.9.2";',
+	);
+	expect(bundledVersions(file)).toEqual({ zod: "4.6.5", typescript: "5.9.2" });
 });

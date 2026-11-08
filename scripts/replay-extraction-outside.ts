@@ -19,6 +19,7 @@ import {
 import {
 	assertEqual,
 	assertOutside,
+	bundledVersions,
 	checkoutDenial,
 	copyArtifact,
 	copyPackage,
@@ -248,7 +249,8 @@ console.log(JSON.stringify(runtime,null,2));
 		binaryNamesStage: bytes.includes(stage),
 		entryNamesCheckout: false,
 		binaryNamesCheckout: false,
-		bundled: runtime.filter((r: { name: string }) =>
+		bundled: bundledVersions(binary),
+		compilerDependencies: runtime.filter((r: { name: string }) =>
 			["zod", "typescript"].includes(r.name),
 		),
 		records,

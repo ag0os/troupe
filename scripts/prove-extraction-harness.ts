@@ -22,6 +22,7 @@ import {
 } from "./extraction-continuity";
 import {
 	assertEqual,
+	bundledVersions,
 	copyArtifact,
 	proofArgs,
 	sameObservation,
@@ -398,6 +399,10 @@ export async function proveHarness(
 				shipped,
 				candidate,
 				outcomes,
+				bundled: {
+					shipped: bundledVersions(shipped),
+					candidate: bundledVersions(candidate),
+				},
 				resourceLimit:
 					"Fresh Claude TMPDIR names differ and are retained, scoped and cleaned; stable launch argv and contract environment compare exactly. Backend passthrough stream output is compared in print mode; Shepherd's declaration has no stream-mode switch.",
 			},

@@ -142,3 +142,31 @@ export function checkedRun(argv: string[], cwd: string, env = childEnv()): Ran {
 		);
 	return result;
 }
+
+/** Inspect bundled module markers separately from build-time dependency resolution. */
+export function bundledVersions(binary: string): {
+	zod: string;
+	typescript: string | null;
+} {
+	const bytes = readFileSync(binary);
+	const zodAt = bytes.indexOf("zod/v4/core/versions.js");
+	const version =
+		zodAt < 0
+			? null
+			: /major:\s*(\d+),\s*minor:\s*(\d+),\s*patch:\s*(\d+)/.exec(
+					bytes.subarray(zodAt, zodAt + 600).toString(),
+				);
+	if (!version) throw new Error(`No bundled Zod version marker in ${binary}`);
+	const tsAt = bytes.indexOf("typescript/lib/typescript.js");
+	const tsVersion =
+		tsAt < 0
+			? null
+			: /version(?:\w*)\s*=\s*"(\d+\.\d+\.\d+)"/.exec(
+					bytes.subarray(tsAt, tsAt + 200000).toString(),
+				)?.[1];
+	if (tsAt >= 0 && !tsVersion)
+		throw new Error(
+			`TypeScript is bundled but its version is unreadable: ${binary}`,
+		);
+	return { zod: version.slice(1, 4).join("."), typescript: tsVersion ?? null };
+}
