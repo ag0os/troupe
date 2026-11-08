@@ -5,7 +5,11 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createGitRunner, SOURCE_FILES } from "./shepherd-source";
+import {
+	createGitRunner,
+	type GitRunner,
+	SOURCE_FILES,
+} from "./shepherd-source";
 
 export const TEST_GIT_ENV = {
 	GIT_CONFIG_GLOBAL: "/dev/null",
@@ -16,7 +20,25 @@ export const TEST_GIT_ENV = {
 	GIT_COMMITTER_EMAIL: "fixture@example.invalid",
 };
 
-export const testGit = createGitRunner(TEST_GIT_ENV);
+/**
+ * Under parallel load Bun 1.2.22's `spawnSync` has returned status 0 with
+ * empty stdout and stderr for `git rev-parse`, which always prints on
+ * success. Such a result is reported on stderr and the call runs again, so
+ * a test never reads an empty revision or top level as a real one.
+ */
+function rerunEmptyRevParse(run: GitRunner): GitRunner {
+	return (args, cwd, input) => {
+		const result = run(args, cwd, input);
+		if (args[0] !== "rev-parse" || result.code !== 0) return result;
+		if (result.stdout.length > 0) return result;
+		console.error(
+			`fixture git: ${JSON.stringify(["git", ...args])} in ${cwd} exited ${result.code} with stdout ${JSON.stringify(new TextDecoder().decode(result.stdout))} and stderr ${JSON.stringify(result.stderr)}; running it again`,
+		);
+		return run(args, cwd, input);
+	};
+}
+
+export const testGit = rerunEmptyRevParse(createGitRunner(TEST_GIT_ENV));
 
 /** Run Git in `root`, throwing on a nonzero exit; returns stdout. */
 export function git(root: string, ...args: string[]): string {

@@ -101,7 +101,18 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-const head = () => git(root, "rev-parse", "HEAD").trim();
+/** The fixture's HEAD, which must be 40 hex; otherwise the raw Git result. */
+const head = () => {
+	const args = ["rev-parse", "HEAD"];
+	const result = testGit(args, root);
+	const stdout = new TextDecoder().decode(result.stdout);
+	if (result.code !== 0 || !/^[0-9a-f]{40}\n$/.test(stdout)) {
+		throw new Error(
+			`git ${args.join(" ")} in ${root} gave no 40 hex revision: status ${result.code}, stdout ${JSON.stringify(stdout)}, stderr ${JSON.stringify(result.stderr)}`,
+		);
+	}
+	return stdout.trim();
+};
 const commitAll = (message: string) => {
 	git(root, "add", "-A");
 	git(root, "commit", "-q", "-m", message);
@@ -1910,6 +1921,8 @@ describe("G1 fix round 1, verification round 1 (V1)", () => {
 			putArtifact(e, "claude-run.json", `${JSON.stringify(runManifest(e))}\n`);
 		};
 
+	// Sixteen results written and verified: 1.5 s alone, past Bun's 5 s
+	// default under parallel load (evidence/item1-load).
 	test("a path that only contains the expected one is no marker for it, at every escape level", () => {
 		for (const depth of [0, 1, 2, 3]) {
 			writeResult(
@@ -1933,7 +1946,7 @@ describe("G1 fix round 1, verification round 1 (V1)", () => {
 				]);
 			}
 		}
-	});
+	}, 30_000);
 });
 
 describe("G1 fix round 1, verification round 1 (V1 additions)", () => {
@@ -2000,6 +2013,7 @@ describe("G1 fix round 1, verification round 1 (V1 additions)", () => {
 		}
 	});
 
+	// A loop of written and verified results, bounded like V1's above.
 	test("a non-ASCII path is found in JavaScript and Python ensure_ascii spellings, as a line or a field", () => {
 		const line = (x: string) => `# Shepherd start: /w\nbinary: ${x}\n`;
 		for (const content of [
@@ -2030,7 +2044,7 @@ describe("G1 fix round 1, verification round 1 (V1 additions)", () => {
 				expect.stringMatching(noMarker),
 			]);
 		}
-	});
+	}, 30_000);
 });
 
 describe("fix round 3, G4: markers read as binary_values reads them; scorer cost duplicates", () => {
