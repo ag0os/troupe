@@ -18,9 +18,11 @@ import {
 	formatSnapshot,
 	guardEvidence,
 	guardWorkspace,
+	isolatedEnv,
 	liveSnapshot,
 	MANIFEST_HEADING,
 	readBaseline,
+	run,
 	sameSnapshot,
 	versionProblem,
 	writeEvidence,
@@ -301,5 +303,34 @@ describe("expected --version line per commit (C5)", () => {
 		expect(expectedVersionLine(dir, commit).line).toBe(
 			`shepherd revision=${commit} dirty=false source=${source}`,
 		);
+	});
+});
+
+describe("isolated continuity environment (C25)", () => {
+	test("a child reads only the scratch home and config", () => {
+		const env = isolatedEnv(join(root, "c25"));
+		expect(env.HOME).toBe(join(root, "c25/home"));
+		expect(env.XDG_CONFIG_HOME).toBe(join(root, "c25/config"));
+		expect(env.CODEX_HOME).toBeUndefined();
+		expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+		const child = run(
+			[
+				process.execPath,
+				"-e",
+				'console.log(JSON.stringify({home:require("node:os").homedir(),config:process.env.XDG_CONFIG_HOME}))',
+			],
+			root,
+			env,
+		);
+		expect(child.code).toBe(0);
+		expect(JSON.parse(child.stdout)).toEqual({
+			home: env.HOME,
+			config: env.XDG_CONFIG_HOME,
+		});
+		expect(
+			JSON.parse(
+				readFileSync(join(env.HOME ?? "", ".claude/settings.json"), "utf8"),
+			).crossSessionInbound,
+		).toBe("accept");
 	});
 });

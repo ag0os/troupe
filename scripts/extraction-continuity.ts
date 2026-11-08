@@ -46,6 +46,39 @@ export function childEnv(
 	return { ...env, NO_COLOR: "1", ...extra };
 }
 
+/** A deterministic scratch home for previews and doctor, never user settings. */
+export function isolatedEnv(
+	scratch: string,
+	extra: Record<string, string> = {},
+): Record<string, string> {
+	const home = join(scratch, "home");
+	const config = join(scratch, "config");
+	mkdirSync(join(home, ".claude"), { recursive: true });
+	mkdirSync(config, { recursive: true });
+	const hook = join(home, "herdr-agent-state.sh");
+	writeFileSync(hook, "#!/bin/sh\n");
+	writeFileSync(
+		join(home, ".claude/settings.json"),
+		JSON.stringify({
+			crossSessionInbound: "accept",
+			statusLine: { type: "command", command: "echo used_percentage" },
+			hooks: { SessionStart: [{ hooks: [{ command: hook }] }] },
+		}),
+	);
+	const env = childEnv();
+	for (const key of [
+		"CODEX_HOME",
+		"CLAUDE_CONFIG_DIR",
+		"CLAUDE_SESSION_ID",
+		"XDG_CONFIG_HOME",
+		"NODE_PATH",
+		"BUN_OPTIONS",
+		"NODE_OPTIONS",
+	])
+		delete env[key];
+	return { ...env, HOME: home, XDG_CONFIG_HOME: config, ...extra };
+}
+
 export function run(
 	argv: string[],
 	cwd: string,

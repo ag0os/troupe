@@ -24,7 +24,6 @@ import {
 	buildShepherd,
 	buildWorkspaces,
 	checkoutSlot,
-	childEnv,
 	cloneSlot,
 	describeRan,
 	expectedVersionLine,
@@ -32,6 +31,7 @@ import {
 	guardEvidence,
 	guardWorkspace,
 	installFakes,
+	isolatedEnv,
 	liveSnapshot,
 	must,
 	parseArgs,
@@ -87,7 +87,9 @@ async function main(): Promise<number> {
 			logs.push(build);
 			if (build.code !== 0) throw new Error("build failed");
 			const fakes = installFakes(slot, join(scratch, `fakes-${short}`));
-			const env = childEnv({ PATH: `${fakes}:${process.env.PATH}` });
+			const env = isolatedEnv(scratch, {
+				PATH: `${fakes}:${process.env.PATH}`,
+			});
 			const binary = join(slot, "bin/shepherd");
 
 			const version = run([binary, "--version"], scratch, env);
@@ -120,7 +122,9 @@ async function main(): Promise<number> {
 			const doctor = run(
 				["shepherd", "tool", "doctor"],
 				plain,
-				childEnv({ PATH: `${join(slot, "bin")}:${fakes}:${process.env.PATH}` }),
+				isolatedEnv(scratch, {
+					PATH: `${join(slot, "bin")}:${fakes}:${process.env.PATH}`,
+				}),
 			);
 			logs.push(doctor);
 			if (doctor.code !== 0) problems.push(`tool doctor exit ${doctor.code}`);
