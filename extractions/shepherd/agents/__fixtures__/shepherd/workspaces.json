@@ -1,0 +1,59 @@
+{
+	"plain": {
+		"cwd": "ws",
+		"files": {
+			"ws/.shepherd/charter.md": "# Charter\n\nPlain workspace mission.\n",
+			"ws/.shepherd/integrations/local-a.md": "# Local A\n\nA workspace-local module.\n",
+			"ws/.shepherd/integrations/notes.txt": "not a module\n"
+		}
+	},
+	"uninitiated": {
+		"cwd": "ws",
+		"files": {
+			"ws/README.md": "Nothing Shepherd-related here.\n"
+		}
+	},
+	"nested-inherited": {
+		"cwd": "flock/child",
+		"files": {
+			"flock/.shepherd/charter.md": "# Flock charter\n\nMust not load in a child.\n",
+			"flock/.shepherd/integrations/b-flock.md": "# Flock B\n\nShared conventions B.\n",
+			"flock/.shepherd/integrations/a-shared.md": "# Shared A\n\nShared conventions A.\n",
+			"flock/.shepherd/integrations/ignored.txt": "not a module\n",
+			"flock/child/.shepherd/charter.md": "# Child charter\n\nThe child's mission.\n"
+		}
+	},
+	"nested-symlink-dedupe": {
+		"cwd": "flock/child",
+		"files": {
+			"flock/.shepherd/integrations/flock.md": "# Flock\n\nThe shared flock module.\n",
+			"flock/child/.shepherd/charter.md": "# Child charter\n\nSymlinked leftover.\n",
+			"flock/child/.shepherd/integrations/z-local.md": "# Z local\n\nOnly in the child.\n"
+		},
+		"symlinks": {
+			"flock/child/.shepherd/integrations/flock.md": "flock/.shepherd/integrations/flock.md"
+		}
+	},
+	"nested-local": {
+		"cwd": "flock/group/child",
+		"files": {
+			"flock/.shepherd/integrations/flock.md": "# Flock\n\nThe shared flock module.\n",
+			"flock/group/child/.shepherd/charter.md": "# Child charter\n\nBelow a directory that is not a workspace.\n",
+			"flock/group/child/.shepherd/integrations/a-local.md": "# A local\n\nNot inherited, sorts before the flock module by name.\n"
+		}
+	},
+	"nearest-parent": {
+		"cwd": "outer/inner/child",
+		"files": {
+			"outer/.shepherd/integrations/outer.md": "# Outer\n\nToo far up: must not load.\n",
+			"outer/inner/.shepherd/integrations/inner.md": "# Inner\n\nThe nearest enclosing module.\n"
+		}
+	},
+	"enclosing-with-space": {
+		"cwd": "my flock/ws one",
+		"files": {
+			"my flock/.shepherd/integrations/flock.md": "# Flock\n\nShared from a path with a space.\n",
+			"my flock/ws one/.shepherd/charter.md": "# Charter\n\nUnder a spaced path.\n"
+		}
+	}
+}

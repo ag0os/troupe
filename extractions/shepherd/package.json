@@ -1,0 +1,28 @@
+{
+	"name": "shepherd",
+	"version": "0.1.0",
+	"type": "module",
+	"private": true,
+	"description": "Shepherd, a Troupe agent package (extracted copy; see ADAPTATIONS.json).",
+	"scripts": {
+		"compile": "bun scripts/build.ts",
+		"compile:all": "bun scripts/build.ts --all",
+		"watch": "bun scripts/watch.ts",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"check": "biome check .",
+		"check:all": "bun run typecheck && bun run check",
+		"test": "bun test",
+		"evals:shepherd": "bun evals/shepherd/run.ts"
+	},
+	"dependencies": {
+		"troupe": "file:../.troupe-dist/troupe",
+		"yaml": "^2",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.1.4",
+		"@types/bun": "1.2.19",
+		"@types/node": "24.2.0",
+		"typescript": "5.9.2"
+	}
+}

@@ -1,0 +1,25 @@
+#!/bin/sh
+# install-skills: copy the package's skills (skills/<skill>/) into Claude
+# Code's and Codex's skills directories, user level or a repository's. The
+# work is in install-skills.d/main.ts, run by bun from install-skills.d/, a
+# directory this package owns that holds no bunfig.toml or .env, so the
+# caller's configuration, preloads and environment files never load; a
+# relative --repo is read from the caller's directory, recorded in
+# INSTALL_SKILLS_TARGET_CWD. Contract: docs/PACKAGES.md (contract 1).
+
+case $0 in
+*/*) dir=${0%/*} ;;
+*) dir=. ;;
+esac
+dir=$(cd "$dir/install-skills.d" 2>/dev/null && pwd -P) || {
+	printf 'install-skills: cannot find install-skills.d beside %s\n' "$0" >&2
+	exit 2
+}
+command -v bun >/dev/null 2>&1 || {
+	printf 'install-skills: bun is not on PATH; this tool requires bun\n' >&2
+	exit 2
+}
+INSTALL_SKILLS_TARGET_CWD=$PWD
+export INSTALL_SKILLS_TARGET_CWD
+cd "$dir" || exit 2
+exec bun --no-install --env-file=/dev/null "$dir/main.ts" "$@"

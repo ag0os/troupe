@@ -68,11 +68,16 @@ function fenceProblem(text: string): ParseProblem | undefined {
 	);
 }
 
+/** A leading colon, em dash, en dash or hyphen; the dashes built from code points. */
+const LEAD_SEPARATOR = new RegExp(
+	`^\\s*[:${String.fromCodePoint(0x2014)}${String.fromCodePoint(0x2013)}-]?\\s*`,
+);
+
 function entryText(joined: string): string {
 	return collapse(
 		joined
 			.replace(/^[-*][ \t]+\*\*[A-Z]{3,}:?\*\*/, "")
-			.replace(/^\s*[:—–-]?\s*/, "")
+			.replace(LEAD_SEPARATOR, "")
 			.replace(LINK, "$1"),
 	);
 }

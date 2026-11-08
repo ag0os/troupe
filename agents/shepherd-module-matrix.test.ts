@@ -10,13 +10,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { parseCli } from "../lib/agent-format/cli";
-import { previewAgent } from "../lib/agent-format/run";
-import type { Backend, PrepareContext } from "../lib/agent-format/types";
-import {
-	type LoadedAgent,
-	loadAgentDefinition,
-} from "../scripts/agent-compiler";
+import { parseCli } from "../lib/entries/cli";
+import { type LoadedAgent, loadAgentDefinition } from "../lib/entries/compiler";
+import { previewAgent } from "../lib/entries/runtime";
+import type { Backend, PrepareContext } from "../lib/index";
+import { shepherdDefinition } from "../scripts/shepherd-definition";
 import * as shepherd from "./shepherd";
 
 const repo = resolve(import.meta.dir, "..");
@@ -45,7 +43,10 @@ let agent: LoadedAgent;
 let root: string;
 
 beforeAll(async () => {
-	agent = await loadAgentDefinition(repo, "agents/shepherd.md");
+	agent = await loadAgentDefinition(
+		shepherdDefinition(repo),
+		"agents/shepherd.md",
+	);
 	root = realpathSync(mkdtempSync(join(tmpdir(), "shepherd-module-matrix-")));
 });
 

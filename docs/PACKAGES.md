@@ -1,5 +1,7 @@
 # Shepherd packages, contract 1
 
+> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/PACKAGES.md](../extractions/shepherd/docs/PACKAGES.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.
+
 A package gives Shepherd three things for one kind of work: module text for the session prompt, tools the session
 runs as `shepherd tool <package> <tool>`, and guides it reads on demand. This document is the whole contract. A
 package written against it needs nothing from Troupe's source, so it can live in Troupe's `packages/`, in a shared

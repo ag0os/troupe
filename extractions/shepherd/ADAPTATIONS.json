@@ -1,0 +1,229 @@
+{
+	"note": "The extracted Shepherd package is a checked copy of the original layout (design.md section 4, O26). Paths in from are repository paths, paths in to and file are package paths; a path ending in / is a tree of Git tracked and nonignored untracked files. scripts/shepherd-copy.test.ts applies only these rewrites and compares bytes, presence and executable status.",
+	"mappings": [
+		{
+			"from": "agents/shepherd.md",
+			"to": "agents/shepherd.md"
+		},
+		{
+			"from": "agents/shepherd.ts",
+			"to": "agents/shepherd.ts"
+		},
+		{
+			"from": "agents/shepherd.test.ts",
+			"to": "agents/shepherd.test.ts"
+		},
+		{
+			"from": "agents/shepherd-module-matrix.test.ts",
+			"to": "agents/shepherd-module-matrix.test.ts"
+		},
+		{
+			"from": "agents/__fixtures__/shepherd/",
+			"to": "agents/__fixtures__/shepherd/"
+		},
+		{
+			"from": "agents/__fixtures__/shepherd-module-matrix/",
+			"to": "agents/__fixtures__/shepherd-module-matrix/"
+		},
+		{
+			"from": "agents/__snapshots__/shepherd.test.ts.snap",
+			"to": "agents/__snapshots__/shepherd.test.ts.snap"
+		},
+		{
+			"from": "system-prompts/shepherd/",
+			"to": "system-prompts/shepherd/"
+		},
+		{
+			"from": "lib/shepherd/",
+			"to": "lib/shepherd/"
+		},
+		{
+			"from": "packages/software/",
+			"to": "packages/software/"
+		},
+		{
+			"from": "evals/shepherd/",
+			"to": "evals/shepherd/"
+		},
+		{
+			"from": "scripts/shepherd-source-v2.ts",
+			"to": "scripts/shepherd-source-v2.ts"
+		},
+		{
+			"from": "scripts/shepherd-source-v2.test.ts",
+			"to": "scripts/shepherd-source-v2.test.ts"
+		},
+		{
+			"from": "docs/PACKAGES.md",
+			"to": "docs/PACKAGES.md"
+		},
+		{
+			"from": "docs/SHEPHERD.md",
+			"to": "docs/SHEPHERD.md"
+		},
+		{
+			"from": "docs/SHEPHERD-EVALS.md",
+			"to": "docs/SHEPHERD-EVALS.md"
+		},
+		{
+			"from": "docs/SETUP.md",
+			"to": "docs/SETUP.md"
+		}
+	],
+	"rewrites": [
+		{
+			"file": "agents/shepherd.ts",
+			"from": "} from \"../lib/agent-format/types\";\n",
+			"to": "} from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "agents/shepherd.test.ts",
+			"from": "import { parseCli, resolveCli } from \"../lib/entries/cli\";\nimport {\n\tgenerateEntry,\n\ttype LoadedAgent,\n\tloadAgentDefinition,\n\tplanBuild,\n} from \"../lib/entries/compiler\";\nimport { PROMPT_SEPARATOR } from \"../lib/entries/declaration\";\nimport { executeAgent, previewAgent } from \"../lib/entries/runtime\";\nimport { installFakeClis, readRecords } from \"../lib/entries/testing\";\nimport type { AgentSpec, Backend, PrepareContext } from \"../lib/index\";\n",
+			"to": "import type { AgentSpec, Backend, PrepareContext } from \"troupe\";\nimport { parseCli, resolveCli } from \"troupe/cli\";\nimport {\n\tgenerateEntry,\n\ttype LoadedAgent,\n\tloadAgentDefinition,\n\tplanBuild,\n} from \"troupe/compiler\";\nimport { PROMPT_SEPARATOR } from \"troupe/declaration\";\nimport { executeAgent, previewAgent } from \"troupe/runtime\";\nimport { installFakeClis, readRecords } from \"troupe/testing\";\n",
+			"count": 1
+		},
+		{
+			"file": "agents/shepherd-module-matrix.test.ts",
+			"from": "import { parseCli } from \"../lib/entries/cli\";\nimport { type LoadedAgent, loadAgentDefinition } from \"../lib/entries/compiler\";\nimport { previewAgent } from \"../lib/entries/runtime\";\nimport type { Backend, PrepareContext } from \"../lib/index\";\n",
+			"to": "import type { Backend, PrepareContext } from \"troupe\";\nimport { parseCli } from \"troupe/cli\";\nimport { type LoadedAgent, loadAgentDefinition } from \"troupe/compiler\";\nimport { previewAgent } from \"troupe/runtime\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/compose.test.ts",
+			"from": "import { prepare } from \"../../agents/shepherd\";\nimport { shepherdDefinition } from \"../../scripts/shepherd-definition\";\nimport { parseCli } from \"../entries/cli\";\nimport { loadAgentDefinition } from \"../entries/compiler\";\nimport { previewAgent } from \"../entries/runtime\";\n",
+			"to": "import { parseCli } from \"troupe/cli\";\nimport { loadAgentDefinition } from \"troupe/compiler\";\nimport { previewAgent } from \"troupe/runtime\";\nimport { prepare } from \"../../agents/shepherd\";\nimport { shepherdDefinition } from \"../../scripts/shepherd-definition\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/compose.ts",
+			"from": "import coreDoc from \"../../system-prompts/shepherd/core.md\" with {\n\ttype: \"text\",\n};\nimport { PROMPT_SEPARATOR } from \"../agent-format/schema\";\n",
+			"to": "import { PROMPT_SEPARATOR } from \"troupe/declaration\";\nimport coreDoc from \"../../system-prompts/shepherd/core.md\" with {\n\ttype: \"text\",\n};\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/dispatch.test.ts",
+			"from": "import { runDispatch } from \"../entries/runtime\";\nimport type { AgentSpec, DispatchResult } from \"../index\";\n",
+			"to": "import type { AgentSpec, DispatchResult } from \"troupe\";\nimport { runDispatch } from \"troupe/runtime\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/dispatch.ts",
+			"from": "import type { DispatchResult } from \"../agent-format/types\";\n",
+			"to": "import type { DispatchResult } from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/session-name.test.ts",
+			"from": "import type { AgentMode, Backend } from \"../index\";\n",
+			"to": "import type { AgentMode, Backend } from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/session-name.ts",
+			"from": "import type { AgentMode, Backend } from \"../agent-format/types\";\n",
+			"to": "import type { AgentMode, Backend } from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/sessions.ts",
+			"from": "import type { CommandRequest, CommandResult } from \"../agent-format/types\";\n",
+			"to": "import type { CommandRequest, CommandResult } from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "lib/shepherd/test-support.ts",
+			"from": "import type { CommandResult } from \"../index\";\n",
+			"to": "import type { CommandResult } from \"troupe\";\n",
+			"count": 1
+		},
+		{
+			"file": "evals/shepherd/build-source.ts",
+			"from": "export { type Builder, compileAgent } from \"../../scripts/agent-compiler\";\nexport {\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\tGATED_MODULES,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/shepherd-source\";\n",
+			"to": "export {\n\ttype Builder,\n\ttype BuildProvenance,\n\tcompareUtf8,\n\tcompileAgent,\n\tcreateGitRunner,\n\tentryPackagePath,\n\tframedDigest,\n\tGATED_MODULES,\n\ttype GitRunner,\n\tgitStamp,\n\tIDENTITY_MODULE,\n\tisSourcePath,\n\ttype ManifestEntry,\n\tRECORDS_UNTRACKED,\n\treadWorktreeSource,\n\trunGit,\n\tSHEPHERD_ID,\n\tShepherdSourceError,\n\ttype SourceFile,\n\ttype SourceLayout,\n\ttype SourceManifest,\n\ttype StampSource,\n\tsameSource,\n\tversionLine,\n} from \"../../scripts/eval-source\";\n",
+			"count": 1
+		},
+		{
+			"file": "evals/shepherd/source-fixture.ts",
+			"from": "} from \"../../scripts/shepherd-source-fixture\";\n",
+			"to": "} from \"../../scripts/eval-source-fixture\";\n",
+			"count": 1
+		},
+		{
+			"file": "scripts/shepherd-source-v2.ts",
+			"from": "} from \"../lib/entries/compiler\";\nimport {\n\tcombineSourceInputs,\n\tcreateGitRunner,\n\ttype GitRunner,\n\ttype InputProvenance,\n\treadSourceInputs,\n\ttype SourceInput,\n\ttype SourceInputDefinition,\n\ttype SourceManifest,\n} from \"../lib/entries/provenance\";\n",
+			"to": "} from \"troupe/compiler\";\nimport {\n\tcombineSourceInputs,\n\tcreateGitRunner,\n\ttype GitRunner,\n\ttype InputProvenance,\n\treadSourceInputs,\n\ttype SourceInput,\n\ttype SourceInputDefinition,\n\ttype SourceManifest,\n} from \"troupe/provenance\";\n",
+			"count": 1
+		},
+		{
+			"file": "scripts/shepherd-source-v2.test.ts",
+			"from": "} from \"../lib/entries/provenance\";\n",
+			"to": "} from \"troupe/provenance\";\n",
+			"count": 1
+		},
+		{
+			"file": "docs/PACKAGES.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/PACKAGES.md](../extractions/shepherd/docs/PACKAGES.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD.md](../extractions/shepherd/docs/SHEPHERD.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD-EVALS.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD-EVALS.md](../extractions/shepherd/docs/SHEPHERD-EVALS.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line and the link to the package's `docs/STAMPS.md`.\n\n",
+			"to": "",
+			"count": 1
+		},
+		{
+			"file": "docs/SHEPHERD-EVALS.md",
+			"from": "[extractions/shepherd/docs/STAMPS.md](../extractions/shepherd/docs/STAMPS.md)",
+			"to": "[docs/STAMPS.md](STAMPS.md)",
+			"count": 1
+		},
+		{
+			"file": "docs/SETUP.md",
+			"from": "> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SETUP.md](../extractions/shepherd/docs/SETUP.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.\n\n",
+			"to": "",
+			"count": 1
+		}
+	],
+	"extractionOnly": [
+		".gitignore",
+		"ADAPTATIONS.json",
+		"biome.json",
+		"bun.lock",
+		"docs/STAMPS.md",
+		"package.json",
+		"scripts/build.ts",
+		"scripts/connector-parity.test.ts",
+		"scripts/eval-source-fixture.ts",
+		"scripts/eval-source.test.ts",
+		"scripts/eval-source.ts",
+		"scripts/imports.test.ts",
+		"scripts/install-forms.test.ts",
+		"scripts/resolution.ts",
+		"scripts/shared-core.test.ts",
+		"scripts/shepherd-definition.test.ts",
+		"scripts/shepherd-definition.ts",
+		"scripts/stage-resolution.test.ts",
+		"scripts/watch.ts",
+		"tsconfig.json"
+	],
+	"excluded": [
+		{
+			"path": "evals/shepherd/results/",
+			"reason": "committed eval results are evidence keyed by the v1 source hash of the original layout and say nothing about the package; the package starts without results",
+			"packageNames": "^([0-9a-f]{64}\\.(json|md)|\\.gitkeep)$"
+		},
+		{
+			"path": "evals/shepherd/artifacts/",
+			"reason": "archived trial evidence of the committed results; it belongs with those results in the original layout; the package may hold only the exported attempt layout (<source hash>/<run id>/<gate trial>/attempt-<n>/, or a set-aside .partial export of it) and the names harness.py (backend claude), export.ts and gate.ts write there",
+			"packageNames": "^(\\.gitkeep|[0-9a-f]{64}/[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}/(A|D|E|G|E-neg|G-neg)/attempt-[1-9][0-9]*(\\.partial(-[1-9][0-9]*)?)?/(claude(\\.md|(-initial|-resume)?\\.jsonl|-(run|start|baseline|final)\\.json|-fixture-notes\\.md|-(resume-)?(stdout|stderr)\\.txt|-diff\\.patch)|must-check\\.json|packet\\.md|scorer-[1-9][0-9]*-r[1-9][0-9]*\\.json(\\.orphan(-[1-9][0-9]*)?)?))$"
+		}
+	]
+}

@@ -1,11 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import {
 	mkdirSync,
+	mkdtempSync,
 	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { checkWorkspace } from "./check";
 import {
@@ -72,36 +74,57 @@ function fixture(files: Record<string, string> = {}) {
 	return { tree, workspace, env, config, collect, certify, put };
 }
 
+/**
+ * Whether this runtime and filesystem report a file's birth time. Bun 1.2.22
+ * on Linux reports 0, and the running session's transcript is recognized by
+ * a birth time after the last record (sessions.ts), so the rule below cannot
+ * hold there and its cases are skipped rather than run against the epoch.
+ */
+const REPORTS_BIRTHTIME = (() => {
+	const dir = mkdtempSync(join(tmpdir(), "shepherd-birthtime-"));
+	try {
+		const probe = join(dir, "probe");
+		writeFileSync(probe, "probe");
+		return statSync(probe).birthtimeMs > 0;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+})();
+
 for (const predecessorMinutes of [undefined, 39, 20]) {
-	test(`start ignores its fresh transcript with predecessor ${predecessorMinutes} minutes ago while status still measures it`, () => {
-		const f = fixture();
-		const dir = join(
-			f.env.home,
-			".claude/projects",
-			f.workspace.dir.replace(/[^A-Za-z0-9]/g, "-"),
-		);
-		mkdirSync(dir, { recursive: true });
-		const self = join(dir, "self.jsonl");
-		writeFileSync(self, "activity");
-		const now = new Date(statSync(self).birthtimeMs + 1000);
-		f.env.clock = () => new Date(now);
-		const record = new Date(now.getTime() - 40 * 60_000);
-		for (const file of ["CURRENT.md", "journal.md"])
-			utimesSync(join(f.workspace.state, file), record, record);
-		utimesSync(self, now, now);
-		if (predecessorMinutes !== undefined) {
-			const predecessor = join(dir, "predecessor.jsonl");
-			writeFileSync(predecessor, "old activity");
-			const modified = new Date(now.getTime() - predecessorMinutes * 60_000);
-			utimesSync(predecessor, modified, modified);
-		}
-		const data = f.collect();
-		expect(data.assessment.freshness).toStartWith(
-			predecessorMinutes === 20 ? "STALE? 20 min" : "record up to date",
-		);
-		expect(renderStart(data, [])).toContain(data.assessment.freshness);
-		expect(recordFreshness(f.workspace, f.env)).toStartWith("STALE? 40 min");
-	});
+	test.skipIf(!REPORTS_BIRTHTIME)(
+		`start ignores its fresh transcript with predecessor ${predecessorMinutes} minutes ago while status still measures it`,
+		() => {
+			const f = fixture();
+			const dir = join(
+				f.env.home,
+				".claude/projects",
+				f.workspace.dir.replace(/[^A-Za-z0-9]/g, "-"),
+			);
+			mkdirSync(dir, { recursive: true });
+			const self = join(dir, "self.jsonl");
+			writeFileSync(self, "activity");
+			// A clock of its own, not the birth time: a second after the write.
+			const now = new Date(Date.now() + 1000);
+			f.env.clock = () => new Date(now);
+			const record = new Date(now.getTime() - 40 * 60_000);
+			for (const file of ["CURRENT.md", "journal.md"])
+				utimesSync(join(f.workspace.state, file), record, record);
+			utimesSync(self, now, now);
+			if (predecessorMinutes !== undefined) {
+				const predecessor = join(dir, "predecessor.jsonl");
+				writeFileSync(predecessor, "old activity");
+				const modified = new Date(now.getTime() - predecessorMinutes * 60_000);
+				utimesSync(predecessor, modified, modified);
+			}
+			const data = f.collect();
+			expect(data.assessment.freshness).toStartWith(
+				predecessorMinutes === 20 ? "STALE? 20 min" : "record up to date",
+			);
+			expect(renderStart(data, [])).toContain(data.assessment.freshness);
+			expect(recordFreshness(f.workspace, f.env)).toStartWith("STALE? 40 min");
+		},
+	);
 }
 
 test("start header uses the local date and UTC-3 offset at 23:30", () => {

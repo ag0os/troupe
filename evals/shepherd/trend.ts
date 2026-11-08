@@ -13,8 +13,15 @@
  */
 
 import { z } from "zod";
-import { type GitRunner, runGit } from "../../scripts/shepherd-source";
+import { type GitRunner, runGit } from "./build-source";
 import { EVALUATION_DIR } from "./identity";
+import {
+	type EvalLayout,
+	packagePath,
+	repositoryPath,
+	requireGitRoot,
+	toLayout,
+} from "./layout";
 import { MUST_IDS } from "./schema";
 import { RESULT_FILE } from "./verify";
 
@@ -88,12 +95,18 @@ function cells(row: Row, musts: string[]): string[] {
 	];
 }
 
-/** The trend at `HEAD` of the repository at `root`; throws when Git fails. */
+/**
+ * The trend at `HEAD` of the layout's package; throws outside Git and when
+ * Git fails. Result files are named as package paths.
+ */
 export function trendLines(
-	root: string,
+	at: string | EvalLayout,
 	options: { git?: GitRunner } = {},
 ): string[] {
 	const git = options.git ?? runGit;
+	const layout = toLayout(at);
+	requireGitRoot(layout, git);
+	const root = layout.gitRoot;
 	const run = (...args: string[]) => {
 		const out = git(args, root);
 		if (out.code !== 0)
@@ -106,10 +119,10 @@ export function trendLines(
 		"--name-only",
 		"HEAD",
 		"--",
-		`${EVALUATION_DIR}/results/`,
+		repositoryPath(layout, `${EVALUATION_DIR}/results/`),
 	)
 		.split("\0")
-		.filter((path) => RESULT_FILE.test(path));
+		.filter((path) => RESULT_FILE.test(packagePath(layout, path) ?? ""));
 	if (files.length === 0) return ["No result is committed at HEAD."];
 	const history = run("rev-list", "--date-order", "--reverse", "HEAD")
 		.split("\n")
@@ -123,7 +136,7 @@ export function trendLines(
 			parsed = record.safeParse(JSON.parse(run("show", `HEAD:${path}`)));
 		} catch {}
 		if (!parsed?.success) {
-			unreadable.push(path);
+			unreadable.push(packagePath(layout, path) ?? path);
 			continue;
 		}
 		const { evaluation: current, history: earlier } = parsed.data;

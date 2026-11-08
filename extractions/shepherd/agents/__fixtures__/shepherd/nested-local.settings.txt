@@ -1,0 +1,1 @@
+{"permissions":{"defaultMode":"default","allow":["Read(.shepherd/**)","Write(.shepherd/**)","Edit(.shepherd/**)","Bash(herdr:*)","Read(/<ROOT>/flock/.shepherd/**)"],"additionalDirectories":["<ROOT>/flock/.shepherd"]}}

@@ -23,24 +23,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { parseCli, resolveCli } from "../lib/agent-format/cli";
-import { installFakeClis, readRecords } from "../lib/agent-format/fake-cli";
-import { executeAgent, previewAgent } from "../lib/agent-format/run";
-import { PROMPT_SEPARATOR } from "../lib/agent-format/schema";
-import type {
-	AgentSpec,
-	Backend,
-	PrepareContext,
-} from "../lib/agent-format/types";
-import { parseModule } from "../lib/shepherd/module-format";
-import type { ToolEnv } from "../lib/shepherd/sessions";
-import { fakeToolEnv, makeTree } from "../lib/shepherd/test-support";
+import { parseCli, resolveCli } from "../lib/entries/cli";
 import {
 	generateEntry,
 	type LoadedAgent,
 	loadAgentDefinition,
 	planBuild,
-} from "../scripts/agent-compiler";
+} from "../lib/entries/compiler";
+import { PROMPT_SEPARATOR } from "../lib/entries/declaration";
+import { executeAgent, previewAgent } from "../lib/entries/runtime";
+import { installFakeClis, readRecords } from "../lib/entries/testing";
+import type { AgentSpec, Backend, PrepareContext } from "../lib/index";
+import { parseModule } from "../lib/shepherd/module-format";
+import type { ToolEnv } from "../lib/shepherd/sessions";
+import { fakeToolEnv, makeTree } from "../lib/shepherd/test-support";
+import { shepherdDefinition } from "../scripts/shepherd-definition";
 import * as shepherd from "./shepherd";
 
 const repo = resolve(import.meta.dir, "..");
@@ -104,7 +101,7 @@ function testToolEnv(ctx: PrepareContext): ToolEnv {
 beforeAll(async () => {
 	// The session header carries the date: pin it (fake time).
 	setSystemTime(new Date("2026-10-02T12:00:00Z"));
-	agent = await loadAgentDefinition(repo, SOURCE);
+	agent = await loadAgentDefinition(shepherdDefinition(repo), SOURCE);
 	root = realpathSync(mkdtempSync(join(tmpdir(), "shepherd-")));
 });
 
@@ -424,7 +421,7 @@ describe("declaration paired with its extension (D-001, D-015, AC #7)", () => {
 	});
 
 	test("builds the pair as declaration plus extension, never the hook as entry", async () => {
-		const plan = await planBuild({ root: repo });
+		const plan = await planBuild({ definition: shepherdDefinition(repo) });
 		const entries = plan.entries.filter((entry) => entry.id === "shepherd");
 		expect(entries).toHaveLength(1);
 		const [entry] = entries;

@@ -99,10 +99,20 @@ export class ShepherdSourceError extends Error {
 
 export const runGit = createGitRunner();
 
-export function gitStamp(git: GitRunner = runGit): StampSource {
+/** This module's path: a change to it always needs an eval result. */
+export const IDENTITY_MODULE = "scripts/shepherd-source.ts";
+
+/** Modules whose change always needs an eval result, whatever the path policy says. */
+export const GATED_MODULES: readonly string[] = [IDENTITY_MODULE];
+
+/** The v1 stamp; with `layout`, of the package at its prefix. */
+export function gitStamp(
+	git: GitRunner = runGit,
+	layout?: SourceLayout,
+): StampSource {
 	return {
-		capture: (root) => captureProvenance(root, { git }),
-		recheck: (root) => readWorktreeSource(root, { git }),
+		capture: (root) => captureProvenance(root, { git, layout }),
+		recheck: (root) => readWorktreeSource(root, { git, layout }),
 	};
 }
 
@@ -133,6 +143,17 @@ export function legacyStampPolicy(
 		versionLine: (_agentId, captured) => versionLine(provenanceOf(captured)),
 	};
 }
+
+/**
+ * The package-relative path a manifest entry names, or undefined for an
+ * entry outside the package. v1 entries are package paths already.
+ */
+export function entryPackagePath(entryPath: string): string | undefined {
+	return entryPath;
+}
+
+/** Whether manifest entries record that a file was untracked. v1's do. */
+export const RECORDS_UNTRACKED = true;
 
 /** The one line `shepherd --version` prints, without its newline. */
 export function versionLine(provenance: BuildProvenance): string {

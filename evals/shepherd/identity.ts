@@ -1,9 +1,11 @@
 /**
  * Evaluation identity (spec 6.2): which harness, rubric and policy judged a
  * Shepherd build. It hashes every file beneath `evals/shepherd/` except
- * results, artifacts, validation output and Python bytecode, with section
- * 1's framing under its own domain. Membership follows the source manifest:
- * Git's tracked and nonignored untracked files, read from the working tree.
+ * results, artifacts, validation output and Python bytecode, and each
+ * always gated module the build identity does not select (the eval seam),
+ * with section 1's framing under its own domain. Membership follows the
+ * source manifest: Git's tracked and nonignored untracked files, read from
+ * the working tree.
  */
 
 import { createHash } from "node:crypto";
@@ -12,17 +14,28 @@ import { join } from "node:path";
 import {
 	compareUtf8,
 	framedDigest,
+	GATED_MODULES,
 	type GitRunner,
+	isSourcePath,
 	type ManifestEntry,
 	runGit,
 	ShepherdSourceError,
 	type SourceFile,
 	type SourceLayout,
-} from "../../scripts/shepherd-source";
+} from "./build-source";
 
 export const EVALUATION_DOMAIN = "troupe-shepherd-evals-v1";
 export const HARNESS_VERSION = 1;
 export const EVALUATION_DIR = "evals/shepherd";
+
+/**
+ * Gated modules outside the build identity, such as the package's eval
+ * seam: what they change is how the evals build and judge, so the
+ * evaluation identity hashes them.
+ */
+export const EVALUATION_MODULES: readonly string[] = GATED_MODULES.filter(
+	(path) => !isSourcePath(path),
+);
 
 /** Directories directly beneath `evals/shepherd/` that hold outputs. */
 const OUTPUT_DIRS = ["results", "artifacts", "validation"];
@@ -96,7 +109,9 @@ export function evaluationIdentity(
 		"--exclude-standard",
 		"-z",
 		"--",
-		prefix === "" ? EVALUATION_DIR : `${prefix}/${EVALUATION_DIR}`,
+		...[EVALUATION_DIR, ...EVALUATION_MODULES].map((path) =>
+			prefix === "" ? path : `${prefix}/${path}`,
+		),
 	];
 	const untracked = new Set(
 		strip(gitPaths(git, ["ls-files", "--others", ...selection], topPath)),
@@ -114,7 +129,9 @@ export function evaluationIdentity(
 		? [`${EVALUATION_DIR}: expected a directory of evaluation files`]
 		: [];
 	const files: SourceFile[] = [];
-	for (const path of [...listed].filter(isEvaluationPath)) {
+	for (const path of [...listed].filter(
+		(path) => isEvaluationPath(path) || EVALUATION_MODULES.includes(path),
+	)) {
 		const parts = path.split("/");
 		const linked = parts
 			.map((_, i) => parts.slice(0, i + 1).join("/"))

@@ -3,7 +3,7 @@
  * (spec 6.1, R2). Every text file is redacted first, within its lines and to
  * a fixpoint of its structural and text rules together, so no line is added
  * or removed and evidence line numbers hold:
- * - the home directory, the repository root and other host paths outside
+ * - the home directory, the repository and package roots and other host paths outside
  *   the run's scratch root become an explicit marker, whole path token by
  *   token, including tokens written with JSON `\uXXXX` escapes;
  * - the home path's slug spelling becomes a marker everywhere, kept scratch
@@ -116,7 +116,10 @@ export interface RedactionContext {
 	scratchRoot: string;
 	/** Redacted wherever it appears, even before a space, and as a slug. */
 	home: string;
+	/** The repository's top level, redacted wherever it appears. */
 	repoRoot?: string;
+	/** The package directory, redacted too when it is not the repository root. */
+	packageRoot?: string;
 	/** Email marker numbers by address, shared by one attempt's artifacts. */
 	emails?: Map<string, number>;
 }
@@ -249,7 +252,11 @@ function redactOnce(
 	for (const spelling of spellings) kept.push(...occurrences(text, spelling));
 	const redacted: [number, number, string][] = [];
 	const spans = (): Span[] => redacted.map(([a, b]) => [a, b]);
-	for (const prefix of [context.home, context.repoRoot ?? ""]) {
+	for (const prefix of [
+		context.home,
+		context.repoRoot ?? "",
+		context.packageRoot ?? "",
+	]) {
 		for (const spelling of spelled(prefix.replace(/\/$/, ""))) {
 			for (const span of occurrences(text, spelling)) {
 				if (!overlaps(kept, span) && !overlaps(spans(), span))

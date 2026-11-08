@@ -16,15 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createGitRunner,
+	GATED_MODULES,
+	IDENTITY_MODULE,
+	RECORDS_UNTRACKED,
 	readWorktreeSource,
-} from "../../scripts/shepherd-source";
-import {
-	git,
-	initShepherdRepo,
-	TEST_GIT_ENV,
-	testGit,
-	writeAt,
-} from "../../scripts/shepherd-source-fixture";
+} from "./build-source";
 import { artifactType } from "./export";
 import {
 	binaryValues,
@@ -38,7 +34,7 @@ import {
 	type GatedPathPolicy,
 	isGatedPath,
 } from "./gated-paths";
-import { evaluationIdentity } from "./identity";
+import { EVALUATION_MODULES, evaluationIdentity } from "./identity";
 import {
 	type Attempt,
 	loadRubric,
@@ -50,12 +46,22 @@ import {
 } from "./schema";
 import { buildPacket, PACKET_FILES, validateDecisions } from "./scorer";
 import {
+	FIXTURE_FRAMEWORK_PATH,
+	git,
+	initShepherdRepo,
+	SAMPLE_SOURCE_PATHS,
+	TEST_GIT_ENV,
+	testGit,
+	writeAt,
+} from "./source-fixture";
+import {
 	attempt,
 	behavioral,
 	invocation,
 	RUN_ID,
 	result,
 	scorerOutput,
+	versionLineAt,
 } from "./testing";
 import {
 	ALWAYS_GATED,
@@ -171,7 +177,7 @@ function writeResult(
 		build.revision = revision;
 		build.dirty = false;
 		build.sourceDirty = false;
-		build.version = `shepherd revision=${revision} dirty=false source=${source.source}\n`;
+		build.version = `${versionLineAt(root, { revision, dirty: false, sourceDirty: false, manifest: source })}\n`;
 	}
 	for (const trial of evaluation.trials) {
 		for (const attempt of trial.attempts) {
@@ -338,22 +344,7 @@ function runManifest(attempt: Attempt) {
 }
 
 describe("gated paths (7.3)", () => {
-	const SOURCE = [
-		"agents/shepherd.md",
-		"agents/shepherd.ts",
-		"system-prompts/shepherd/core.md",
-		"system-prompts/shepherd/integrations/herdr.md",
-		"lib/shepherd/tool.ts",
-		"lib/agent-format/cli.ts",
-		"scripts/compile.ts",
-		"scripts/compile-all.ts",
-		"scripts/agent-compiler.ts",
-		"scripts/binary-name.ts",
-		"scripts/shepherd-source.ts",
-		"package.json",
-		"bun.lock",
-		"tsconfig.json",
-	];
+	const SOURCE = SAMPLE_SOURCE_PATHS;
 	const EVALUATION = [
 		"evals/shepherd/policy.json",
 		"evals/shepherd/rubric.json",
@@ -447,7 +438,7 @@ describe("changed paths (7.2)", () => {
 		const base = head();
 		git(root, "mv", "lib/shepherd/tool.ts", "docs/tool.ts");
 		git(root, "mv", "docs/notes.md", "system-prompts/shepherd/notes.md");
-		git(root, "rm", "-q", "lib/agent-format/run.ts");
+		git(root, "rm", "-q", FIXTURE_FRAMEWORK_PATH);
 		writeAt(root, "docs/odd name\twith tab é.md", "odd\n");
 		const tip = commitAll("renames");
 		const { paths } = changedPaths(root, base, tip, { git: testGit });
@@ -456,16 +447,18 @@ describe("changed paths (7.2)", () => {
 				"docs/notes.md",
 				"docs/odd name\twith tab é.md",
 				"docs/tool.ts",
-				"lib/agent-format/run.ts",
+				FIXTURE_FRAMEWORK_PATH,
 				"lib/shepherd/tool.ts",
 				"system-prompts/shepherd/notes.md",
 			].sort(),
 		);
-		expect(paths.filter((path) => isGatedPath(path)).sort()).toEqual([
-			"lib/agent-format/run.ts",
-			"lib/shepherd/tool.ts",
-			"system-prompts/shepherd/notes.md",
-		]);
+		expect(paths.filter((path) => isGatedPath(path)).sort()).toEqual(
+			[
+				FIXTURE_FRAMEWORK_PATH,
+				"lib/shepherd/tool.ts",
+				"system-prompts/shepherd/notes.md",
+			].sort(),
+		);
 	});
 
 	test("an unresolvable revision or a missing merge base fails closed", () => {
@@ -660,6 +653,65 @@ describe("verification (7.4)", () => {
 		);
 	});
 
+	test("a gated module the build identity does not select makes the result stale", () => {
+		for (const path of EVALUATION_MODULES) {
+			writeAt(root, path, "export const seam = 1;\n");
+			commitAll(`add ${path}`);
+			const { value } = writeResult();
+			writeAt(root, path, "export const seam = 2;\n");
+			const outcome = verify();
+			expect([path, outcome.found, outcome.problems]).toEqual([path, true, []]);
+			expect(outcome.stale).toMatchObject({
+				recorded: value.evaluation.hash,
+				current: evaluationIdentity(root, { git: testGit }).hash,
+			});
+			expect(outcome.stale?.recorded).not.toBe(outcome.stale?.current);
+		}
+	});
+
+	test("a recorded entry's executable status must be the identity's: v2 on every entry, v1 on none", () => {
+		const entries = readWorktreeSource(root, { git: testGit }).entries;
+		const framed = entries.every((entry) => "executable" in entry);
+		expect(framed || entries.every((entry) => !("executable" in entry))).toBe(
+			true,
+		);
+		const path = entries[0]?.path ?? "";
+		const edits: [string, (entry: Record<string, unknown>) => void, string][] =
+			framed
+				? [
+						[
+							"flipped",
+							(entry) => {
+								entry.executable = !entry.executable;
+							},
+							`manifest: ${path}: executable status differs at head`,
+						],
+						[
+							"removed",
+							(entry) => {
+								delete entry.executable;
+							},
+							`manifest: ${path}: records no executable status, which this identity frames`,
+						],
+					]
+				: [
+						[
+							"added",
+							(entry) => {
+								entry.executable = false;
+							},
+							`manifest: ${path}: records an executable status this identity does not frame`,
+						],
+					];
+		for (const [name, edit, problem] of edits) {
+			writeResult((value) => {
+				const entry = value.source.manifest.find((e) => e.path === path);
+				if (entry) edit(entry as Record<string, unknown>);
+			});
+			expect([name, verify().problems]).toEqual([name, [problem]]);
+		}
+	});
+
 	test("a recorded rubric hash, policy or scorer that differs from the tree fails", () => {
 		writeResult((value) => {
 			value.evaluation.rubricSha256 = `sha256:${"1".repeat(64)}`;
@@ -842,7 +894,12 @@ describe("verification (7.4)", () => {
 			if (build) {
 				build.dirty = true;
 				build.sourceDirty = true;
-				build.version = build.version.replace("dirty=false", "dirty=true");
+				build.version = `${versionLineAt(root, {
+					revision: build.revision,
+					dirty: true,
+					sourceDirty: true,
+					manifest: { source: value.source.hash, entries: [] },
+				})}\n`;
 			}
 		});
 		const outcome = verify();
@@ -886,7 +943,10 @@ describe("verification (7.4)", () => {
 		commitAll("stage the new source");
 		const outcome = verify();
 		expect(outcome.problems).toEqual([]);
-		expect(text(outcome.notes)).toContain("lib/shepherd/new.ts");
+		// Reported where the identity records untracked entries (v1).
+		expect(text(outcome.notes).includes("lib/shepherd/new.ts")).toBe(
+			RECORDS_UNTRACKED,
+		);
 	});
 
 	test("an untracked source entry cannot silently disappear", () => {
@@ -940,12 +1000,18 @@ describe("fix round 1 (review-c4)", () => {
 		writeFileSync(join(dir, name), text);
 
 	test("F1: the core files are gated whatever the policy predicates say", () => {
-		expect([...ALWAYS_GATED].sort()).toEqual([
-			"evals/shepherd/gated-paths.ts",
-			"evals/shepherd/identity.ts",
-			"evals/shepherd/verify.ts",
-			"scripts/shepherd-source.ts",
-		]);
+		expect([...ALWAYS_GATED].sort()).toEqual(
+			[
+				"evals/shepherd/gated-paths.ts",
+				"evals/shepherd/identity.ts",
+				"evals/shepherd/verify.ts",
+				...GATED_MODULES,
+			].sort(),
+		);
+		expect(GATED_MODULES).toContain(IDENTITY_MODULE);
+		for (const path of GATED_MODULES) {
+			expect([path, isGatedPath(path)]).toEqual([path, true]);
+		}
 		for (const path of ALWAYS_GATED) {
 			const base = head();
 			writeAt(root, path, `// changed ${path}\n`);

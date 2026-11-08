@@ -3,6 +3,7 @@
  * here runs a model or reads a real workspace.
  */
 
+import { type BuildProvenance, versionLine } from "./build-source";
 import {
 	type Attempt,
 	type AttemptKind,
@@ -17,6 +18,21 @@ import {
 	type ScorerInvocation,
 	totalCost,
 } from "./schema";
+
+/**
+ * The version line of a build of the package at `packageRoot`, which a
+ * layout whose line reads the package's lockfile needs.
+ */
+export function versionLineAt(
+	packageRoot: string,
+	provenance: BuildProvenance,
+): string {
+	const located: BuildProvenance & { packageRoot?: string } = {
+		...provenance,
+		packageRoot,
+	};
+	return versionLine(located);
+}
 
 const rubric = loadRubric();
 export const TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"];

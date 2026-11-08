@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { CommandResult } from "../agent-format/types";
+import type { CommandResult } from "../index";
 import {
 	type Config,
 	DEFAULT_HANDOFF_CEILINGS,

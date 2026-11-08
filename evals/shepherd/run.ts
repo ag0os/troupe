@@ -32,6 +32,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
 	chmodSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -42,10 +43,13 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { type Builder, compileAgent } from "../../scripts/agent-compiler";
 import {
+	type Builder,
 	type BuildProvenance,
+	compileAgent,
+	entryPackagePath,
 	type GitRunner,
+	gitStamp,
 	readWorktreeSource,
 	runGit,
 	SHEPHERD_ID,
@@ -53,9 +57,16 @@ import {
 	type StampSource,
 	sameSource,
 	versionLine,
-} from "../../scripts/shepherd-source";
+} from "./build-source";
 import { runGate, type ScoreJob } from "./gate";
 import { type EvaluationIdentity, evaluationIdentity } from "./identity";
+import {
+	defaultLayout,
+	type EvalLayout,
+	requireGitRoot,
+	sourceLayout,
+	toLayout,
+} from "./layout";
 import { canonicalJson, GATE_TRIALS, loadRubric, policyHash } from "./schema";
 
 export { canonicalJson };
@@ -69,9 +80,28 @@ import {
 } from "./scorer";
 import { trendLines } from "./trend";
 
+/** This harness's own directory: its scripts, policy, rubric and prompt. */
 export const EVALS_DIR = dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = resolve(EVALS_DIR, "../..");
-const RUBRIC = join(EVALS_DIR, "rubric.json");
+
+/**
+ * Refuse a run whose layout's evals directory is not this harness: a run
+ * executes these scripts, so it may only hash and record their identity.
+ * Trend, verify and export read other roots and do not call this.
+ */
+export function requireExecutedHarness(layout: EvalLayout): void {
+	const real = (path: string) => {
+		try {
+			return realpathSync(path);
+		} catch {
+			return resolve(path);
+		}
+	};
+	if (real(layout.evalsDir) !== real(EVALS_DIR)) {
+		throw new Error(
+			`Refusing to run: the layout's evals directory ${layout.evalsDir} is not the harness that would run, ${EVALS_DIR}. Run the evals/shepherd/run.ts beneath the package you evaluate.`,
+		);
+	}
+}
 
 /** The fixed subject and execution policy (spec 5.1), from `policy.json`. */
 export interface Policy {
@@ -108,10 +138,13 @@ export function loadPolicy(dir = EVALS_DIR): { policy: Policy; hash: string } {
 	return { policy, hash: policyHash(policy) };
 }
 
-function refuseInside(root: string, path: string, what: string): void {
-	const top = realpathSync(root);
-	if (path === top || path.startsWith(top + sep)) {
-		throw new Error(`Refusing a ${what} inside the repository: ${path}`);
+/** Refuse `path` inside the package or the repository that holds it. */
+function refuseInside(layout: EvalLayout, path: string, what: string): void {
+	for (const root of [layout.gitRoot, layout.packageRoot]) {
+		const top = realpathSync(root);
+		if (path === top || path.startsWith(top + sep)) {
+			throw new Error(`Refusing a ${what} inside the repository: ${path}`);
+		}
 	}
 }
 
@@ -149,12 +182,13 @@ export function checkScratch(dir: string): void {
 
 /** A fresh run directory beneath the resolved, isolated scratch parent. */
 export function prepareRun(options: {
-	root: string;
+	/** The layout, or a repository top that is the package. */
+	root: string | EvalLayout;
 	scratchParent: string;
 	artifactRoot?: string;
 }): RunPaths {
 	const parent = realpathSync(options.scratchParent);
-	refuseInside(options.root, parent, "scratch directory");
+	refuseInside(toLayout(options.root), parent, "scratch directory");
 	checkScratch(parent);
 	const stamp = new Date().toISOString().replace(/[-:]|\.\d+/g, "");
 	const runId = `${stamp}-${randomBytes(3).toString("hex")}`;
@@ -169,31 +203,132 @@ export function prepareRun(options: {
 	return { runId, runDir, artifactRoot };
 }
 
+/** A subject's runtime packages, copied read only beside its `bin/`. */
+export interface PackageSnapshot {
+	/** Resolved `<subject>/packages`, where the binary reads base packages. */
+	dir: string;
+	/** Package-relative paths (`packages/...`) with their frozen bytes and modes. */
+	files: { path: string; sha256: string; executable: boolean }[];
+}
+
+const PACKAGES = "packages";
+
+/** Every file and directory beneath `dir`, directories after their contents. */
+function walk(dir: string, prefix = ""): { path: string; dir: boolean }[] {
+	const out: { path: string; dir: boolean }[] = [];
+	for (const name of readdirSync(dir).sort()) {
+		const path = prefix === "" ? name : `${prefix}/${name}`;
+		if (lstatSync(join(dir, name)).isDirectory()) {
+			out.push(...walk(join(dir, name), path), { path, dir: true });
+		} else out.push({ path, dir: false });
+	}
+	return out;
+}
+
 /**
- * Build Shepherd into `<runDir>/bin/shepherd` and return its resolved path,
- * the path every provenance marker must name.
+ * Copy the build manifest's `packages/` entries from the package into
+ * `into`, refusing any whose bytes changed since the manifest was read, and
+ * make the copy read only: files keep their executable status, nothing in
+ * the tree stays writable, so a later source edit never reaches the subject.
+ */
+export function snapshotPackages(options: {
+	packageRoot: string;
+	manifest: SourceManifest;
+	into: string;
+}): PackageSnapshot {
+	mkdirSync(dirname(options.into), { recursive: true });
+	mkdirSync(options.into);
+	const files: PackageSnapshot["files"] = [];
+	for (const entry of options.manifest.entries) {
+		const path = entryPackagePath(entry.path);
+		if (path === undefined || !path.startsWith(`${PACKAGES}/`)) continue;
+		const bytes = readFileSync(join(options.packageRoot, path));
+		if (sha256(bytes) !== entry.sha256) {
+			throw new Error(
+				`Runtime package file changed after the build read it: ${path}`,
+			);
+		}
+		const executable =
+			entry.executable ??
+			(lstatSync(join(options.packageRoot, path)).mode & 0o100) !== 0;
+		const to = join(options.into, path.slice(PACKAGES.length + 1));
+		mkdirSync(dirname(to), { recursive: true });
+		writeFileSync(to, bytes, { flag: "wx" });
+		chmodSync(to, executable ? 0o555 : 0o444);
+		files.push({ path, sha256: entry.sha256, executable });
+	}
+	for (const item of walk(options.into)) {
+		if (item.dir) chmodSync(join(options.into, item.path), 0o555);
+	}
+	chmodSync(options.into, 0o555);
+	return { dir: realpathSync(options.into), files };
+}
+
+/** Why a snapshot no longer holds its frozen files, bytes and modes; empty when it does. */
+export function snapshotChanges(snapshot: PackageSnapshot): string[] {
+	const expected = new Map(snapshot.files.map((file) => [file.path, file]));
+	const reasons: string[] = [];
+	const seen = new Set<string>();
+	for (const item of walk(snapshot.dir)) {
+		if (item.dir) continue;
+		const path = `${PACKAGES}/${item.path}`;
+		seen.add(path);
+		const file = expected.get(path);
+		const full = join(snapshot.dir, item.path);
+		if (!file) reasons.push(`runtime package file added: ${path}`);
+		else if (sha256(readFileSync(full)) !== file.sha256)
+			reasons.push(`runtime package bytes changed: ${path}`);
+		else if (((lstatSync(full).mode & 0o111) !== 0) !== file.executable)
+			reasons.push(`runtime package executable status changed: ${path}`);
+	}
+	for (const path of expected.keys()) {
+		if (!seen.has(path)) reasons.push(`runtime package file removed: ${path}`);
+	}
+	return reasons;
+}
+
+/**
+ * Build Shepherd into `<runDir>/<subject>/bin/shepherd`, snapshot its
+ * runtime packages beside that `bin/`, and return the binary's resolved
+ * path, the path every provenance marker must name.
  */
 export async function buildSubject(options: {
-	root: string;
+	/** The layout, or a repository top that is the package. */
+	root: string | EvalLayout;
 	runDir: string;
 	build?: Builder;
 	stamp?: StampSource;
 	signal?: AbortSignal;
-}): Promise<{ subject: string; provenance: BuildProvenance }> {
+}): Promise<{
+	subject: string;
+	provenance: BuildProvenance;
+	packages: PackageSnapshot;
+}> {
+	const layout = toLayout(options.root);
 	const runDir = realpathSync(options.runDir);
-	refuseInside(options.root, runDir, "build directory");
-	const outFile = join(runDir, "bin", SHEPHERD_ID);
-	mkdirSync(dirname(outFile));
+	refuseInside(layout, runDir, "build directory");
+	const install = join(runDir, layout.subject);
+	const outFile = join(install, "bin", SHEPHERD_ID);
+	mkdirSync(dirname(outFile), { recursive: true });
 	const built = await compileAgent({
-		root: options.root,
+		root: layout.packageRoot,
 		file: "agents/shepherd.md",
 		outFile,
 		build: options.build,
-		stamp: options.stamp,
+		stamp: options.stamp ?? gitStamp(runGit, sourceLayout(layout)),
 		signal: options.signal,
 	});
 	if (!built.provenance) throw new Error("The Shepherd build has no stamp");
-	return { subject: realpathSync(outFile), provenance: built.provenance };
+	const packages = snapshotPackages({
+		packageRoot: layout.packageRoot,
+		manifest: built.provenance.manifest,
+		into: join(install, PACKAGES),
+	});
+	return {
+		subject: realpathSync(outFile),
+		provenance: built.provenance,
+		packages,
+	};
 }
 
 /** The environment for fixture tools and subjects: the subject first on PATH. */
@@ -241,11 +376,14 @@ export interface Frozen {
 	/** The run configuration every harness process reads. */
 	config: string;
 	configSha256: string;
+	/** The subject's runtime package snapshot, when the run built one. */
+	packages?: PackageSnapshot;
 	frozenAt: string;
 }
 
 export function freeze(options: {
-	root: string;
+	/** The layout, or a repository top that is the package. */
+	root: string | EvalLayout;
 	runId: string;
 	config: string;
 	subject: string;
@@ -253,9 +391,11 @@ export function freeze(options: {
 	versionOutput: string;
 	policy: Policy;
 	policyHash: string;
+	packages?: PackageSnapshot;
 	git?: GitRunner;
 	rubric?: string;
 }): Frozen {
+	const layout = toLayout(options.root);
 	const expected = `${versionLine(options.provenance)}\n`;
 	if (options.versionOutput !== expected) {
 		throw new Error(
@@ -271,12 +411,16 @@ export function freeze(options: {
 		dirty: options.provenance.dirty,
 		sourceDirty: options.provenance.sourceDirty,
 		manifest: options.provenance.manifest,
-		evaluation: evaluationIdentity(options.root, { git: options.git }),
+		evaluation: evaluationIdentity(layout.packageRoot, {
+			git: options.git,
+			layout: sourceLayout(layout),
+		}),
 		policy: options.policy,
 		policyHash: options.policyHash,
-		rubricSha256: `sha256:${sha256(readFileSync(options.rubric ?? RUBRIC))}`,
+		rubricSha256: `sha256:${sha256(readFileSync(options.rubric ?? join(layout.evalsDir, "rubric.json")))}`,
 		config: options.config,
 		configSha256: sha256(readFileSync(options.config)),
+		...(options.packages ? { packages: options.packages } : {}),
 		frozenAt: new Date().toISOString(),
 	};
 }
@@ -284,9 +428,12 @@ export function freeze(options: {
 /** Why the frozen inputs no longer hold; empty when they do. */
 export function recheck(
 	frozen: Frozen,
-	options: { root: string; git?: GitRunner },
+	options: { root: string | EvalLayout; git?: GitRunner },
 ): string[] {
 	const git = options.git ?? runGit;
+	const layout = toLayout(options.root);
+	const at = { git, layout: sourceLayout(layout) };
+	const rubric = join(layout.evalsDir, "rubric.json");
 	const reasons: string[] = [];
 	const attempt = (what: string, check: () => string | undefined) => {
 		try {
@@ -309,18 +456,27 @@ export function recheck(
 			: `run configuration changed after freezing: ${frozen.config}`,
 	);
 	attempt("rubric", () =>
-		`sha256:${sha256(readFileSync(RUBRIC))}` === frozen.rubricSha256
+		`sha256:${sha256(readFileSync(rubric))}` === frozen.rubricSha256
 			? undefined
-			: `rubric changed after freezing: ${RUBRIC}`,
+			: `rubric changed after freezing: ${rubric}`,
 	);
+	const packages = frozen.packages;
+	if (packages) {
+		attempt("runtime packages", () => {
+			const changes = snapshotChanges(packages);
+			return changes.length === 0
+				? undefined
+				: `runtime package snapshot changed after freezing: ${changes.join("; ")}`;
+		});
+	}
 	attempt("source identity", () => {
-		const now = readWorktreeSource(options.root, { git });
+		const now = readWorktreeSource(layout.packageRoot, at);
 		return sameSource(now, frozen.manifest)
 			? undefined
 			: `source identity changed: frozen ${frozen.manifest.source}, now ${now.source}`;
 	});
 	attempt("evaluation identity", () => {
-		const now = evaluationIdentity(options.root, { git });
+		const now = evaluationIdentity(layout.packageRoot, at);
 		return now.hash === frozen.evaluation.hash
 			? undefined
 			: `evaluation identity changed: frozen ${frozen.evaluation.hash}, now ${now.hash}`;
@@ -520,7 +676,7 @@ export function lateStart(now: Date): string | undefined {
 }
 
 const USAGE =
-	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>]\n       bun run evals:shepherd --validation --trials <trial>[,<trial>...] [--scratch <dir>]\n       bun run evals:shepherd --trend";
+	"Usage: bun run evals:shepherd [--check] [--scratch <dir>] [--artifacts <dir>] [layout]\n       bun run evals:shepherd --validation --trials <trial>[,<trial>...] [--scratch <dir>] [layout]\n       bun run evals:shepherd --trend [--package-root <dir>] [--git-root <dir>]\nLayout: [--package-root <dir>] [--git-root <dir>] [--subject-dir <relative dir>]";
 
 async function main(): Promise<number> {
 	const startedAt = Date.now();
@@ -531,9 +687,17 @@ async function main(): Promise<number> {
 		console.error(`${(error as Error).message}\n${USAGE}`);
 		return 2;
 	}
+	const layout = defaultLayout(parsed.layout);
+	requireGitRoot(layout);
 	if (parsed.trend) {
-		for (const line of trendLines(REPO_ROOT)) console.log(line);
+		for (const line of trendLines(layout)) console.log(line);
 		return 0;
+	}
+	try {
+		requireExecutedHarness(layout);
+	} catch (error) {
+		console.error((error as Error).message);
+		return 2;
 	}
 	const controller = new AbortController();
 	let interrupted = 0;
@@ -557,8 +721,8 @@ async function main(): Promise<number> {
 		console.error(late);
 		return 2;
 	}
-	const { policy, hash } = loadPolicy();
-	const root = REPO_ROOT;
+	const { policy, hash } = loadPolicy(layout.evalsDir);
+	const root = layout;
 	if (parsed.check) {
 		for (const name of ["run-trial.sh", "fixtures.sh"]) {
 			const syntax = spawnSync("bash", ["-n", join(EVALS_DIR, name)], {
@@ -574,7 +738,7 @@ async function main(): Promise<number> {
 	});
 	console.log(`Run directory (retained): ${run.runDir}`);
 	checkScratch(run.runDir);
-	const { subject, provenance } = await buildSubject({
+	const { subject, provenance, packages } = await buildSubject({
 		root,
 		runDir: run.runDir,
 		signal: controller.signal,
@@ -589,6 +753,7 @@ async function main(): Promise<number> {
 		versionOutput: readVersion(subject),
 		policy,
 		policyHash: hash,
+		packages,
 	});
 	console.log(`Subject: ${subject}\n${frozen.version.trimEnd()}`);
 	const deadline = startedAt + policy.invocationTimeoutSeconds * 1000;
@@ -635,7 +800,7 @@ async function main(): Promise<number> {
 	const { cliVersion } = checkIsolation(scorer);
 	const waves: Awaited<ReturnType<typeof runTrials>>[] = [];
 	const { result } = await runGate({
-		evalsDir: EVALS_DIR,
+		layout,
 		validation: parsed.validation ? { trials: parsed.validation } : undefined,
 		sourceHash: frozen.manifest.source,
 		manifest: frozen.manifest.entries,
@@ -665,7 +830,7 @@ async function main(): Promise<number> {
 		scratchRoot: run.runDir,
 		artifactRoot: run.artifactRoot,
 		home: homedir(),
-		rubric: loadRubric(),
+		rubric: loadRubric(join(layout.evalsDir, "rubric.json")),
 		deadline,
 		runWave: async (jobs) => {
 			if (controller.signal.aborted) return [];
@@ -719,8 +884,8 @@ async function main(): Promise<number> {
 	console.log(
 		`Result: ${result.outcome}, ${
 			parsed.validation
-				? join(EVALS_DIR, "validation", hex, run.runId, "result.json")
-				: join(EVALS_DIR, "results", `${hex}.json`)
+				? join(layout.evalsDir, "validation", hex, run.runId, "result.json")
+				: join(layout.evalsDir, "results", `${hex}.json`)
 		}`,
 	);
 	if (interrupted) return interrupted;
@@ -736,6 +901,9 @@ export function parseOptions(argv: string[]) {
 			trend: { type: "boolean", default: false },
 			scratch: { type: "string" },
 			artifacts: { type: "string" },
+			"package-root": { type: "string" },
+			"git-root": { type: "string" },
+			"subject-dir": { type: "string" },
 			validation: { type: "boolean", multiple: true },
 			trials: { type: "string", multiple: true },
 		},
@@ -758,10 +926,11 @@ export function parseOptions(argv: string[]) {
 			values.validation ||
 			values.trials !== undefined ||
 			values.scratch !== undefined ||
-			values.artifacts !== undefined)
+			values.artifacts !== undefined ||
+			values["subject-dir"] !== undefined)
 	) {
 		throw new Error(
-			"--trend reads committed results only; it takes no other option",
+			"--trend reads committed results only; it takes no other option, the layout flags --package-root and --git-root aside",
 		);
 	}
 	if (values.check && values.artifacts) {
@@ -802,6 +971,11 @@ export function parseOptions(argv: string[]) {
 		scratch: values.scratch ?? tmpdir(),
 		artifacts: values.artifacts,
 		validation,
+		layout: {
+			packageRoot: values["package-root"],
+			gitRoot: values["git-root"],
+			subject: values["subject-dir"],
+		},
 	};
 }
 

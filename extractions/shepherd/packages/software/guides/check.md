@@ -1,0 +1,13 @@
+# Guide: the software cycle, steps 6 and 7
+
+The module keeps each step's name, completion criterion, the user's part and its safety rules, which a brief that sends a delegate here must state itself. This guide holds the rest of steps 6 and 7, in order. Which checks each shape runs is the shape table's Checks row, in `shepherd tool guide software build`.
+
+## 6. Checks before done
+
+Mutation and the health checks are what measure a change's real effect on the tests and the codebase; the method needs them. Where a project cannot run them yet, red tests are the fallback, the gap is named in every done report, and getting the tool is put to the user. Where runtime effects matter (migrations, jobs, imports), a safe dry run against real conditions beats another reading. Report whether the Contract is met and what it covers; coverage nobody measured is unknown, not a number. Say what remains unexercised.
+
+Adding a subject is part of the build. A machine check fails a pull request whose added code the mutation tool will not mutate, unless the pull request carries an accepted reason: a tool limit, or a dated path with a size cap. CI lists the subjects on the base and on the tip, so a removed or renamed subject fails closed. A scheduled full run on main carries what a scoped run leaves out: its survivor delta against the accepted list opens an issue, triaged at the weekly re-anchor, each survivor either equivalent with its reason or a sentence the Contract lacks, written with its test.
+
+## 7. Review by blast radius
+
+A finding that the Contract was wrong or silent enters the Contract the way a bug does: the sentence, its test, then the fix. After a fix round, review again at the depth you chose.

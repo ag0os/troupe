@@ -9,17 +9,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	framedDigest,
-	ShepherdSourceError,
-} from "../../scripts/shepherd-source";
-import { git, testGit, writeAt } from "../../scripts/shepherd-source-fixture";
+import { framedDigest, ShepherdSourceError } from "./build-source";
 import {
 	EVALUATION_DOMAIN,
 	evaluationIdentity,
 	HARNESS_VERSION,
 	isEvaluationPath,
 } from "./identity";
+import { git, testGit, writeAt } from "./source-fixture";
 
 let root: string;
 

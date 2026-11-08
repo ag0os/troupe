@@ -132,6 +132,23 @@ describe("currentItems", () => {
 		});
 	});
 
+	test("drops one leading separator: colon, em dash, en dash, hyphen or none", () => {
+		const em = String.fromCodePoint(0x2014);
+		const en = String.fromCodePoint(0x2013);
+		const separators = [":", em, en, "-", ""];
+		const text = separators
+			.map((separator) => `- **NEXT** ${separator} the entry text`)
+			.join("\n");
+		expect(
+			currentItems(`## Items\n${text}\n`).items.map((item) => item.text),
+		).toEqual(separators.map(() => "the entry text"));
+		// Only one, and only at the start.
+		expect(
+			currentItems(`## Items\n- **NEXT** ${em}${em} a ${en} b\n`).items[0]
+				?.text,
+		).toBe(`${em} a ${en} b`);
+	});
+
 	test("takes the label as slug when the link is not a work item path", () => {
 		const parsed = currentItems(
 			"## Items\n- **NEXT** [evals](other/place/STATUS.md): x\n",

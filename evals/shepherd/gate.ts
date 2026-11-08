@@ -22,7 +22,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
 	exportAttempt,
 	homeSlugs,
@@ -33,6 +33,7 @@ import {
 	setAsidePartial,
 	writeArtifact,
 } from "./export";
+import { type EvalLayout, redactedRoots } from "./layout";
 import {
 	type Artifact,
 	type Attempt,
@@ -96,8 +97,12 @@ export interface Scored {
 }
 
 export interface GateOptions {
-	/** Holds `results/` and `artifacts/`: `evals/shepherd/` in the repository. */
-	evalsDir: string;
+	/**
+	 * Where results and evidence go (`layout.evalsDir` holds `results/`,
+	 * `artifacts/` and `validation/`), the package and repository roots
+	 * redaction removes, and where a run installs its subject.
+	 */
+	layout: EvalLayout;
 	/**
 	 * Regression validation (8.5): run only these gate trials and keep the
 	 * result, summary and evidence under `validation/<source-hash>/<run-id>/`,
@@ -262,7 +267,7 @@ function resultPaths(
 /** The result files and this run's evidence directory, both relative to `evalsDir`. */
 function gatePaths(options: GateOptions) {
 	const paths = resultPaths(
-		options.evalsDir,
+		options.layout.evalsDir,
 		options.sourceHash,
 		options.validation ? options.runId : undefined,
 	);
@@ -647,7 +652,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 	const context: RedactionContext = {
 		scratchRoot: options.scratchRoot,
 		home: options.home,
-		repoRoot: resolve(options.evalsDir, "../.."),
+		...redactedRoots(options.layout),
 	};
 	const only = options.validation?.trials;
 	const paths = gatePaths(options);
@@ -689,7 +694,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 	const persist = () => {
 		invocation.endedAt = now();
 		finalize(result, invocation.endedAt);
-		publishResult(options.evalsDir, result, options.rubric, paths);
+		publishResult(options.layout.evalsDir, result, options.rubric, paths);
 		published = structuredClone(result);
 	};
 	// Unscored attempts leave the behavioural sequence; number the rest in order.
@@ -721,7 +726,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 				const own =
 					pending.attempt.runId === options.runId
 						? context.scratchRoot
-						: runScratchRoot(pending.attempt);
+						: runScratchRoot(pending.attempt, options.layout);
 				const at = {
 					...context,
 					scratchRoot: own ?? context.scratchRoot,
@@ -775,7 +780,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 	) => {
 		// One email numbering for everything written for this attempt.
 		const at = { ...context, emails: context.emails ?? new Map() };
-		const dir = join(options.evalsDir, artifactDir);
+		const dir = join(options.layout.evalsDir, artifactDir);
 		let artifacts: Artifact[] = [];
 		if (existsSync(from)) artifacts = exportAttempt({ from, to: dir, ...at });
 		else mkdirSync(dir, { recursive: true });
@@ -810,12 +815,12 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 	 */
 	const resolvePending = (pending: Attempt): Attempt => {
 		const launch = pending.launch;
-		const dir = join(options.evalsDir, pending.artifactDir);
+		const dir = join(options.layout.evalsDir, pending.artifactDir);
 		setAsidePartial(dir);
 		const at: RedactionContext = {
 			scratchRoot: launch?.scratchRoot ?? options.scratchRoot,
 			home: options.home,
-			repoRoot: resolve(options.evalsDir, "../.."),
+			...redactedRoots(options.layout),
 			emails: new Map(),
 		};
 		// The recorded directory may hold the home slug's marker; this machine's
@@ -1014,7 +1019,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 						if (attempt.runId === options.runId && attempt.kind !== "pending")
 							voidFrozen(attempt, recheck.reasons);
 			publishResult(
-				options.evalsDir,
+				options.layout.evalsDir,
 				finalize(standing, now()),
 				options.rubric,
 				paths,
@@ -1061,7 +1066,7 @@ async function runLocked(options: GateOptions): Promise<{ result: Result }> {
 				rescoring.push({
 					trial: trial.trial,
 					attempt,
-					dir: join(options.evalsDir, attempt.artifactDir),
+					dir: join(options.layout.evalsDir, attempt.artifactDir),
 					requested: attempt.scoring.requested,
 				});
 			}
@@ -1200,12 +1205,21 @@ function pendingAttempt(
 }
 
 /**
- * The scratch root of the run that exported an attempt: the directory its
- * subject binary was built in, `<root>/bin/shepherd`.
+ * The scratch root of the run that exported an attempt: the run directory
+ * its subject binary was built in, `<root>/<subject>/bin/shepherd` under
+ * the layout's subject directory.
  */
-function runScratchRoot(attempt: Attempt): string | undefined {
+function runScratchRoot(
+	attempt: Attempt,
+	layout: EvalLayout,
+): string | undefined {
+	const tail = ["", ...(layout.subject ? [layout.subject] : []), "bin"].join(
+		"/",
+	);
 	const bin = dirname(attempt.binaryEvidence.expected);
-	return basename(bin) === "bin" ? dirname(bin) : undefined;
+	return bin.endsWith(tail) && bin.length > tail.length
+		? bin.slice(0, -tail.length)
+		: undefined;
 }
 
 /** A value as Python's `json` decodes it; a `Map` keeps an object's key order. */

@@ -1,0 +1,23 @@
+# dependencies (bun install)
+node_modules
+
+# output
+bin
+# publication temp dirs left by a killed compile (troupe/compiler)
+.troupe-build-*/
+# a running Shepherd eval invocation's lock, a killed one's unpublished result files, and evidence it set aside (docs/SHEPHERD-EVALS.md)
+evals/shepherd/results/*.lock*
+evals/shepherd/results/*.tmp-*
+evals/shepherd/validation/**/*.tmp-*
+evals/shepherd/artifacts/**/*.tmp-*
+evals/shepherd/validation/**/*.lock*
+evals/shepherd/artifacts/**/*.orphan*
+evals/shepherd/validation/**/*.orphan*
+evals/shepherd/artifacts/**/*.partial*
+evals/shepherd/validation/**/*.partial*
+
+# caches
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.DS_Store

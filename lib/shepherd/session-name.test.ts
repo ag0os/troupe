@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentMode, Backend } from "../agent-format/types";
+import type { AgentMode, Backend } from "../index";
 import { defaultSessionName, launchKind, sessionNameFor } from "./session-name";
 
 const now = new Date(2026, 9, 5, 14, 7);

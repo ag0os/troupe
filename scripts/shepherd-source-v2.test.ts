@@ -13,12 +13,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	createGitRunner,
 	readSourceInputs,
 	SourceInputError,
-} from "../lib/agent-format/provenance";
+} from "../lib/entries/provenance";
 import {
 	dependencyIdentity,
 	evaluationInputs,
+	frameworkRevision,
 	isSourcePath,
 	readV2Source,
 	shepherdStampV2,
@@ -43,6 +45,7 @@ const PACKAGE: Record<string, string> = {
 	"scripts/watch.ts": "watch\n",
 	"scripts/shepherd-definition.ts": "definition\n",
 	"scripts/shepherd-source-v2.ts": "policy\n",
+	"scripts/eval-source.ts": "eval seam\n",
 };
 
 /** Table rows: created in the fixture, selected or not. */
@@ -70,9 +73,17 @@ const ROWS: [string, boolean, string][] = [
 	["extractions/.troupe-dist/troupe/package.json", false, "staging"],
 	["evals/shepherd/results/x.json", false, "eval evidence"],
 	["evals/shepherd/rubric.yaml", false, "evaluation input (own selector)"],
+	["scripts/eval-source.ts", false, "eval build seam (evaluation input)"],
 	["packages/software/.DS_Store", false, "host byproduct"],
 	["packages/software/node_modules/x.ts", false, "installed module"],
 	["packages/software/tools/__pycache__/x.pyc", false, "bytecode"],
+	["packages/software/old.pyc", false, "bytecode by name"],
+	[
+		"packages/software/cache.pyc/helper.ts",
+		false,
+		"beneath a bytecode-named directory (C23)",
+	],
+	["packages/software/x.pyc.ts", true, "a suffix only in the middle"],
 	["scripts/shepherd-source.ts", false, "v1 adapter"],
 	["scripts/watch-agents.ts", false, "legacy watcher"],
 	["scripts/agent-compiler.ts", false, "legacy wrapper"],
@@ -214,7 +225,8 @@ describe("v2 identity on miniature fixtures (O14, O15, O16)", () => {
 		expect(captured.provenance.origins).toEqual([
 			expect.objectContaining({
 				origin: "framework/troupe",
-				revision: "unknown",
+				revision: "file:../dist/troupe",
+				marker: "local",
 				dependency: {
 					requested: "file:../dist/troupe",
 					resolved: "troupe@file:../dist/troupe",
@@ -223,10 +235,11 @@ describe("v2 identity on miniature fixtures (O14, O15, O16)", () => {
 			expect.objectContaining({
 				origin: "package/shepherd",
 				revision: "unknown",
+				marker: "local",
 			}),
 		]);
 		expect(policy.versionLine("shepherd", captured)).toBe(
-			`shepherd troupe-agent-source-v2 framework/troupe=unknown package/shepherd=unknown source=${captured.manifest.source}`,
+			`shepherd troupe-agent-source-v2 framework/troupe=file:../dist/troupe+local package/shepherd=unknown+local source=${captured.manifest.source}`,
 		);
 		expect((await policy.recheck(context(), captured)).source).toBe(
 			captured.manifest.source,
@@ -240,7 +253,182 @@ describe("v2 identity on miniature fixtures (O14, O15, O16)", () => {
 	test("evaluation inputs are a separate selector without evidence", () => {
 		const evaluation = readSourceInputs(evaluationInputs(layout.packageRoot));
 		expect(evaluation.files.map((file) => file.path)).toEqual([
+			"scripts/eval-source.ts",
 			"evals/shepherd/rubric.yaml",
 		]);
+	});
+});
+
+// C17: each origin's revision carries a marker when its selected bytes are
+// not those of the commit it records. Temporary fixture repositories only.
+describe("revision markers (C17)", () => {
+	const testGit = createGitRunner({
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_AUTHOR_NAME: "Fixture",
+		GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+		GIT_COMMITTER_NAME: "Fixture",
+		GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+	});
+	const git = (...args: string[]) => {
+		const result = testGit(args, dir);
+		expect(result.code).toBe(0);
+		return new TextDecoder().decode(result.stdout).trim();
+	};
+	let head: string;
+
+	/** The fixture committed as a repository at `dir`, the package under `package/`. */
+	beforeEach(() => {
+		put("package/biome.json", "{}\n");
+		git("init", "-q", "-b", "main");
+		git("add", "-A");
+		git("commit", "-q", "-m", "fixture");
+		head = git("rev-parse", "HEAD");
+		layout = {
+			...layout,
+			revision: { gitRoot: dir, prefix: "package", git: testGit },
+		};
+	});
+
+	const line = async () => {
+		const policy = shepherdStampV2(layout);
+		const captured = await policy.capture(context());
+		return {
+			captured,
+			line: policy
+				.versionLine("shepherd", captured)
+				.replace(captured.manifest.source, "<source>"),
+		};
+	};
+
+	test("a clean Git package with a folder dependency", async () => {
+		const { captured, line: version } = await line();
+		expect(version).toBe(
+			`shepherd troupe-agent-source-v2 framework/troupe=file:../dist/troupe+local package/shepherd=${head} source=<source>`,
+		);
+		expect(captured.provenance.origins).toEqual([
+			expect.objectContaining({
+				revision: "file:../dist/troupe",
+				marker: "local",
+			}),
+			expect.objectContaining({
+				revision: head,
+				prefix: "package",
+				marker: null,
+			}),
+		]);
+	});
+
+	test("an empty prefix compares the whole repository's tree", async () => {
+		const root = join(dir, "package");
+		const result = testGit(["init", "-q", "-b", "main"], root);
+		expect(result.code).toBe(0);
+		expect(testGit(["add", "-A"], root).code).toBe(0);
+		expect(testGit(["commit", "-q", "-m", "nested"], root).code).toBe(0);
+		const nested = new TextDecoder()
+			.decode(testGit(["rev-parse", "HEAD"], root).stdout)
+			.trim();
+		layout = {
+			...layout,
+			revision: { gitRoot: root, prefix: "", git: testGit },
+		};
+		expect((await line()).line).toContain(`package/shepherd=${nested} `);
+		put("package/agents/shepherd.md", "changed\n");
+		expect((await line()).line).toContain(`package/shepherd=${nested}+dirty `);
+	});
+
+	test("a SHA-256 repository compares blobs in its own hash", async () => {
+		rmSync(join(dir, ".git"), { recursive: true, force: true });
+		git("init", "-q", "-b", "main", "--object-format=sha256");
+		git("add", "-A");
+		git("commit", "-q", "-m", "fixture");
+		const commit = git("rev-parse", "HEAD");
+		expect(commit).toHaveLength(64);
+		expect((await line()).line).toContain(`package/shepherd=${commit} `);
+		put("package/agents/shepherd.ts", "changed\n");
+		expect((await line()).line).toContain(`package/shepherd=${commit}+dirty `);
+	});
+
+	test("a modified selected file makes the package dirty", async () => {
+		put("package/system-prompts/shepherd/core.md", "edited\n");
+		expect((await line()).line).toContain(`package/shepherd=${head}+dirty `);
+	});
+
+	test("an added or removed selected file makes the package dirty", async () => {
+		put("package/packages/software/NEW.md", "new\n");
+		expect((await line()).line).toContain(`package/shepherd=${head}+dirty `);
+		rmSync(join(dir, "package/packages/software/NEW.md"));
+		rmSync(join(dir, "package/packages/software/MODULE.md"));
+		expect((await line()).line).toContain(`package/shepherd=${head}+dirty `);
+	});
+
+	test("files outside the selection never make it dirty", async () => {
+		put("package/biome.json", '{"changed": true}\n');
+		put("package/lib/shepherd/compose.test.ts", "edited test\n");
+		put("package/lib/shepherd/new.test.ts", "new test\n");
+		put("package/bin/shepherd", "rebuilt\n");
+		put("outside.md", "a file outside the package\n");
+		expect((await line()).line).toContain(`package/shepherd=${head} `);
+	});
+
+	test("an executable-bit flip on a runtime tool makes it dirty", async () => {
+		chmodSync(
+			join(dir, "package/packages/software/tools/publish-check"),
+			0o644,
+		);
+		expect((await line()).line).toContain(`package/shepherd=${head}+dirty `);
+	});
+
+	test("a Git dependency records the lockfile's commit with no marker", async () => {
+		const commit = "0123456789abcdef0123456789abcdef01234567";
+		put(
+			"package/bun.lock",
+			`{\n  "packages": {\n    "troupe": ["troupe@github:owner/troupe#${commit}", {},],\n  },\n}\n`,
+		);
+		const { captured, line: version } = await line();
+		expect(version).toContain(` framework/troupe=${commit} `);
+		expect(captured.provenance.origins).toEqual([
+			expect.objectContaining({ revision: commit, marker: null }),
+			expect.anything(),
+		]);
+	});
+
+	test("lockfile resolutions map to a revision and marker", () => {
+		const commit = "0123456789abcdef0123456789abcdef01234567";
+		expect(frameworkRevision(`troupe@github:owner/troupe#${commit}`)).toEqual({
+			revision: commit,
+			marker: null,
+		});
+		expect(
+			frameworkRevision(
+				`troupe@git+https://example.invalid/troupe.git#${commit}`,
+			),
+		).toEqual({ revision: commit, marker: null });
+		expect(frameworkRevision("troupe@github:owner/troupe#0123abc")).toEqual({
+			revision: "unknown",
+			marker: "local",
+		});
+		expect(
+			frameworkRevision("troupe@git+https://example.invalid/troupe.git"),
+		).toEqual({
+			revision: "unknown",
+			marker: "local",
+		});
+		expect(frameworkRevision("troupe@file:../.troupe-dist/troupe")).toEqual({
+			revision: "file:../.troupe-dist/troupe",
+			marker: "local",
+		});
+		expect(frameworkRevision(undefined)).toEqual({
+			revision: "unknown",
+			marker: "local",
+		});
+	});
+
+	test("no lockfile entry and no Git give unknown+local", async () => {
+		rmSync(join(dir, ".git"), { recursive: true, force: true });
+		put("package/bun.lock", '{\n  "packages": {},\n}\n');
+		expect((await line()).line).toBe(
+			"shepherd troupe-agent-source-v2 framework/troupe=unknown+local package/shepherd=unknown+local source=<source>",
+		);
 	});
 });

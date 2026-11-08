@@ -1,5 +1,7 @@
 # Shepherd setup
 
+> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SETUP.md](../extractions/shepherd/docs/SETUP.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.
+
 Follow these steps on a fresh machine. Shepherd keeps workspace state on disk; machine settings and logins need their own setup.
 
 1. **Prerequisites.** Install git, `jq` and Bun. On macOS, Homebrew can supply git and `jq`. The status line below needs `jq`; Bun installs dependencies and builds Troupe's binaries.

@@ -13,14 +13,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Builder } from "../../scripts/agent-compiler";
-import { gitStamp, versionLine } from "../../scripts/shepherd-source";
-import {
-	git,
-	initShepherdRepo,
-	testGit,
-	writeAt,
-} from "../../scripts/shepherd-source-fixture";
+import type { Builder } from "./build-source";
+import { gitStamp, versionLine } from "./build-source";
+import { EVALUATION_MODULES } from "./identity";
+import { defaultLayout, evalLayout } from "./layout";
 import {
 	buildSubject,
 	claimArtifactRoot,
@@ -31,13 +27,14 @@ import {
 	loadPolicy,
 	parseOptions,
 	prepareRun,
-	REPO_ROOT,
 	readVersion,
 	recheck,
+	requireExecutedHarness,
 	runTrials,
 	scoreJobs,
 	subjectEnv,
 } from "./run";
+import { git, initShepherdRepo, testGit, writeAt } from "./source-fixture";
 
 let scratch: string;
 
@@ -55,12 +52,16 @@ const fakeBuild: Builder = async (request) => {
 	chmodSync(request.outFile, 0o755);
 };
 
-function fixtureRepo(): string {
+const REAL_RUBRIC = readFileSync(join(EVALS_DIR, "rubric.json"), "utf8");
+
+function fixtureRepo(extra: Record<string, string> = {}): string {
 	const root = join(scratch, "repo");
 	mkdirSync(root);
 	initShepherdRepo(root, {
 		"evals/shepherd/harness.py": "print('harness')\n",
 		"evals/shepherd/policy.json": "{}\n",
+		"evals/shepherd/rubric.json": REAL_RUBRIC,
+		...extra,
 	});
 	return root;
 }
@@ -76,11 +77,12 @@ function alive(pid: number): boolean {
 
 describe("parameters and build destination (2.3)", () => {
 	test("the package script runs the TypeScript wrapper", () => {
+		const { packageRoot, evalsDir } = defaultLayout();
 		const pkg = JSON.parse(
-			readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
+			readFileSync(join(packageRoot, "package.json"), "utf8"),
 		);
 		expect(pkg.scripts["evals:shepherd"]).toBe("bun evals/shepherd/run.ts");
-		expect(EVALS_DIR).toBe(join(REPO_ROOT, "evals/shepherd"));
+		expect(EVALS_DIR).toBe(evalsDir);
 	});
 
 	test("harness sources name no fixed binary, scratch or artifact paths", () => {
@@ -229,9 +231,56 @@ describe("policy (5.1)", () => {
 	});
 });
 
+describe("the run executes the harness it identifies (A4)", () => {
+	test("a layout whose evals directory is another harness is refused, naming both", () => {
+		expect(() => requireExecutedHarness(defaultLayout())).not.toThrow();
+		const other = evalLayout({ packageRoot: fixtureRepo(), git: testGit });
+		expect(() => requireExecutedHarness(other)).toThrow(
+			`the layout's evals directory ${other.evalsDir} is not the harness that would run, ${EVALS_DIR}`,
+		);
+	});
+
+	test("the run entry refuses another package's harness before preparing anything", () => {
+		const other = fixtureRepo();
+		const home = join(scratch, "home");
+		mkdirSync(home);
+		const missing = join(scratch, "no-scratch");
+		const run = Bun.spawnSync(
+			[
+				process.execPath,
+				join(EVALS_DIR, "run.ts"),
+				"--check",
+				"--package-root",
+				other,
+				"--scratch",
+				missing,
+			],
+			{
+				env: {
+					PATH: process.env.PATH ?? "",
+					HOME: home,
+					XDG_CONFIG_HOME: join(home, ".config"),
+					SHEPHERD_WORKSPACE: join(home, "workspace"),
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const stderr = run.stderr.toString();
+		expect([run.exitCode, stderr]).toEqual([
+			2,
+			expect.stringContaining(
+				`Refusing to run: the layout's evals directory ${join(other, "evals/shepherd")} is not the harness that would run, ${EVALS_DIR}`,
+			),
+		]);
+		expect(run.stdout.toString()).not.toContain("Run directory");
+		expect(existsSync(missing)).toBe(false);
+	});
+});
+
 describe("frozen inputs (2.5)", () => {
-	async function frozenRun() {
-		const root = fixtureRepo();
+	async function frozenRun(extra: Record<string, string> = {}) {
+		const root = fixtureRepo(extra);
 		const run = prepareRun({ root, scratchParent: scratch });
 		const built = await buildSubject({
 			root,
@@ -342,6 +391,37 @@ describe("frozen inputs (2.5)", () => {
 		expect(reasons.join("\n")).toMatch(/binary/);
 		expect(reasons.join("\n")).toMatch(/source/);
 		expect(reasons.join("\n")).toMatch(/evaluation/);
+	});
+
+	test("a gated module the build identity does not select invalidates the run", async () => {
+		for (const path of EVALUATION_MODULES) {
+			const { root, frozen } = await frozenRun();
+			writeAt(root, path, `// changed ${path}\n`);
+			expect([path, recheck(frozen, { root, git: testGit })]).toEqual([
+				path,
+				[expect.stringMatching(/^evaluation identity changed/)],
+			]);
+			rmSync(scratch, { recursive: true, force: true });
+			mkdirSync(scratch);
+		}
+	});
+
+	test("freeze and recheck read the rubric of the evals directory they hash, never the running harness's", async () => {
+		const own = `${REAL_RUBRIC}\n`;
+		const { root, frozen } = await frozenRun({
+			"evals/shepherd/rubric.json": own,
+		});
+		const hash = (text: string) =>
+			`sha256:${new Bun.CryptoHasher("sha256").update(text).digest("hex")}`;
+		expect(frozen.rubricSha256).toBe(hash(own));
+		expect(frozen.rubricSha256).not.toBe(hash(REAL_RUBRIC));
+		expect(recheck(frozen, { root, git: testGit })).toEqual([]);
+		writeAt(root, "evals/shepherd/rubric.json", `${own}\n`);
+		const reasons = recheck(frozen, { root, git: testGit });
+		expect(reasons).toContain(
+			`rubric changed after freezing: ${join(root, "evals/shepherd/rubric.json")}`,
+		);
+		expect(reasons.join("\n")).toMatch(/evaluation identity changed/);
 	});
 
 	test("results and artifacts written during the run change nothing", async () => {

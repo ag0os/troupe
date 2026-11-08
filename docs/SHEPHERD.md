@@ -1,5 +1,7 @@
 # Shepherd
 
+> Transitional copy: the Shepherd package owns this document at [extractions/shepherd/docs/SHEPHERD.md](../extractions/shepherd/docs/SHEPHERD.md). Until the package leaves this repository, every change lands in both copies; `scripts/shepherd-copy.test.ts` checks they differ only by this line.
+
 Shepherd is an executive assistant and manager for day to day work. It runs in any directory, fills in for the user on routine work, manages terminal sessions and other coding agents (through Herdr when available), talks to co sessions over inter agent messaging when the harness supports it, and keeps persistent state in the launch directory so it improves at a workspace over time.
 
 ## Usage
