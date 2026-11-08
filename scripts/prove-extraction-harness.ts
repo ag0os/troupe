@@ -51,8 +51,57 @@ export async function proveHarness(
 	const fakes = join(parent, "fakes");
 	mkdirSync(fakes);
 	installFakeClis(fakes);
+	const shims = join(parent, "environment-shims");
+	mkdirSync(shims);
+	const environmentRecord = join(parent, "child-environment");
+	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	for (const backend of ["claude", "codex"]) {
+		const path = join(shims, backend);
+		writeFileSync(
+			path,
+			`#!/bin/sh\n/usr/bin/env -0 > "$PROOF_ENV_RECORD"\nexec ${quote(join(fakes, backend))} "$@"\n`,
+		);
+		chmodSync(path, 0o755);
+	}
+	function childEnvironment(name: string): Record<string, string> {
+		const raw = readFileSync(environmentRecord);
+		writeFileSync(join(evidence, `${name}.environment`), raw);
+		const entries = raw
+			.toString()
+			.split("\0")
+			.filter(Boolean)
+			.map((entry) => {
+				const at = entry.indexOf("=");
+				if (at < 1) throw new Error(`Invalid environment entry: ${entry}`);
+				return [entry.slice(0, at), entry.slice(at + 1)] as const;
+			});
+		const parsed = Object.fromEntries(
+			entries.sort(([a], [b]) => a.localeCompare(b)),
+		);
+		writeFileSync(
+			join(evidence, `${name}.environment.json`),
+			JSON.stringify(parsed, null, 2),
+		);
+		return parsed;
+	}
+	function compareEnvironment(
+		a: Record<string, string>,
+		b: Record<string, string>,
+		backend: string,
+		name: string,
+	): void {
+		// Only Claude's fresh resource path is excepted; the raw values remain in evidence.
+		const left = { ...a };
+		const right = { ...b };
+		if (backend === "claude") {
+			delete left.TMPDIR;
+			delete right.TMPDIR;
+		}
+		assertEqual(left, right, `${name} complete child environment`);
+	}
 	const env = isolatedEnv(parent, {
-		PATH: `${join(install, "bin")}:${fakes}:${process.env.PATH}`,
+		PATH: `${join(install, "bin")}:${shims}:${fakes}:${process.env.PATH}`,
+		PROOF_ENV_RECORD: environmentRecord,
 	});
 	const workspaces = buildWorkspaces(
 		join(repoRoot(), "agents/__fixtures__/shepherd/workspaces.json"),
@@ -136,12 +185,14 @@ export async function proveHarness(
 	for (const scenario of cases) {
 		const runs: Ran[] = [];
 		const launched: ReturnType<typeof readRecords> = [];
+		const environments: Record<string, string>[] = [];
 		for (const [label, path] of [
 			["shipped", shipped],
 			["candidate", candidate],
 		] as const) {
 			put(path);
 			rmSync(record, { force: true });
+			rmSync(environmentRecord, { force: true });
 			const result = run([binary, ...scenario.argv], cwd, {
 				...env,
 				FAKE_RECORD: record,
@@ -161,16 +212,23 @@ export async function proveHarness(
 					`${scenario.name} temporary resource leaked: ${r.tmpdir}`,
 				);
 			launched.push(r);
+			environments.push(childEnvironment(`${scenario.name}-${label}`));
 		}
 		if (
 			!sameObservation(runs[0] as Ran, runs[1] as Ran) ||
 			(runs[0] as Ran).code !== 0
 		)
 			throw new Error(`${scenario.name} raw output differs`);
+		compareEnvironment(
+			environments[0] ?? {},
+			environments[1] ?? {},
+			scenario.name.startsWith("claude") ? "claude" : "codex",
+			scenario.name,
+		);
 		const a = launched[0];
 		const b = launched[1];
 		if (!a || !b) throw new Error("missing records");
-		// All launch argv and contract environment are compared exactly. Freshly allocated
+		// All launch argv and the complete child environment are compared exactly. Freshly allocated
 		// TMPDIR values are retained verbatim and checked for scope and cleanup separately.
 		assertEqual(
 			{
@@ -210,6 +268,7 @@ export async function proveHarness(
 			kind: "launch",
 			argvEqual: true,
 			environmentContractEqual: true,
+			completeEnvironmentEqual: true,
 			rawOutputEqual: true,
 			resourcePaths: { shipped: a.tmpdir, candidate: b.tmpdir },
 			cleanup: true,
@@ -218,12 +277,14 @@ export async function proveHarness(
 	for (const backend of ["claude", "codex"])
 		for (const signal of ["SIGINT", "SIGTERM"] as const) {
 			const runs: Ran[] = [];
+			const environments: Record<string, string>[] = [];
 			for (const [label, path] of [
 				["shipped", shipped],
 				["candidate", candidate],
 			] as const) {
 				put(path);
 				rmSync(record, { force: true });
+				rmSync(environmentRecord, { force: true });
 				const pidFile = join(parent, "fake.pid");
 				rmSync(pidFile, { force: true });
 				const child = Bun.spawn(
@@ -268,7 +329,12 @@ export async function proveHarness(
 				};
 				saveRun(evidence, `${backend}-${signal}-${label}`, result);
 				runs.push(result);
+				environments.push(childEnvironment(`${backend}-${signal}-${label}`));
 				const r = readRecords(record)[0];
+				writeFileSync(
+					join(evidence, `${backend}-${signal}-${label}-launch.json`),
+					JSON.stringify(r, null, 2),
+				);
 				if (r?.tmpdir && backend === "claude" && existsSync(r.tmpdir))
 					throw new Error("signal leaked TMPDIR");
 				const pid = Number(readFileSync(pidFile, "utf8"));
@@ -279,6 +345,12 @@ export async function proveHarness(
 				} catch {}
 				if (alive) throw new Error(`backend ${pid} survived ${signal}`);
 			}
+			compareEnvironment(
+				environments[0] ?? {},
+				environments[1] ?? {},
+				backend,
+				`${backend} ${signal}`,
+			);
 			if (!sameObservation(runs[0] as Ran, runs[1] as Ran))
 				throw new Error(`signal ${backend} ${signal} differs`);
 			assertEqual(
@@ -292,6 +364,7 @@ export async function proveHarness(
 				signal,
 				equal: true,
 				cleanup: true,
+				completeEnvironmentEqual: true,
 			});
 		}
 	// Through the compiled installation, exercise inherited/local/builtin selection,
@@ -426,7 +499,7 @@ export async function proveHarness(
 					candidate: bundledVersions(candidate),
 				},
 				resourceLimit:
-					"Fresh Claude TMPDIR names differ and are retained, scoped and cleaned; stable launch argv and contract environment compare exactly. Backend passthrough stream output is compared in print mode; Shepherd's declaration has no stream-mode switch.",
+					"Fresh Claude TMPDIR names differ and are retained, scoped and cleaned; stable launch argv and the complete child environment compare exactly except Claude TMPDIR. Backend passthrough stream output is compared in print mode; Shepherd's declaration has no stream-mode switch.",
 			},
 			null,
 			2,
