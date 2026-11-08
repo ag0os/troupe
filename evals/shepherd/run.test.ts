@@ -75,6 +75,17 @@ function alive(pid: number): boolean {
 	}
 }
 
+/**
+ * Whether `pid` still answers after up to `ms`. A SIGKILLed process can
+ * still answer `kill(pid, 0)` until it is reaped, and an orphan waits for
+ * launchd or init to reap it, which lags on a loaded machine.
+ */
+async function aliveAfter(pid: number, ms = 3_000): Promise<boolean> {
+	const deadline = Date.now() + ms;
+	while (alive(pid) && Date.now() < deadline) await Bun.sleep(20);
+	return alive(pid);
+}
+
 describe("parameters and build destination (2.3)", () => {
 	test("the package script runs the TypeScript wrapper", () => {
 		const { packageRoot, evalsDir } = defaultLayout();
@@ -506,9 +517,9 @@ describe("scheduling and cleanup (5.1)", () => {
 		expect(outcomes.every((outcome) => outcome.timedOut)).toBe(true);
 		for (const trial of ["a", "b"]) {
 			const pid = Number(readFileSync(join(pids, trial), "utf8"));
-			expect(alive(pid)).toBe(false);
+			expect(await aliveAfter(pid)).toBe(false);
 		}
-	});
+	}, 15_000);
 
 	test("trials not yet started when the bound expires never start", async () => {
 		const outcomes = await runTrials({
@@ -545,8 +556,8 @@ describe("scheduling and cleanup (5.1)", () => {
 		const outcomes = await running;
 		expect(outcomes[0]?.cancelled).toBe(true);
 		const pid = Number(readFileSync(join(pids, "a"), "utf8"));
-		expect(alive(pid)).toBe(false);
-	});
+		expect(await aliveAfter(pid)).toBe(false);
+	}, 15_000);
 
 	test("a trial's leftover background processes die when it exits", async () => {
 		const pids = join(scratch, "pids");
@@ -562,9 +573,8 @@ describe("scheduling and cleanup (5.1)", () => {
 			graceMs: 200,
 		});
 		const pid = Number(readFileSync(join(pids, "a"), "utf8"));
-		await Bun.sleep(100);
-		expect(alive(pid)).toBe(false);
-	});
+		expect(await aliveAfter(pid)).toBe(false);
+	}, 15_000);
 
 	test("reports each trial's exit code", async () => {
 		const outcomes = await runTrials({
