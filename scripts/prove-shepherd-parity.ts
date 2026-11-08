@@ -10,6 +10,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { installFakeClis } from "../lib/agent-format/fake-cli";
 import {
@@ -48,7 +49,7 @@ function records(state: string): Record<string, string> {
 
 export async function proveParity(args: Record<string, string>): Promise<void> {
 	const source = realpathSync(args["workspace-source"] ?? "");
-	if (source !== "/Users/cosmos/shepherds/forge")
+	if (source !== realpathSync(join(homedir(), "shepherds", "forge")))
 		throw new Error("Only forge is authorized as a real workspace source");
 	const shipped = realpathSync(args.shipped ?? "");
 	const candidate = realpathSync(args.candidate ?? "");
