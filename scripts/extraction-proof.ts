@@ -1,6 +1,7 @@
 /** Shared, fail-closed filesystem and evidence helpers for PR 5 proofs. */
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	lstatSync,
@@ -9,6 +10,7 @@ import {
 	readFileSync,
 	readlinkSync,
 	realpathSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -83,16 +85,89 @@ export function copyArtifact(source: string, target: string): string[] {
 	return before;
 }
 
-/** Preserve package sources, not generated installations, outputs or Git metadata. */
-export function copyPackage(source: string, target: string): void {
-	cpSync(source, target, {
-		recursive: true,
-		preserveTimestamps: true,
-		filter: (path) =>
-			!["node_modules", "bin", ".git"].includes(
-				relative(source, path).split("/")[0] ?? "",
-			),
-	});
+/** The generated stage is trustworthy only while its driving worktree is clean. */
+export function committedRevision(repo: string): string {
+	const status = checkedRun(
+		["git", "status", "--porcelain", "--untracked-files=all"],
+		repo,
+	);
+	assertEqual(status.stdout, "", "committed replay requires a clean worktree");
+	return checkedRun(["git", "rev-parse", "HEAD"], repo).stdout.trim();
+}
+
+function committedFiles(repo: string, prefix: string) {
+	return checkedRun(["git", "ls-tree", "-rz", "HEAD", "--", prefix], repo)
+		.stdout.split("\0")
+		.filter(Boolean)
+		.map((row) => {
+			const match = /^(100644|100755|120000) blob ([a-f0-9]+)\t(.+)$/.exec(row);
+			if (!match)
+				throw new Error(`Unsupported committed package member: ${row}`);
+			const mode = match[1] ?? "";
+			const oid = match[2] ?? "";
+			const path = match[3] ?? "";
+			const blob = Bun.spawnSync(["git", "cat-file", "blob", oid], {
+				cwd: repo,
+			});
+			if (blob.exitCode !== 0)
+				throw new Error(`Cannot read committed blob ${oid}`);
+			return { path: path.slice(prefix.length + 1), mode, bytes: blob.stdout };
+		});
+}
+
+/** Bind every source path, byte and executable bit to HEAD, including link targets. */
+export function assertCommittedPackage(
+	repo: string,
+	prefix: string,
+	target: string,
+	installed = false,
+): string[] {
+	const expected = committedFiles(repo, prefix)
+		.map((file) =>
+			file.mode === "120000"
+				? `${file.path} link ${file.bytes.toString()}`
+				: `${file.path} ${file.bytes.length} ${file.mode === "100755" ? "755" : "644"} ${digest(file.bytes)}`,
+		)
+		.sort();
+	const actual = treeManifest(target)
+		.filter((row) => !/^\S+\/ [0-7]+$/.test(row))
+		.filter(
+			(row) =>
+				!installed ||
+				![".git", "node_modules", "bin"].includes(row.split(/[ /]/)[0] ?? ""),
+		)
+		.map((row) => {
+			if (row.includes(" link ")) return row;
+			const match = /^(.*) (\d+) ([0-7]+) ([a-f0-9]+)$/.exec(row);
+			if (!match) throw new Error(`Unsupported package member: ${row}`);
+			return `${match[1]} ${match[2]} ${Number.parseInt(match[3] ?? "0", 8) & 0o111 ? "755" : "644"} ${match[4]}`;
+		})
+		.sort();
+	assertEqual(
+		actual,
+		expected,
+		"copied package matches committed HEAD bytes and executable bits",
+	);
+	return expected;
+}
+
+/** Never copy uncommitted source bytes into an acceptance candidate. */
+export function copyPackage(
+	repo: string,
+	prefix: string,
+	target: string,
+): string[] {
+	mkdirSync(target, { recursive: true });
+	for (const file of committedFiles(repo, prefix)) {
+		const path = join(target, file.path);
+		mkdirSync(dirname(path), { recursive: true });
+		if (file.mode === "120000") symlinkSync(file.bytes.toString(), path);
+		else {
+			writeFileSync(path, file.bytes);
+			chmodSync(path, file.mode === "100755" ? 0o755 : 0o644);
+		}
+	}
+	return assertCommittedPackage(repo, prefix, target);
 }
 
 /** Raw observation only. Paths and clocks are never rewritten. */

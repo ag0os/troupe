@@ -17,10 +17,12 @@ import {
 	scratchDir,
 } from "./extraction-continuity";
 import {
+	assertCommittedPackage,
 	assertEqual,
 	assertOutside,
 	bundledVersions,
 	checkoutDenial,
+	committedRevision,
 	copyArtifact,
 	copyPackage,
 	digest,
@@ -31,6 +33,7 @@ import {
 
 export async function replay(args: Record<string, string>): Promise<void> {
 	const repo = repoRoot();
+	const troupeRevision = committedRevision(repo);
 	const parent = args.parent
 		? realpathSync(args.parent)
 		: scratchDir("shepherd-outside");
@@ -44,26 +47,9 @@ export async function replay(args: Record<string, string>): Promise<void> {
 	const stage = join(parent, ".troupe-dist/troupe");
 	if (!args.resume && (existsSync(pkg) || existsSync(stage)))
 		throw new Error("Replay destinations must be fresh");
-	if (!args.resume) copyPackage(join(repo, "extractions/shepherd"), pkg);
-	else {
-		const clean = run(["git", "status", "--porcelain"], pkg);
-		if (clean.code !== 0 || clean.stdout !== "")
-			throw new Error(
-				"Resume requires the unchanged committed package snapshot",
-			);
-		const files = run(["git", "ls-files", "-z"], pkg);
-		if (files.code !== 0)
-			throw new Error("Cannot enumerate resumed package sources");
-		for (const path of files.stdout.split("\0").filter(Boolean)) {
-			assertEqual(
-				readFileSync(join(pkg, path)).toString("base64"),
-				readFileSync(join(repo, "extractions/shepherd", path)).toString(
-					"base64",
-				),
-				`resumed package ${path}`,
-			);
-		}
-	}
+	const packageTree = args.resume
+		? assertCommittedPackage(repo, "extractions/shepherd", pkg, true)
+		: copyPackage(repo, "extractions/shepherd", pkg);
 	const artifact = args.resume
 		? treeManifest(stage)
 		: copyArtifact(join(repo, "extractions/.troupe-dist/troupe"), stage);
@@ -301,7 +287,16 @@ console.log(JSON.stringify(runtime,null,2));
 	)
 		throw new Error("binary-only doctor did not detect missing packages");
 	step("version", [binary, "--version"]);
+	assertEqual(
+		committedRevision(repo),
+		troupeRevision,
+		"driving HEAD remained stable",
+	);
+	assertCommittedPackage(repo, "extractions/shepherd", pkg, true);
 	const report = {
+		troupeRevision,
+		packageTree,
+		packageTreeDigest: digest(packageTree.join("\n")),
 		continued: Boolean(args.resume),
 		bun: version,
 		driverBun: Bun.version,

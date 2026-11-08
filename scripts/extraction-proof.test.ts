@@ -11,9 +11,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	assertCommittedPackage,
 	assertOutside,
 	bundledVersions,
+	committedRevision,
 	copyArtifact,
+	copyPackage,
 	sameObservation,
 	treeManifest,
 } from "./extraction-proof";
@@ -108,4 +111,59 @@ test("parity compares displayed clocks, including the written checkpoint", async
 		"2026-11-08T01:45:29-03:00",
 	);
 	expect(displayedSecond("check", result)).toBeUndefined();
+});
+
+function committedFixture(name: string): { repo: string; copy: string } {
+	const repo = join(root, name);
+	mkdirSync(join(repo, "pkg"), { recursive: true });
+	writeFileSync(join(repo, "pkg/tool"), "committed\n");
+	chmodSync(join(repo, "pkg/tool"), 0o755);
+	for (const argv of [
+		["git", "init", "--quiet"],
+		["git", "add", "."],
+		[
+			"git",
+			"-c",
+			"user.name=Proof",
+			"-c",
+			"user.email=proof@example.invalid",
+			"-c",
+			"core.hooksPath=/dev/null",
+			"commit",
+			"--quiet",
+			"-m",
+			"fixture",
+		],
+	]) {
+		const result = Bun.spawnSync(argv, { cwd: repo });
+		expect(result.exitCode).toBe(0);
+	}
+	return { repo, copy: join(root, `${name}-copy`) };
+}
+
+test("committed package ignores uncommitted bytes and refuses a dirty driving tree", () => {
+	const { repo, copy } = committedFixture("dirty");
+	expect(committedRevision(repo)).toMatch(/^[a-f0-9]{40}$/);
+	writeFileSync(join(repo, "pkg/tool"), "uncommitted\n");
+	copyPackage(repo, "pkg", copy);
+	expect(readFileSync(join(copy, "tool"), "utf8")).toBe("committed\n");
+	expect(() => committedRevision(repo)).toThrow("clean worktree");
+});
+
+test("committed package assertion refuses an executable mode flip", () => {
+	const { repo, copy } = committedFixture("mode");
+	copyPackage(repo, "pkg", copy);
+	chmodSync(join(copy, "tool"), 0o644);
+	expect(() => assertCommittedPackage(repo, "pkg", copy)).toThrow(
+		"executable bits",
+	);
+});
+
+test("committed package assertion refuses an extra file", () => {
+	const { repo, copy } = committedFixture("extra");
+	copyPackage(repo, "pkg", copy);
+	writeFileSync(join(copy, "extra"), "extra\n");
+	expect(() => assertCommittedPackage(repo, "pkg", copy)).toThrow(
+		"committed HEAD",
+	);
 });
