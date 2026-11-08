@@ -32,7 +32,7 @@ import {
 	treeManifest,
 } from "./extraction-proof";
 
-async function observe(
+export async function observe(
 	argv: string[],
 	cwd: string,
 	env: Record<string, string>,
@@ -84,76 +84,40 @@ export function displayedSecond(
 	return undefined;
 }
 
-export async function proveParity(args: Record<string, string>): Promise<void> {
-	const source = realpathSync(args["workspace-source"] ?? "");
-	if (source !== realpathSync(join(homedir(), "shepherds", "forge")))
-		throw new Error("Only forge is authorized as a real workspace source");
-	const shipped = realpathSync(args.shipped ?? "");
-	const candidate = realpathSync(args.candidate ?? "");
-	const parent = scratchDir("shepherd-parity");
-	assertOutside(parent, repoRoot());
-	const evidence = resolve(args.evidence ?? join(parent, "evidence"));
-	mkdirSync(evidence, { recursive: true });
-	const snapshot = join(parent, "snapshot");
-	// Reject external links without following or reading their targets.
-	const originalManifest = treeManifest(join(source, ".shepherd"));
-	const links = originalManifest.filter((line) => line.includes(" link "));
-	if (links.length)
-		throw new Error(
-			`Workspace snapshot contains links; authorize a copying policy first: ${links.join("\n")}`,
-		);
-	cpSync(join(source, ".shepherd"), snapshot, {
-		recursive: true,
-		preserveTimestamps: true,
-	});
-	assertEqual(treeManifest(snapshot), originalManifest, "workspace snapshot");
-	const workspace = join(parent, "workspace");
-	mkdirSync(workspace);
-	const state = join(workspace, ".shepherd");
-	const install = join(parent, "install");
-	mkdirSync(join(install, "bin"), { recursive: true });
-	const packages = copyArtifact(
-		resolve(dirname(candidate), "../packages"),
-		join(install, "packages"),
-	);
-	const binary = join(install, "bin/shepherd");
-	const fakes = join(parent, "fakes");
-	mkdirSync(fakes);
-	installFakeClis(fakes);
-	const env = isolatedEnv(parent, {
-		PATH: `${join(install, "bin")}:${fakes}:${process.env.PATH}`,
-		SHEPHERD_WORKSPACE: workspace,
-		HERDR_ENV: "0",
-	});
-	function restore(): void {
-		rmSync(state, { recursive: true, force: true });
-		cpSync(snapshot, state, { recursive: true, preserveTimestamps: true });
-	}
-	const parked = new Map<string, string>();
-	let active: string | undefined;
-	for (const [name, path] of [
-		["shipped", shipped],
-		["candidate", candidate],
-	] as const) {
-		const target = join(parent, `${name}-binary`);
-		copyFileSync(path, target);
-		chmodSync(target, 0o755);
-		parked.set(path, target);
-	}
-	function put(from: string): void {
-		if (active === from) return;
-		rmSync(binary, { force: true });
-		linkSync(parked.get(from) ?? "", binary);
-		active = from;
-	}
-	// Keep each copied inode and its parked path stable across turns. Replace
-	// only the common slot's hardlink; both processes still report that slot.
-	// Prewarming is outside the paired clock.
-	for (const from of [shipped, candidate]) {
-		put(from);
-		const warm = await observe([binary, "--version"], parent, env);
-		if (warm.code !== 0) throw new Error("binary prewarm failed");
-	}
+export function createPairing(options: {
+	state: string;
+	snapshot: string;
+	originalManifest: string[];
+	shipped: string;
+	candidate: string;
+	binary: string;
+	workspace: string;
+	env: Record<string, string>;
+	evidence: string;
+	put: (from: string) => void;
+	observe: typeof observe;
+	pairs: Record<string, unknown>[];
+	align?: (alignmentMs: number) => Promise<void>;
+}) {
+	const {
+		state,
+		snapshot,
+		originalManifest,
+		shipped,
+		candidate,
+		binary,
+		workspace,
+		env,
+		evidence,
+		put,
+		observe,
+		pairs,
+	} = options;
+	const align =
+		options.align ??
+		(async (alignmentMs: number) => {
+			await Bun.sleep((1000 - (Date.now() % 1000) + alignmentMs) % 1000);
+		});
 	function restoreRecords(): void {
 		for (const path of [
 			"CURRENT.md",
@@ -175,8 +139,6 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 		);
 	}
 
-	restore();
-	const pairs: Record<string, unknown>[] = [];
 	async function pair(
 		name: string,
 		argv: string[],
@@ -195,7 +157,7 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 			if (warmA.code !== 0) throw new Error("shipped prewarm failed");
 			// Align after restoring, outside the observed command interval.
 			const alignmentMs = (15 + retry * 137) % 1000;
-			await Bun.sleep((1000 - (Date.now() % 1000) + alignmentMs) % 1000);
+			await align(alignmentMs);
 			const start = Date.now();
 			const a = await observe([binary, ...argv], workspace, env);
 			const aEnd = Date.now();
@@ -217,6 +179,12 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 			const bStart = Date.now();
 			const b = await observe([binary, ...argv], workspace, env);
 			const end = Date.now();
+			if (!applies)
+				assertEqual(
+					treeManifest(state),
+					originalManifest,
+					"candidate read-only command preserved entire workspace state",
+				);
 			saveRun(evidence, `${name}-${retry}-warm-shipped`, warmA);
 			saveRun(evidence, `${name}-${retry}-warm-candidate`, warmB);
 			saveRun(evidence, `${name}-${retry}-shipped`, a);
@@ -291,6 +259,94 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 		}
 		throw new Error(`${name}: exhausted 30 clock retries; acceptance unmet`);
 	}
+
+	return pair;
+}
+
+export async function proveParity(args: Record<string, string>): Promise<void> {
+	const source = realpathSync(args["workspace-source"] ?? "");
+	const shipped = realpathSync(args.shipped ?? "");
+	const candidate = realpathSync(args.candidate ?? "");
+	const parent = scratchDir("shepherd-parity");
+	assertOutside(parent, repoRoot());
+	const evidence = resolve(args.evidence ?? join(parent, "evidence"));
+	mkdirSync(evidence, { recursive: true });
+	const snapshot = join(parent, "snapshot");
+	// Reject external links without following or reading their targets.
+	const originalManifest = treeManifest(join(source, ".shepherd"));
+	const links = originalManifest.filter((line) => line.includes(" link "));
+	if (links.length)
+		throw new Error(
+			`Workspace snapshot contains links; authorize a copying policy first: ${links.join("\n")}`,
+		);
+	cpSync(join(source, ".shepherd"), snapshot, {
+		recursive: true,
+		preserveTimestamps: true,
+	});
+	assertEqual(treeManifest(snapshot), originalManifest, "workspace snapshot");
+	const workspace = join(parent, "workspace");
+	mkdirSync(workspace);
+	const state = join(workspace, ".shepherd");
+	const install = join(parent, "install");
+	mkdirSync(join(install, "bin"), { recursive: true });
+	const packages = copyArtifact(
+		resolve(dirname(candidate), "../packages"),
+		join(install, "packages"),
+	);
+	const binary = join(install, "bin/shepherd");
+	const fakes = join(parent, "fakes");
+	mkdirSync(fakes);
+	installFakeClis(fakes);
+	const env = isolatedEnv(parent, {
+		PATH: `${join(install, "bin")}:${fakes}:${process.env.PATH}`,
+		SHEPHERD_WORKSPACE: workspace,
+		HERDR_ENV: "0",
+	});
+	function restore(): void {
+		rmSync(state, { recursive: true, force: true });
+		cpSync(snapshot, state, { recursive: true, preserveTimestamps: true });
+	}
+	const parked = new Map<string, string>();
+	let active: string | undefined;
+	for (const [name, path] of [
+		["shipped", shipped],
+		["candidate", candidate],
+	] as const) {
+		const target = join(parent, `${name}-binary`);
+		copyFileSync(path, target);
+		chmodSync(target, 0o755);
+		parked.set(path, target);
+	}
+	function put(from: string): void {
+		if (active === from) return;
+		rmSync(binary, { force: true });
+		linkSync(parked.get(from) ?? "", binary);
+		active = from;
+	}
+	// Keep each copied inode and its parked path stable across turns. Replace
+	// only the common slot's hardlink; both processes still report that slot.
+	// Prewarming is outside the paired clock.
+	for (const from of [shipped, candidate]) {
+		put(from);
+		const warm = await observe([binary, "--version"], parent, env);
+		if (warm.code !== 0) throw new Error("binary prewarm failed");
+	}
+	restore();
+	const pairs: Record<string, unknown>[] = [];
+	const pair = createPairing({
+		state,
+		snapshot,
+		originalManifest,
+		shipped,
+		candidate,
+		binary,
+		workspace,
+		env,
+		evidence,
+		put,
+		observe,
+		pairs,
+	});
 	await pair("start", ["tool", "start"]);
 	await pair("check", ["tool", "check"]);
 	const dry = await pair("checkpoint-dry", ["tool", "checkpoint"]);
@@ -356,7 +412,13 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 
 if (import.meta.main) {
 	try {
-		await proveParity(proofArgs(process.argv.slice(2)));
+		const args = proofArgs(process.argv.slice(2));
+		if (
+			realpathSync(args["workspace-source"] ?? "") !==
+			realpathSync(join(homedir(), "shepherds", "forge"))
+		)
+			throw new Error("Only forge is authorized as a real workspace source");
+		await proveParity(args);
 	} catch (error) {
 		console.error(error);
 		process.exit(1);

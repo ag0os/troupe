@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
+	copyFileSync,
+	cpSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -166,4 +168,111 @@ test("committed package assertion refuses an extra file", () => {
 	expect(() => assertCommittedPackage(repo, "pkg", copy)).toThrow(
 		"committed HEAD",
 	);
+});
+
+async function stubPair(
+	name: string,
+	shippedBody: string,
+	candidateBody: string,
+	applies = false,
+	clock = false,
+) {
+	const { createPairing, observe } = await import("./prove-shepherd-parity");
+	const dir = join(root, `pair-${name}`);
+	const state = join(dir, ".shepherd");
+	const snapshot = join(dir, "snapshot");
+	mkdirSync(snapshot, { recursive: true });
+	writeFileSync(join(snapshot, "journal.md"), "original\n");
+	cpSync(snapshot, state, { recursive: true });
+	const paths = [join(dir, "shipped"), join(dir, "candidate")];
+	for (const [index, body] of [shippedBody, candidateBody].entries()) {
+		const path = paths[index] ?? "";
+		writeFileSync(
+			path,
+			`#!/bin/sh\nif [ "$1" = "--version" ]; then exit 0; fi\n${body}\n`,
+		);
+		chmodSync(path, 0o755);
+	}
+	const binary = join(dir, "binary");
+	const pairs: Record<string, unknown>[] = [];
+	const pair = createPairing({
+		state,
+		snapshot,
+		originalManifest: treeManifest(snapshot),
+		shipped: paths[0] ?? "",
+		candidate: paths[1] ?? "",
+		binary,
+		workspace: dir,
+		env: { PATH: process.env.PATH ?? "" },
+		evidence: join(dir, "evidence"),
+		put: (from) => copyFileSync(from, binary),
+		observe,
+		pairs,
+		align: async () => {},
+	});
+	const result = await pair(
+		applies ? "checkpoint-apply" : clock ? "start" : "check",
+		[],
+		applies,
+	);
+	return { result, pairs };
+}
+
+test("pairing rejects differing stdout", async () => {
+	await expect(
+		stubPair("stdout", "echo same", "echo different"),
+	).rejects.toThrow("PARITY DIFFERENCE");
+});
+test("pairing rejects differing exit", async () => {
+	await expect(stubPair("exit", "exit 0", "exit 1")).rejects.toThrow(
+		"PARITY DIFFERENCE",
+	);
+});
+test("pairing rejects differing stderr", async () => {
+	await expect(
+		stubPair("stderr", "echo same >&2", "echo different >&2"),
+	).rejects.toThrow("PARITY DIFFERENCE");
+});
+test("pairing retries displayed-clock straddles and records every pair", async () => {
+	const { pairs } = await stubPair(
+		"clock",
+		"echo 2026-11-08T01:00:00Z",
+		"if [ -e counted ]; then echo 2026-11-08T01:00:00Z; else touch counted; echo 2026-11-08T01:00:01Z; fi",
+		false,
+		true,
+	);
+	expect(pairs.map((p) => [p.retry, p.straddled])).toEqual([
+		[0, true],
+		[1, false],
+	]);
+});
+test("pairing rejects differing applied record bytes", async () => {
+	const checkpoint = `printf '%s' '{"written":"2026-11-08T01:00:00Z"}' > .shepherd/checkpoint.json`;
+	await expect(
+		stubPair(
+			"records",
+			`${checkpoint}\necho same > .shepherd/journal.md`,
+			`${checkpoint}\necho different > .shepherd/journal.md`,
+			true,
+		),
+	).rejects.toThrow("resulting record bytes");
+});
+test("pairing rejects a candidate dry run that writes journal.md", async () => {
+	await expect(
+		stubPair(
+			"readonly",
+			"echo same",
+			"echo changed > .shepherd/journal.md\necho same",
+		),
+	).rejects.toThrow("candidate read-only command preserved");
+});
+test("pairing accepts an identical pair", async () => {
+	const { result, pairs } = await stubPair(
+		"identical",
+		"echo same",
+		"echo same",
+	);
+	expect(result.code).toBe(0);
+	expect(pairs).toHaveLength(1);
+	expect(pairs[0]?.stdoutEqual).toBe(true);
 });
