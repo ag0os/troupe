@@ -250,13 +250,15 @@ export async function proveHarness(
 					await Bun.sleep(10);
 				}
 				child.kill(signal);
-				const code = await Promise.race([
-					child.exited,
-					Bun.sleep(10000).then(() => {
-						child.kill("SIGKILL");
-						throw new Error("runner failed signal bound");
-					}),
-				]);
+				let timedOut = false;
+				const timer = setTimeout(() => {
+					timedOut = true;
+					child.kill("SIGKILL");
+				}, 10000);
+				const code = await child.exited;
+				clearTimeout(timer);
+				if (timedOut) throw new Error("runner failed signal bound");
+
 				const result = {
 					argv: [binary, "--backend", backend, "--print", "triage"],
 					cwd,
@@ -388,6 +390,26 @@ export async function proveHarness(
 					`${scenario.name}: tool/guide selection differs for ${name}`,
 				);
 		}
+		if (scenario.name === "selected") {
+			for (const argv of [
+				["tool", "guide", "software", "build"],
+				["tool", "software", "contract", "--help"],
+				["tool", "software", "publish-check", "--help"],
+			]) {
+				const result = run([binary, ...argv], ws, moduleEnv);
+				saveRun(evidence, `software-${argv[1]}-${argv[2]}`, result);
+				if (result.code !== 0 || result.stdout.length === 0)
+					throw new Error(`adjacent software asset failed: ${argv.join(" ")}`);
+			}
+			if (
+				!text.includes("software publish-check") ||
+				!text.includes("software build")
+			)
+				throw new Error(
+					"software tools/guides absent from the compiled prompt",
+				);
+		}
+
 		outcomes.push({ kind: "modules", name: scenario.name, equal: true });
 	}
 	writeFileSync(

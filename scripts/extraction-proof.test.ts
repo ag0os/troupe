@@ -87,3 +87,25 @@ test("bundled dependencies are distinct from compiler-only dependencies", () => 
 	);
 	expect(bundledVersions(file)).toEqual({ zod: "4.6.5", typescript: "5.9.2" });
 });
+
+test("parity compares displayed clocks, including the written checkpoint", async () => {
+	const { displayedSecond } = await import("./prove-shepherd-parity");
+	const result = {
+		argv: [],
+		cwd: root,
+		code: 0,
+		stdout:
+			"# Shepherd start: workspace\n2026-11-08T01:45:29-03:00\nrevision 31 at 2026-11-08T01:27:25-03:00\n",
+		stderr: "",
+	};
+	expect(displayedSecond("start", result)).toBe("2026-11-08T01:45:29-03:00");
+	const checkpoint = {
+		"checkpoint.json": Buffer.from(
+			JSON.stringify({ written: "2026-11-08T01:45:29-03:00" }),
+		).toString("base64"),
+	};
+	expect(displayedSecond("checkpoint-apply", result, checkpoint)).toBe(
+		"2026-11-08T01:45:29-03:00",
+	);
+	expect(displayedSecond("check", result)).toBeUndefined();
+});

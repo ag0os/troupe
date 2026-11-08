@@ -4,7 +4,10 @@ import {
 	chmodSync,
 	copyFileSync,
 	cpSync,
+	existsSync,
+	linkSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -17,7 +20,6 @@ import {
 	isolatedEnv,
 	type Ran,
 	repoRoot,
-	run,
 	scratchDir,
 } from "./extraction-continuity";
 import {
@@ -30,21 +32,56 @@ import {
 	treeManifest,
 } from "./extraction-proof";
 
+async function observe(
+	argv: string[],
+	cwd: string,
+	env: Record<string, string>,
+): Promise<Ran> {
+	const child = Bun.spawn(argv, {
+		cwd,
+		env,
+		stdout: "pipe",
+		stderr: "pipe",
+		stdin: "ignore",
+	});
+	const [code, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	return { argv, cwd, code, stdout, stderr };
+}
+
 function records(state: string): Record<string, string> {
-	const files: Record<string, string> = {};
-	for (const row of treeManifest(state)) {
-		const path = row.split(" ")[0] ?? "";
-		if (path.endsWith("/")) continue;
-		// All state bytes are bound by the manifest; checkpoint records are retained verbatim too.
-		if (
-			path === "CURRENT.md" ||
-			path === "journal.md" ||
-			path === "checkpoint.json" ||
-			path.startsWith("checkpoints/")
-		)
-			files[path] = readFileSync(join(state, path)).toString("base64");
+	const result: Record<string, string> = {};
+	for (const path of ["CURRENT.md", "journal.md", "checkpoint.json"]) {
+		if (existsSync(join(state, path)))
+			result[path] = readFileSync(join(state, path)).toString("base64");
 	}
-	return files;
+	if (existsSync(join(state, "checkpoints")))
+		for (const file of readdirSync(join(state, "checkpoints"), {
+			withFileTypes: true,
+		})) {
+			if (file.isFile())
+				result[`checkpoints/${file.name}`] = readFileSync(
+					join(state, "checkpoints", file.name),
+				).toString("base64");
+		}
+	return result;
+}
+
+export function displayedSecond(
+	name: string,
+	result: Ran,
+	state?: Record<string, string>,
+): string | undefined {
+	if (name === "start")
+		return /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[^\n]*)$/m.exec(result.stdout)?.[1];
+	if (state?.["checkpoint.json"])
+		return JSON.parse(
+			Buffer.from(state["checkpoint.json"], "base64").toString(),
+		).written;
+	return undefined;
 }
 
 export async function proveParity(args: Record<string, string>): Promise<void> {
@@ -86,15 +123,59 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 	const env = isolatedEnv(parent, {
 		PATH: `${join(install, "bin")}:${fakes}:${process.env.PATH}`,
 		SHEPHERD_WORKSPACE: workspace,
+		HERDR_ENV: "0",
 	});
 	function restore(): void {
 		rmSync(state, { recursive: true, force: true });
 		cpSync(snapshot, state, { recursive: true, preserveTimestamps: true });
 	}
-	function put(from: string): void {
-		copyFileSync(from, binary);
-		chmodSync(binary, 0o755);
+	const parked = new Map<string, string>();
+	let active: string | undefined;
+	for (const [name, path] of [
+		["shipped", shipped],
+		["candidate", candidate],
+	] as const) {
+		const target = join(parent, `${name}-binary`);
+		copyFileSync(path, target);
+		chmodSync(target, 0o755);
+		parked.set(path, target);
 	}
+	function put(from: string): void {
+		if (active === from) return;
+		rmSync(binary, { force: true });
+		linkSync(parked.get(from) ?? "", binary);
+		active = from;
+	}
+	// Keep each copied inode and its parked path stable across turns. Replace
+	// only the common slot's hardlink; both processes still report that slot.
+	// Prewarming is outside the paired clock.
+	for (const from of [shipped, candidate]) {
+		put(from);
+		const warm = await observe([binary, "--version"], parent, env);
+		if (warm.code !== 0) throw new Error("binary prewarm failed");
+	}
+	function restoreRecords(): void {
+		for (const path of [
+			"CURRENT.md",
+			"journal.md",
+			"checkpoint.json",
+			"checkpoints",
+		]) {
+			rmSync(join(state, path), { recursive: true, force: true });
+			if (existsSync(join(snapshot, path)))
+				cpSync(join(snapshot, path), join(state, path), {
+					recursive: true,
+					preserveTimestamps: true,
+				});
+		}
+		assertEqual(
+			treeManifest(state),
+			originalManifest,
+			"restored entire workspace state",
+		);
+	}
+
+	restore();
 	const pairs: Record<string, unknown>[] = [];
 	async function pair(
 		name: string,
@@ -102,27 +183,64 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 		applies = false,
 	): Promise<Ran> {
 		for (let retry = 0; retry < 30; retry++) {
-			// Start early in a second, to give both unmodified clocks the same displayed second.
-			const wait = 1000 - (Date.now() % 1000) + 15;
-			await Bun.sleep(wait);
-			restore();
+			if (applies) restoreRecords();
+			else
+				assertEqual(
+					treeManifest(state),
+					originalManifest,
+					"workspace state before pair",
+				);
 			put(shipped);
+			const warmA = await observe([binary, "--version"], workspace, env);
+			if (warmA.code !== 0) throw new Error("shipped prewarm failed");
+			// Align after restoring, outside the observed command interval.
+			const alignmentMs = (15 + retry * 137) % 1000;
+			await Bun.sleep((1000 - (Date.now() % 1000) + alignmentMs) % 1000);
 			const start = Date.now();
-			const a = run([binary, ...argv], workspace, env);
+			const a = await observe([binary, ...argv], workspace, env);
 			const aEnd = Date.now();
+			put(candidate);
+			// Version reads no workspace state. Warm the swapped executable while
+			// verifying/restoring state, before the candidate's observed command.
+			const warmBPending = observe([binary, "--version"], workspace, env);
 			const aRecords = applies ? records(state) : undefined;
 			const aManifest = applies ? treeManifest(state) : undefined;
-			restore();
-			put(candidate);
+			if (applies) restoreRecords();
+			else
+				assertEqual(
+					treeManifest(state),
+					originalManifest,
+					"read-only command preserved entire workspace state",
+				);
+			const warmB = await warmBPending;
+			if (warmB.code !== 0) throw new Error("candidate prewarm failed");
 			const bStart = Date.now();
-			const b = run([binary, ...argv], workspace, env);
+			const b = await observe([binary, ...argv], workspace, env);
 			const end = Date.now();
+			saveRun(evidence, `${name}-${retry}-warm-shipped`, warmA);
+			saveRun(evidence, `${name}-${retry}-warm-candidate`, warmB);
 			saveRun(evidence, `${name}-${retry}-shipped`, a);
 			saveRun(evidence, `${name}-${retry}-candidate`, b);
-			const straddled = Math.floor(start / 1000) !== Math.floor(end / 1000);
+			const bRecords = applies ? records(state) : undefined;
+			const aClock = displayedSecond(name, a, aRecords);
+			const bClock = displayedSecond(name, b, bRecords);
+			if ((name === "start" || applies) && (!aClock || !bClock))
+				throw new Error(`${name}: missing displayed clock`);
+			const straddled = aClock !== bClock;
+			if (applies) {
+				writeFileSync(
+					join(evidence, `${name}-${retry}-shipped-records.json`),
+					JSON.stringify(aRecords, null, 2),
+				);
+				writeFileSync(
+					join(evidence, `${name}-${retry}-candidate-records.json`),
+					JSON.stringify(bRecords, null, 2),
+				);
+			}
 			pairs.push({
 				name,
 				retry,
+				alignmentMs,
 				argv,
 				start,
 				aEnd,
@@ -131,6 +249,10 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 				shippedExit: a.code,
 				candidateExit: b.code,
 				straddled,
+				displayedShipped: aClock ?? null,
+				displayedCandidate: bClock ?? null,
+				wallIntervalStraddled:
+					Math.floor(start / 1000) !== Math.floor(end / 1000),
 				stdoutEqual: a.stdout === b.stdout,
 				stderrEqual: a.stderr === b.stderr,
 			});
@@ -147,7 +269,7 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 					`PARITY DIFFERENCE ${name}\nshipped stdout:\n${a.stdout}\nshipped stderr:\n${a.stderr}\ncandidate stdout:\n${b.stdout}\ncandidate stderr:\n${b.stderr}`,
 				);
 			if (applies) {
-				assertEqual(records(state), aRecords, `${name} resulting record bytes`);
+				assertEqual(bRecords, aRecords, `${name} resulting record bytes`);
 				assertEqual(
 					treeManifest(state),
 					aManifest,
@@ -195,10 +317,14 @@ export async function proveParity(args: Record<string, string>): Promise<void> {
 		["shipped", shipped],
 		["candidate", candidate],
 	] as const) {
-		const doctor = run([path, "tool", "doctor", "--json"], workspace, {
-			...env,
-			PATH: `${dirname(path)}:${fakes}:${process.env.PATH}`,
-		});
+		const doctor = await observe(
+			[path, "tool", "doctor", "--json"],
+			workspace,
+			{
+				...env,
+				PATH: `${dirname(path)}:${fakes}:${process.env.PATH}`,
+			},
+		);
 		saveRun(evidence, `actual-doctor-${name}`, doctor);
 		const parsed = JSON.parse(doctor.stdout);
 		const base = parsed.checks.find(
