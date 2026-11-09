@@ -2411,6 +2411,8 @@ const MODES: string[][] = [
 ];
 
 describe("isolated, read-only extraction (CT-11)", () => {
+	// Twelve launcher runs in sequence: 2.9 s alone, past Bun's 5 s default
+	// under full-suite load.
 	test("cwd bunfig preloads, .env files and git drivers stay inert, from root and nested cwd", () => {
 		const sentinel = join(root, "sentinels");
 		mkdirSync(sentinel);
@@ -2451,5 +2453,5 @@ describe("isolated, read-only extraction (CT-11)", () => {
 		expect(readdirSync(sentinel)).toEqual([]);
 		expect(snapshot(repo)).toEqual(before);
 		expect(readdirSync(temp)).toEqual([]);
-	});
+	}, 30_000);
 });

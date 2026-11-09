@@ -253,6 +253,9 @@ describe("BH-5: guard infrastructure", () => {
 });
 
 describe("BH-5: fallback log destinations", () => {
+	// Each test runs several sh and hook processes in sequence: up to 3.1 s
+	// under full-suite load, past Bun's 5 s default in one run.
+	const SPAWN_BOUND_MS = 30_000;
 	const noBun = { PATH: "/usr/bin:/bin" };
 	const wrapper = (
 		g: Fixture,
@@ -286,113 +289,137 @@ describe("BH-5: fallback log destinations", () => {
 		).toStartWith("health check could not run on ");
 	};
 
-	test("a run directory redirected into the repository gets no fallback line", () => {
-		const g = new Fixture();
-		try {
-			const launcher = g.ownPackage();
-			g.prepare(g.input());
-			const inner = join(g.repo, "inner");
-			renameSync(g.runDir, inner);
-			symlinkSync(inner, g.runDir);
-			closed(wrapper(g, "guard", commit, noBun));
-			renameSync(launcher, `${launcher}-gone`);
-			asContext(wrapper(g, "health", edited(g)));
-			const stop = wrapper(g, "stop", { session_id: "s1" });
-			expect(stop.code).toBe(0);
-			expect(stop.stdout).toBe("");
-			expect(existsSync(join(inner, "hooks.log"))).toBe(false);
-		} finally {
-			g.cleanup();
-		}
-	});
-
-	test("a moved repository behind a symlink gets no fallback line", () => {
-		const g = new Fixture();
-		try {
-			g.prepare(g.input());
-			const moved = join(g.root, "repo2");
-			renameSync(g.repo, moved);
-			symlinkSync(moved, g.repo);
-			const inner = join(moved, "inner");
-			renameSync(g.runDir, inner);
-			symlinkSync(inner, g.runDir);
-			closed(wrapper(g, "guard", commit, noBun));
-			asContext(wrapper(g, "health", edited(g), noBun));
-			closed(g.hook("guard", commit, noBun));
-			asContext(g.hook("health", edited(g), noBun));
-			expect(existsSync(join(inner, "hooks.log"))).toBe(false);
-		} finally {
-			g.cleanup();
-		}
-	});
-
-	test("a malformed manifest that keeps its repo line gets no fallback line", () => {
-		const g = new Fixture();
-		try {
-			g.prepare(g.input());
-			writeFileSync(g.manifest, `${readFileSync(g.manifest, "utf8")}{\n`);
-			closed(wrapper(g, "guard", commit, noBun));
-			asContext(wrapper(g, "health", edited(g), noBun));
-			closed(g.hook("guard", commit, noBun));
-			asContext(g.hook("health", edited(g), noBun));
-			expect(existsSync(g.log)).toBe(false);
-		} finally {
-			g.cleanup();
-		}
-	});
-
-	test("a launcher path holding a newline still writes one record per fallback", () => {
-		const g = new Fixture();
-		try {
-			const launcher = g.ownPackage("pk\ng%");
-			g.prepare(g.input());
-			renameSync(launcher, `${launcher}-gone`);
-			asContext(wrapper(g, "health", edited(g)));
-			expect(wrapper(g, "stop", { session_id: "s1" }).code).toBe(0);
-			const lines = readFileSync(g.log, "utf8").split("\n").filter(Boolean);
-			expect(lines).toHaveLength(2);
-			for (const line of lines) {
-				expect(line).toMatch(
-					/^\d\d:\d\d:\d\d (health|stop) launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
-				);
-				expect(line).toContain("pk%0Ag%25/software");
+	test(
+		"a run directory redirected into the repository gets no fallback line",
+		() => {
+			const g = new Fixture();
+			try {
+				const launcher = g.ownPackage();
+				g.prepare(g.input());
+				const inner = join(g.repo, "inner");
+				renameSync(g.runDir, inner);
+				symlinkSync(inner, g.runDir);
+				closed(wrapper(g, "guard", commit, noBun));
+				renameSync(launcher, `${launcher}-gone`);
+				asContext(wrapper(g, "health", edited(g)));
+				const stop = wrapper(g, "stop", { session_id: "s1" });
+				expect(stop.code).toBe(0);
+				expect(stop.stdout).toBe("");
+				expect(existsSync(join(inner, "hooks.log"))).toBe(false);
+			} finally {
+				g.cleanup();
 			}
-		} finally {
-			g.cleanup();
-		}
-	});
+		},
+		SPAWN_BOUND_MS,
+	);
 
-	test("the guard wrapper logs when the launcher is gone (B13)", () => {
-		const g = new Fixture();
-		try {
-			const launcher = g.ownPackage();
-			g.prepare(g.input());
-			renameSync(launcher, `${launcher}-gone`);
-			closed(wrapper(g, "guard", commit));
-			expect(g.logLines().at(-1)).toMatch(
-				/^\d\d:\d\d:\d\d guard launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
-			);
-		} finally {
-			g.cleanup();
-		}
-	});
+	test(
+		"a moved repository behind a symlink gets no fallback line",
+		() => {
+			const g = new Fixture();
+			try {
+				g.prepare(g.input());
+				const moved = join(g.root, "repo2");
+				renameSync(g.repo, moved);
+				symlinkSync(moved, g.repo);
+				const inner = join(moved, "inner");
+				renameSync(g.runDir, inner);
+				symlinkSync(inner, g.runDir);
+				closed(wrapper(g, "guard", commit, noBun));
+				asContext(wrapper(g, "health", edited(g), noBun));
+				closed(g.hook("guard", commit, noBun));
+				asContext(g.hook("health", edited(g), noBun));
+				expect(existsSync(join(inner, "hooks.log"))).toBe(false);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
 
-	test("a run directory whose name ends in a newline still gets its fallback line", () => {
-		const g = new Fixture();
-		try {
-			const launcher = g.ownPackage();
-			g.runDir = join(g.root, "run\n");
-			g.prepare(g.input());
-			renameSync(launcher, `${launcher}-gone`);
-			asContext(wrapper(g, "health", edited(g)));
-			expect(g.logLines()).toHaveLength(1);
-			expect(g.logLines()[0]).toContain(
-				" health launcher - 0ms COULD-NOT-RUN ",
-			);
-		} finally {
-			g.cleanup();
-		}
-	});
+	test(
+		"a malformed manifest that keeps its repo line gets no fallback line",
+		() => {
+			const g = new Fixture();
+			try {
+				g.prepare(g.input());
+				writeFileSync(g.manifest, `${readFileSync(g.manifest, "utf8")}{\n`);
+				closed(wrapper(g, "guard", commit, noBun));
+				asContext(wrapper(g, "health", edited(g), noBun));
+				closed(g.hook("guard", commit, noBun));
+				asContext(g.hook("health", edited(g), noBun));
+				expect(existsSync(g.log)).toBe(false);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
+
+	test(
+		"a launcher path holding a newline still writes one record per fallback",
+		() => {
+			const g = new Fixture();
+			try {
+				const launcher = g.ownPackage("pk\ng%");
+				g.prepare(g.input());
+				renameSync(launcher, `${launcher}-gone`);
+				asContext(wrapper(g, "health", edited(g)));
+				expect(wrapper(g, "stop", { session_id: "s1" }).code).toBe(0);
+				const lines = readFileSync(g.log, "utf8").split("\n").filter(Boolean);
+				expect(lines).toHaveLength(2);
+				for (const line of lines) {
+					expect(line).toMatch(
+						/^\d\d:\d\d:\d\d (health|stop) launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
+					);
+					expect(line).toContain("pk%0Ag%25/software");
+				}
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
+
+	test(
+		"the guard wrapper logs when the launcher is gone (B13)",
+		() => {
+			const g = new Fixture();
+			try {
+				const launcher = g.ownPackage();
+				g.prepare(g.input());
+				renameSync(launcher, `${launcher}-gone`);
+				closed(wrapper(g, "guard", commit));
+				expect(g.logLines().at(-1)).toMatch(
+					/^\d\d:\d\d:\d\d guard launcher - 0ms COULD-NOT-RUN the launcher \S+ is missing or not executable$/,
+				);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
+
+	test(
+		"a run directory whose name ends in a newline still gets its fallback line",
+		() => {
+			const g = new Fixture();
+			try {
+				const launcher = g.ownPackage();
+				g.runDir = join(g.root, "run\n");
+				g.prepare(g.input());
+				renameSync(launcher, `${launcher}-gone`);
+				asContext(wrapper(g, "health", edited(g)));
+				expect(g.logLines()).toHaveLength(1);
+				expect(g.logLines()[0]).toContain(
+					" health launcher - 0ms COULD-NOT-RUN ",
+				);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
 
 	// The launcher's own fallback, as it runs: executable, its builder-hooks.d
 	// moved, so its reason holds the launcher path. Its record must match
@@ -432,35 +459,44 @@ describe("BH-5: fallback log destinations", () => {
 				g.cleanup();
 			}
 		},
+		SPAWN_BOUND_MS,
 	);
 
-	test("the launcher keeps a trailing newline in the run directory it resolves", () => {
-		const g = new Fixture();
-		try {
-			g.runDir = join(g.root, "run\n");
-			g.prepare(g.input());
-			asContext(wrapper(g, "health", edited(g), noBun));
-			expect(g.logLines()).toHaveLength(1);
-			expect(g.logLines()[0]).toContain(
-				" health launcher - 0ms COULD-NOT-RUN bun is not on PATH",
-			);
-		} finally {
-			g.cleanup();
-		}
-	});
+	test(
+		"the launcher keeps a trailing newline in the run directory it resolves",
+		() => {
+			const g = new Fixture();
+			try {
+				g.runDir = join(g.root, "run\n");
+				g.prepare(g.input());
+				asContext(wrapper(g, "health", edited(g), noBun));
+				expect(g.logLines()).toHaveLength(1);
+				expect(g.logLines()[0]).toContain(
+					" health launcher - 0ms COULD-NOT-RUN bun is not on PATH",
+				);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
 
-	test("an absent manifest leaves no log and still answers closed or as context", () => {
-		const g = new Fixture();
-		try {
-			g.prepare(g.input());
-			rmSync(g.manifest);
-			closed(wrapper(g, "guard", commit));
-			asContext(wrapper(g, "health", edited(g)));
-			expect(existsSync(g.log)).toBe(false);
-		} finally {
-			g.cleanup();
-		}
-	});
+	test(
+		"an absent manifest leaves no log and still answers closed or as context",
+		() => {
+			const g = new Fixture();
+			try {
+				g.prepare(g.input());
+				rmSync(g.manifest);
+				closed(wrapper(g, "guard", commit));
+				asContext(wrapper(g, "health", edited(g)));
+				expect(existsSync(g.log)).toBe(false);
+			} finally {
+				g.cleanup();
+			}
+		},
+		SPAWN_BOUND_MS,
+	);
 });
 
 describe("BH-6: history classification", () => {
