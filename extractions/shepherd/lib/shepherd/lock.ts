@@ -17,16 +17,27 @@ import { join, resolve } from "node:path";
 import { threadId } from "node:worker_threads";
 import type { ToolEnv } from "./sessions";
 
+/** Reads of a lock that keeps changing before `lockStatus` gives up. */
+export const LOCK_REREADS = 1000;
+
 export class LockError extends Error {
-	readonly kind: "alive" | "stale";
+	readonly kind: "alive" | "stale" | "unsettled";
 	readonly state: string;
 	readonly pid?: number;
 
-	constructor(kind: "alive" | "stale", pid?: number, state: string = "") {
+	constructor(
+		kind: "alive" | "stale" | "unsettled",
+		pid?: number,
+		state: string = "",
+		unsettled?: { which: "state" | "unlock"; cause: unknown },
+	) {
 		super(
 			kind === "alive"
 				? `locked by pid ${pid} (alive)`
-				: `stale lock \`.shepherd/.state.lock\` left by pid ${pid ?? "unknown"}; run \`shepherd tool unlock\``,
+				: kind === "stale"
+					? `stale lock \`.shepherd/.state.lock\` left by pid ${pid ?? "unknown"}; run \`shepherd tool unlock\``
+					: `lock \`.shepherd/.${unsettled?.which ?? "state"}.lock\` changed on each of ${LOCK_REREADS} reads; last: ${unsettled?.cause instanceof Error ? unsettled.cause.message : "the directory was replaced while it was read"}`,
+			{ cause: unsettled?.cause },
 		);
 		this.name = "LockError";
 		this.kind = kind;
@@ -110,7 +121,7 @@ function ownerPid(path: string): number | undefined {
 function statusAt(
 	path: string,
 	toolEnv: ToolEnv,
-): LockStatus | { status: "changed" } {
+): LockStatus | { status: "changed"; cause?: unknown } {
 	// Holding the directory open keeps its inode number from going to the next
 	// writer's directory, as ext4 and overlay otherwise do at once, so an equal
 	// lstat afterwards proves the owner was read from this same directory.
@@ -124,7 +135,16 @@ function statusAt(
 		throw error;
 	}
 	try {
-		const before = fstatSync(fd);
+		let before: Stats;
+		try {
+			before = fstatSync(fd);
+		} catch (error) {
+			// The directory is being removed under this descriptor (macOS reports
+			// ENOENT during another process's removeLock); reread the path.
+			if (errorCode(error) === "ENOENT")
+				return { status: "changed", cause: error };
+			throw error;
+		}
 		const pid = ownerPid(path);
 		const alive = pid !== undefined && toolEnv.pidAlive(pid);
 		try {
@@ -149,16 +169,28 @@ function removeLock(path: string): void {
 	rmSync(gone, { recursive: true, force: true });
 }
 
+/** Reread until a probe settles; a lock that never does is a LockError. */
+function settledStatus(
+	state: string,
+	toolEnv: ToolEnv,
+	which: "state" | "unlock",
+): LockStatus {
+	let cause: unknown;
+	for (let read = 0; read < LOCK_REREADS; read++) {
+		const status = statusAt(join(state, `.${which}.lock`), toolEnv);
+		if (status.status !== "changed") return status;
+		cause = status.cause;
+	}
+	throw new LockError("unsettled", undefined, state, { which, cause });
+}
+
 /** Read the current owner without taking either lock. */
 export function lockStatus(
 	state: string,
 	toolEnv: ToolEnv,
 	which: "state" | "unlock" = "state",
 ): LockStatus {
-	while (true) {
-		const status = statusAt(join(state, `.${which}.lock`), toolEnv);
-		if (status.status !== "changed") return status;
-	}
+	return settledStatus(state, toolEnv, which);
 }
 
 async function acquire(
@@ -221,8 +253,8 @@ async function acquire(
 				)
 					throw error;
 			}
-			const status = statusAt(path, toolEnv);
-			if (status.status === "free" || status.status === "changed") continue;
+			const status = settledStatus(state, toolEnv, which);
+			if (status.status === "free") continue;
 			if (status.status === "stale")
 				throw new LockError("stale", status.pid, state);
 			const remaining = timeoutMs - (performance.now() - start);
@@ -322,7 +354,8 @@ export async function unlockState(
 	try {
 		release = await acquire(state, toolEnv, "unlock", options);
 	} catch (error) {
-		if (!(error instanceof LockError)) throw error;
+		if (!(error instanceof LockError) || error.kind === "unsettled")
+			throw error;
 		return error.kind === "alive"
 			? {
 					code: 1,

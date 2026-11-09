@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
 	existsSync,
 	fstatSync,
@@ -14,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
+import * as lockModule from "./lock";
 import {
 	LockError,
 	LockReleaseError,
@@ -878,7 +880,9 @@ process.stdout.write(JSON.stringify(counts));
 		return { code, stdout, stderr };
 	});
 	try {
-		const deadline = performance.now() + 5000;
+		// 30 s: at 12 parallel copies every run passed the old 5 s deadline
+		// before its children were ready (flaky-tests item 3).
+		const deadline = performance.now() + 30_000;
 		while (
 			!modes.every((_, index) => existsSync(join(state, `ready.${index}`)))
 		) {
@@ -916,14 +920,16 @@ process.stdout.write(JSON.stringify(counts));
 	}
 }
 
+// 60 s: each test takes about 2.3 s alone and about 11 s at 4 parallel
+// copies; all runs failed the old 15 s bound under 12-way load.
 describe("multiprocess locking", () => {
 	test("four writers race through 1200 acquisitions without overlap, lost owners or stale failures", async () => {
 		await multiprocessProbe(false);
-	}, 15_000);
+	}, 60_000);
 
 	test("unlock loops beside four writers never clear live locks or throw", async () => {
 		await multiprocessProbe(true);
-	}, 15_000);
+	}, 60_000);
 });
 
 describe("fix round 2 regressions", () => {
@@ -1287,4 +1293,131 @@ describe("non-directory lock paths", () => {
 			expect(lockStatus(state, env)).toEqual({ status: "stale" });
 		});
 	}
+});
+
+// Obligation: a lock directory that disappears between open and fstat is a
+// change, not a failure; statusAt rereads. A lock that changes on every read
+// fails with a LockError after LOCK_REREADS reads instead of spinning.
+// macOS can fail fstat with ENOENT on a descriptor whose directory another
+// process's removeLock has renamed to its `.gone` name and is removing; these
+// tests inject that answer for the lock descriptor alone.
+describe("a lock directory that vanishes between open and fstat is a change", () => {
+	// Read through the namespace so the file still loads where it is missing.
+	const LOCK_REREADS = lockModule.LOCK_REREADS;
+	const real = { ...lockFs };
+	const realFstat = fs.fstatSync;
+	const realClose = fs.closeSync;
+	const restores: Array<() => void> = [];
+	afterEach(() => {
+		for (const restore of restores.splice(0)) restore();
+		Object.assign(lockFs, real);
+	});
+
+	/** Fail `times` fstat calls on lock descriptors with ENOENT. */
+	function vanishAtFstat(times: number) {
+		const opened = new Set<number>();
+		const failed = new Set<number>();
+		const seen = { injected: 0, closedFailed: 0 };
+		let left = times;
+		lockFs.openDirectory = (path) => {
+			const fd = real.openDirectory(path);
+			opened.add(fd);
+			return fd;
+		};
+		const fstat = spyOn(fs, "fstatSync").mockImplementation(((
+			fd: number,
+			...rest: unknown[]
+		) => {
+			if (opened.delete(fd) && left > 0) {
+				left -= 1;
+				seen.injected += 1;
+				failed.add(fd);
+				throw Object.assign(
+					new Error("ENOENT: no such file or directory, fstat"),
+					{ code: "ENOENT", errno: -2, syscall: "fstat" },
+				);
+			}
+			return (realFstat as (...args: unknown[]) => unknown)(fd, ...rest);
+		}) as typeof fs.fstatSync);
+		const close = spyOn(fs, "closeSync").mockImplementation((fd: number) => {
+			if (failed.delete(fd)) seen.closedFailed += 1;
+			realClose(fd);
+		});
+		restores.push(
+			() => fstat.mockRestore(),
+			() => close.mockRestore(),
+		);
+		return seen;
+	}
+
+	test("status rereads and reports the live owner, closing the descriptor", () => {
+		const { state, env } = fixture();
+		owner(state, 103);
+		const seen = vanishAtFstat(1);
+		expect(lockStatus(state, env)).toEqual({ status: "alive", pid: 103 });
+		expect(seen).toEqual({ injected: 1, closedFailed: 1 });
+	});
+
+	test("a contending writer rereads and waits on the live owner", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		const seen = vanishAtFstat(1);
+		const error = await rejection(withStateLock(state, env, () => {}, options));
+		expect(error.kind).toBe("alive");
+		expect(error.pid).toBe(102);
+		expect(seen).toEqual({ injected: 1, closedFailed: 1 });
+		noTemporary(state);
+	});
+
+	test("unlock rereads and refuses the live owner", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		const seen = vanishAtFstat(1);
+		expect(await unlockState(state, env, options)).toMatchObject({
+			code: 1,
+			outcome: "alive",
+			pid: 102,
+		});
+		expect(seen).toEqual({ injected: 1, closedFailed: 1 });
+		expect(existsSync(join(state, ".unlock.lock"))).toBe(false);
+	});
+
+	test("status gives up with a lock error after LOCK_REREADS reads that never settle", () => {
+		const { state, env } = fixture();
+		owner(state, 103);
+		const seen = vanishAtFstat(Number.POSITIVE_INFINITY);
+		let error: unknown;
+		try {
+			lockStatus(state, env);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(LockError);
+		expect((error as LockError).kind).toBe("unsettled");
+		expect((error as LockError).state).toBe(state);
+		expect((error as LockError).message).toContain(".shepherd/.state.lock");
+		expect((error as LockError).message).toContain("ENOENT");
+		expect(seen.injected).toBe(LOCK_REREADS);
+		expect(seen.closedFailed).toBe(LOCK_REREADS);
+	});
+
+	test("a contending writer gives up with a lock error instead of spinning", async () => {
+		const { state, env } = fixture();
+		owner(state, 102);
+		const seen = vanishAtFstat(Number.POSITIVE_INFINITY);
+		const error = await rejection(withStateLock(state, env, () => {}, options));
+		expect(error.kind).toBe("unsettled");
+		expect(seen.injected).toBe(LOCK_REREADS);
+		noTemporary(state);
+	});
+
+	test("an unlock lock that never settles is an error, not a stale unlock to remove by hand", async () => {
+		const { state, env } = fixture();
+		owner(state, 102, "unlock");
+		vanishAtFstat(Number.POSITIVE_INFINITY);
+		const error = await rejection(unlockState(state, env, options));
+		expect(error.kind).toBe("unsettled");
+		expect(error.message).toContain(".shepherd/.unlock.lock");
+		noTemporary(state);
+	});
 });
