@@ -245,8 +245,10 @@ describe("real codex debug prompt-input (B-010; ACC-003)", () => {
 		60_000,
 	);
 
+	// Checked against codex-cli 0.164.0. If either key starts rendering
+	// differently, the matching test fails and the drift is visible here.
 	test.skipIf(realCodex === null)(
-		"prompt-input cannot show a replaced base, so only the argv guard catches it",
+		"base_instructions alone renders like plain append, so only the argv guard catches it",
 		async () => {
 			const options = {
 				codex: realCodex ?? "codex",
@@ -254,13 +256,9 @@ describe("real codex debug prompt-input (B-010; ACC-003)", () => {
 				env: codexEnv(),
 			};
 			const canary = canaryText("replace");
-			const file = join(root, "model-instructions.md");
-			writeFileSync(file, "REPLACED BASE");
 			const append = ["-c", `developer_instructions=${JSON.stringify(canary)}`];
 			const replacing = [
 				...append,
-				"-c",
-				`model_instructions_file=${JSON.stringify(file)}`,
 				"-c",
 				`base_instructions=${JSON.stringify("REPLACED BASE")}`,
 			];
@@ -275,8 +273,45 @@ describe("real codex debug prompt-input (B-010; ACC-003)", () => {
 			expect(replaced).toEqual(plain);
 			expect(canaryProblems(replaced, baseline, canary)).toEqual([]);
 			expect(appendArgvProblems(replacing)).toEqual([
-				"the codex argv sets model_instructions_file",
 				"the codex argv sets base_instructions",
+			]);
+		},
+		60_000,
+	);
+
+	test.skipIf(realCodex === null)(
+		"model_instructions_file visibly replaces the first developer item, and both checks catch it",
+		async () => {
+			const options = {
+				codex: realCodex ?? "codex",
+				cwd: workspace,
+				env: codexEnv(),
+			};
+			const canary = canaryText("replace");
+			const file = join(root, "model-instructions.md");
+			writeFileSync(file, "REPLACED BASE");
+			const append = ["-c", `developer_instructions=${JSON.stringify(canary)}`];
+			const replacing = [
+				...append,
+				"-c",
+				`model_instructions_file=${JSON.stringify(file)}`,
+			];
+			const [baseline = [], plain = [], replaced = []] = await promptInputs(
+				[
+					["--", CANARY_USER_PROMPT],
+					[...append, "--", CANARY_USER_PROMPT],
+					[...replacing, "--", CANARY_USER_PROMPT],
+				],
+				options,
+			);
+			expect(replaced).not.toEqual(plain);
+			expect(replaced[0]).toEqual({ role: "developer", text: "REPLACED BASE" });
+			expect(replaced.slice(1)).toEqual(plain.slice(1));
+			const problems = canaryProblems(replaced, baseline, canary);
+			expect(problems).toHaveLength(1);
+			expect(problems[0]).toMatch(/^1 base developer item\(s\) are missing: /);
+			expect(appendArgvProblems(replacing)).toEqual([
+				"the codex argv sets model_instructions_file",
 			]);
 		},
 		60_000,

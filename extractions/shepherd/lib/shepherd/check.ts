@@ -8,7 +8,7 @@ import type { Config } from "./config";
 import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
-import { lockStatus } from "./lock";
+import { LockError, lockStatus } from "./lock";
 import { moduleCatalog } from "./module-resolution";
 import { currentItems, updatedName } from "./query-items";
 import { sessionPrefixFor } from "./session-name";
@@ -153,6 +153,17 @@ export function checkWorkspace(
 		try {
 			status = lockStatus(workspace.state, probe, which);
 		} catch (error) {
+			// A lock that changed on every read is in use, not stale, so no
+			// removal is suggested.
+			if (error instanceof LockError && error.kind === "unsettled") {
+				add(
+					"warn",
+					"lock-unsettled",
+					join(workspace.state, `.${which}.lock`),
+					error.message,
+				);
+				continue;
+			}
 			status = { status: "stale" };
 			problem = `; could not inspect lock: ${error instanceof Error ? error.message : String(error)}`;
 		}

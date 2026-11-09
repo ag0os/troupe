@@ -53,11 +53,25 @@ export class SourceInputError extends Error {
 }
 
 /**
+ * Whether `args` names a Git command that prints on every success, so an
+ * empty successful answer can only be a lost pipe.
+ */
+function alwaysPrints(args: readonly string[]): boolean {
+	return (
+		args[0] === "rev-parse" ||
+		(args[0] === "merge-base" && !args.includes("--is-ancestor"))
+	);
+}
+
+/**
  * A Git runner that drops inherited `GIT_*` routing variables, so the
- * repository is always the one at `cwd`, then applies `env`.
+ * repository is always the one at `cwd`, then applies `env`. Bun 1.2.22's
+ * `spawnSync` can drop a child's piped stdout under load and still report
+ * exit 0, so a command that always prints and came back empty runs once
+ * more, and the second answer stands.
  */
 export function createGitRunner(env: Record<string, string> = {}): GitRunner {
-	return (args, cwd, input) => {
+	const run: GitRunner = (args, cwd, input) => {
 		const clean: Record<string, string> = {};
 		for (const [key, value] of Object.entries(process.env)) {
 			if (value !== undefined && !key.startsWith("GIT_")) clean[key] = value;
@@ -73,6 +87,11 @@ export function createGitRunner(env: Record<string, string> = {}): GitRunner {
 			stdout: child.stdout ?? new Uint8Array(),
 			stderr: child.error?.message ?? child.stderr?.toString() ?? "",
 		};
+	};
+	return (args, cwd, input) => {
+		const result = run(args, cwd, input);
+		if (result.code !== 0 || result.stdout.byteLength > 0) return result;
+		return alwaysPrints(args) ? run(args, cwd, input) : result;
 	};
 }
 

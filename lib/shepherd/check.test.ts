@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkWorkspace, type Finding } from "./check";
@@ -11,7 +12,13 @@ import {
 	DEFAULT_WINDOWS,
 } from "./config";
 import { contentHash } from "./current-prev";
-import { LockError, lockStatus, unlockState, withStateLock } from "./lock";
+import {
+	LockError,
+	lockFs,
+	lockStatus,
+	unlockState,
+	withStateLock,
+} from "./lock";
 import { fakeToolEnv, type MakeTreeOptions, makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 
@@ -779,6 +786,62 @@ describe("T9 fix round 1", () => {
 		expect(finding(findings, "checkpoint-missing")).toMatchObject({
 			level: "info",
 		});
+	});
+
+	test("a lock that never settles is its own warning, with no removal instruction", () => {
+		const owner = JSON.stringify({ pid: 42, started: TODAY.toISOString() });
+		const { workspace, tree, root } = fixture({
+			"root/.shepherd/.state.lock/owner": owner,
+			"root/.shepherd/.unlock.lock/owner": owner,
+		});
+		// Every lock descriptor's fstat reports the directory gone, as macOS
+		// does while another process removes it, so no read ever settles.
+		const realOpen = lockFs.openDirectory;
+		const opened = new Set<number>();
+		lockFs.openDirectory = (path) => {
+			const fd = realOpen(path);
+			opened.add(fd);
+			return fd;
+		};
+		const realFstat = fs.fstatSync;
+		const fstat = spyOn(fs, "fstatSync").mockImplementation(((
+			fd: number,
+			...rest: unknown[]
+		) => {
+			if (opened.delete(fd))
+				throw Object.assign(
+					new Error("ENOENT: no such file or directory, fstat"),
+					{ code: "ENOENT", errno: -2, syscall: "fstat" },
+				);
+			return (realFstat as (...args: unknown[]) => unknown)(fd, ...rest);
+		}) as typeof fs.fstatSync);
+		let findings: Finding[];
+		try {
+			findings = checkWorkspace(
+				workspace,
+				tree,
+				config(),
+				TODAY,
+				root,
+				fakeToolEnv({ home: root }),
+			);
+		} finally {
+			fstat.mockRestore();
+			lockFs.openDirectory = realOpen;
+		}
+		expect(findings.filter(({ code }) => code === "lock-stale")).toEqual([]);
+		const locks = findings.filter(({ code }) => code === "lock-unsettled");
+		expect(locks.map(({ file, level }) => [file, level])).toEqual([
+			[".state.lock", "warn"],
+			[".unlock.lock", "warn"],
+		]);
+		for (const lock of locks) {
+			expect(lock.message).toMatch(
+				/^lock `\.shepherd\/\.(state|unlock)\.lock` changed on each of 1000 reads; last: ENOENT/,
+			);
+			expect(lock.message).not.toContain("rm -r");
+			expect(lock.message).not.toContain("shepherd tool unlock");
+		}
 	});
 
 	test("doc triggers recognize defined reference links and exclude inline code spans", () => {
