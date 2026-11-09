@@ -267,8 +267,8 @@ describe("createGitRunner reruns an empty success from a command that always pri
 		GIT_COMMITTER_EMAIL: "fixture@example.invalid",
 	};
 
-	/** A runner whose first Git call exits 0 and prints nothing. */
-	function losingFirstAnswer() {
+	/** A runner whose first Git call exits `firstCode` and prints nothing. */
+	function losingFirstAnswer(firstCode = 0) {
 		if (!realGit) throw new Error("git is not on PATH");
 		const repo = join(dir, "repo");
 		mkdirSync(repo);
@@ -287,7 +287,7 @@ describe("createGitRunner reruns an empty success from a command that always pri
 		mkdirSync(bin);
 		put(
 			"bin/git",
-			`#!/bin/sh\nn=$(cat "$FAKE_GIT_CALLS" 2>/dev/null || echo 0)\nn=$((n + 1))\necho "$n" > "$FAKE_GIT_CALLS"\n[ "$n" = 1 ] && exit 0\nexec ${JSON.stringify(realGit)} "$@"\n`,
+			`#!/bin/sh\nn=$(cat "$FAKE_GIT_CALLS" 2>/dev/null || echo 0)\nn=$((n + 1))\necho "$n" > "$FAKE_GIT_CALLS"\n[ "$n" = 1 ] && exit ${firstCode}\nexec ${JSON.stringify(realGit)} "$@"\n`,
 			0o755,
 		);
 		const git = createGitRunner({
@@ -321,6 +321,16 @@ describe("createGitRunner reruns an empty success from a command that always pri
 		const result = git(["rev-parse", "--show-toplevel"], repo);
 		expect(realpathSync(text(result.stdout).trim())).toBe(realpathSync(repo));
 		expect(calls()).toBe(2);
+	});
+
+	test("a rev-parse that fails is not run again", () => {
+		const { git, repo, calls } = losingFirstAnswer(1);
+		const result = git(
+			["rev-parse", "--verify", "--quiet", "missing^{commit}"],
+			repo,
+		);
+		expect(result.code).toBe(1);
+		expect(calls()).toBe(1);
 	});
 
 	for (const args of [
