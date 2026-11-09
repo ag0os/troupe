@@ -1313,8 +1313,8 @@ describe("a lock directory that vanishes between open and fstat is a change", ()
 		Object.assign(lockFs, real);
 	});
 
-	/** Fail `times` fstat calls on lock descriptors with ENOENT. */
-	function vanishAtFstat(times: number) {
+	/** Fail `times` fstat calls on lock descriptors with `code` (ENOENT). */
+	function vanishAtFstat(times: number, code = "ENOENT") {
 		const opened = new Set<number>();
 		const failed = new Set<number>();
 		const seen = { injected: 0, closedFailed: 0 };
@@ -1332,10 +1332,20 @@ describe("a lock directory that vanishes between open and fstat is a change", ()
 				left -= 1;
 				seen.injected += 1;
 				failed.add(fd);
-				throw Object.assign(
-					new Error("ENOENT: no such file or directory, fstat"),
-					{ code: "ENOENT", errno: -2, syscall: "fstat" },
-				);
+				throw code === "ENOENT"
+					? Object.assign(
+							new Error("ENOENT: no such file or directory, fstat"),
+							{
+								code,
+								errno: -2,
+								syscall: "fstat",
+							},
+						)
+					: Object.assign(new Error(`${code}: i/o error, fstat`), {
+							code,
+							errno: -5,
+							syscall: "fstat",
+						});
 			}
 			return (realFstat as (...args: unknown[]) => unknown)(fd, ...rest);
 		}) as typeof fs.fstatSync);
@@ -1380,6 +1390,22 @@ describe("a lock directory that vanishes between open and fstat is a change", ()
 		});
 		expect(seen).toEqual({ injected: 1, closedFailed: 1 });
 		expect(existsSync(join(state, ".unlock.lock"))).toBe(false);
+	});
+
+	test("any other fstat error is thrown at once, closing the descriptor", () => {
+		const { state, env } = fixture();
+		owner(state, 103);
+		const seen = vanishAtFstat(1, "EIO");
+		let error: unknown;
+		try {
+			lockStatus(state, env);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).not.toBeInstanceOf(LockError);
+		expect((error as NodeJS.ErrnoException).code).toBe("EIO");
+		expect((error as NodeJS.ErrnoException).syscall).toBe("fstat");
+		expect(seen).toEqual({ injected: 1, closedFailed: 1 });
 	});
 
 	test("status gives up with a lock error after LOCK_REREADS reads that never settle", () => {
