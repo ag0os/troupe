@@ -139,3 +139,64 @@ describe("the eval version line follows the captured package", () => {
 		expect(versionProblems(alpha, swapped)).toHaveLength(1);
 	});
 });
+
+// Obligation: a clean provenance needs two agreeing reads. Bun 1.2.22's
+// spawnSync can drop piped stdout under load and report exit 0, and an empty
+// `git status --porcelain` would otherwise stamp a dirty build clean.
+describe("a clean provenance needs two agreeing status reads", () => {
+	const scratch = realpathSync(
+		mkdtempSync(join(tmpdir(), "shepherd-eval-status-")),
+	);
+	afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+	function fixture(name: string): string {
+		const root = join(scratch, name);
+		mkdirSync(root);
+		initShepherdRepo(root, { ".gitignore": "bin/\n" });
+		return root;
+	}
+
+	/** testGit, except that the first `status` prints nothing. */
+	function losingStatus() {
+		const seen = { reads: 0 };
+		const git: typeof testGit = (args, cwd, input) => {
+			if (args[0] === "status") {
+				seen.reads += 1;
+				if (seen.reads === 1)
+					return { code: 0, stdout: new Uint8Array(), stderr: "" };
+			}
+			return testGit(args, cwd, input);
+		};
+		return { git, seen };
+	}
+
+	test("a lost status read does not stamp a dirty repository clean", async () => {
+		const root = fixture("dirty");
+		writeAt(root, "notes/todo.txt", "later\n");
+		const { git, seen } = losingStatus();
+		expect(await gitStamp(git).capture(root)).toMatchObject({
+			dirty: true,
+			sourceDirty: false,
+		});
+		expect(seen.reads).toBe(2);
+	});
+
+	test("a clean repository reads clean twice", async () => {
+		const root = fixture("clean");
+		const { git, seen } = losingStatus();
+		expect((await gitStamp(git).capture(root)).dirty).toBe(false);
+		expect(seen.reads).toBe(2);
+	});
+
+	test("a status read that lists changes is believed at once", async () => {
+		const root = fixture("listed");
+		writeAt(root, "notes/todo.txt", "later\n");
+		let reads = 0;
+		const git: typeof testGit = (args, cwd, input) => {
+			if (args[0] === "status") reads += 1;
+			return testGit(args, cwd, input);
+		};
+		expect((await gitStamp(git).capture(root)).dirty).toBe(true);
+		expect(reads).toBe(1);
+	});
+});

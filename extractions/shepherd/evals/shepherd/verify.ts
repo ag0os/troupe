@@ -169,24 +169,33 @@ export function changedPaths(
 			`no merge base of ${baseCommit} and ${headCommit}: ${merge.stderr.trim()}`,
 		);
 	}
+	const flags = ["--no-renames", "--no-ext-diff", "--no-textconv"];
 	const diff = git(
-		[
-			"diff",
-			"--no-renames",
-			"--no-ext-diff",
-			"--no-textconv",
-			"--name-only",
-			"-z",
-			mergeBase,
-			headCommit,
-			"--",
-		],
+		["diff", ...flags, "--name-only", "-z", mergeBase, headCommit, "--"],
 		root,
 	);
 	if (diff.code !== 0) {
 		throw new GateError(
 			`git diff ${mergeBase} ${headCommit} failed: ${diff.stderr.trim()}`,
 		);
+	}
+	// Bun's spawnSync can lose piped stdout and still report success, so an
+	// empty listing stands only when the exit code of `--quiet` agrees.
+	if (diff.stdout.byteLength === 0 && mergeBase !== headCommit) {
+		const quiet = git(
+			["diff", ...flags, "--quiet", mergeBase, headCommit, "--"],
+			root,
+		);
+		if (quiet.code === 1) {
+			throw new GateError(
+				`git diff ${mergeBase} ${headCommit} listed no paths, but git diff --quiet says paths changed; its output was lost`,
+			);
+		}
+		if (quiet.code !== 0) {
+			throw new GateError(
+				`git diff --quiet ${mergeBase} ${headCommit} failed: ${quiet.stderr.trim()}`,
+			);
+		}
 	}
 	let paths: string[];
 	try {

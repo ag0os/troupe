@@ -210,16 +210,23 @@ async function captureProvenance(
 			`${top} has no Git revision: HEAD does not name a commit`,
 		]);
 	}
-	const status = gitText(
-		git,
-		["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-		top,
-	);
-	if (!status.ok) {
-		throw new ShepherdSourceError([
-			`git status failed in ${top}: ${status.error}`,
-		]);
-	}
+	const readStatus = () => {
+		const status = gitText(
+			git,
+			["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+			top,
+		);
+		if (!status.ok) {
+			throw new ShepherdSourceError([
+				`git status failed in ${top}: ${status.error}`,
+			]);
+		}
+		return status;
+	};
+	// Bun's spawnSync can lose piped stdout and still report success, so
+	// "clean" needs a second empty read to agree.
+	let status = readStatus();
+	if (status.text.length === 0) status = readStatus();
 	let captured: CapturedBuildStamp;
 	try {
 		captured = await shepherdStampV2({

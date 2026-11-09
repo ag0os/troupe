@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -13,6 +16,7 @@ import { dirname, join } from "node:path";
 import {
 	buildManifest,
 	combineSourceInputs,
+	createGitRunner,
 	framedDigest,
 	readSourceInputs,
 	type SourceInputDefinition,
@@ -246,4 +250,90 @@ describe("explicit input membership (O14, O15)", () => {
 			problems(() => combineSourceInputs(V2, [input, nested]))[0],
 		).toContain("not nested");
 	});
+});
+
+// Obligation: a successful empty answer from a command that always prints is
+// retried once. Under load Bun 1.2.22's spawnSync can drop a child's piped
+// stdout and still report exit 0; a reader that may legally see nothing
+// (`diff --name-only`, `status --porcelain`) confirms its own empty answer.
+describe("createGitRunner reruns an empty success from a command that always prints", () => {
+	const realGit = Bun.which("git");
+	const gitEnv = {
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_AUTHOR_NAME: "Fixture",
+		GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+		GIT_COMMITTER_NAME: "Fixture",
+		GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+	};
+
+	/** A runner whose first Git call exits 0 and prints nothing. */
+	function losingFirstAnswer() {
+		if (!realGit) throw new Error("git is not on PATH");
+		const repo = join(dir, "repo");
+		mkdirSync(repo);
+		for (const args of [
+			["init", "-q"],
+			["commit", "-q", "--allow-empty", "-m", "one"],
+		]) {
+			const result = spawnSync(realGit, args, {
+				cwd: repo,
+				env: { ...process.env, ...gitEnv },
+			});
+			expect(result.status).toBe(0);
+		}
+		const bin = join(dir, "bin");
+		const count = join(dir, "calls");
+		mkdirSync(bin);
+		put(
+			"bin/git",
+			`#!/bin/sh\nn=$(cat "$FAKE_GIT_CALLS" 2>/dev/null || echo 0)\nn=$((n + 1))\necho "$n" > "$FAKE_GIT_CALLS"\n[ "$n" = 1 ] && exit 0\nexec ${JSON.stringify(realGit)} "$@"\n`,
+			0o755,
+		);
+		const git = createGitRunner({
+			...gitEnv,
+			PATH: `${bin}:${process.env.PATH ?? ""}`,
+			FAKE_GIT_CALLS: count,
+		});
+		const calls = () =>
+			existsSync(count) ? Number(readFileSync(count, "utf8").trim()) : 0;
+		return { git, repo, calls };
+	}
+
+	const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+	for (const args of [
+		["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+		["rev-parse", "HEAD"],
+		["merge-base", "HEAD", "HEAD"],
+	]) {
+		test(`${args.join(" ")} returns the second answer`, () => {
+			const { git, repo, calls } = losingFirstAnswer();
+			const result = git(args, repo);
+			expect(result.code).toBe(0);
+			expect(text(result.stdout)).toMatch(/^[0-9a-f]{40}\n$/);
+			expect(calls()).toBe(2);
+		});
+	}
+
+	test("rev-parse --show-toplevel returns the second answer", () => {
+		const { git, repo, calls } = losingFirstAnswer();
+		const result = git(["rev-parse", "--show-toplevel"], repo);
+		expect(realpathSync(text(result.stdout).trim())).toBe(realpathSync(repo));
+		expect(calls()).toBe(2);
+	});
+
+	for (const args of [
+		["diff", "--name-only", "-z", "HEAD", "HEAD", "--"],
+		["status", "--porcelain=v1", "-z"],
+		["merge-base", "--is-ancestor", "HEAD", "HEAD"],
+	]) {
+		test(`${args.slice(0, 2).join(" ")}, which may print nothing, runs once`, () => {
+			const { git, repo, calls } = losingFirstAnswer();
+			const result = git(args, repo);
+			expect(result.code).toBe(0);
+			expect(result.stdout.byteLength).toBe(0);
+			expect(calls()).toBe(1);
+		});
+	}
 });

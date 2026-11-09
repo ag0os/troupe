@@ -500,6 +500,96 @@ describe("changed paths (7.2)", () => {
 	});
 });
 
+// Obligation: an empty changed-paths list is confirmed by exit code before
+// the eval gate passes. Bun 1.2.22's spawnSync can drop piped stdout under
+// load and report exit 0; `git diff --quiet` answers through its exit code.
+describe("an empty changed-paths list is confirmed by exit code", () => {
+	/** testGit, except that the first `diff --name-only` prints nothing. */
+	function losingListing(quiet?: typeof testGit) {
+		const seen = { listings: 0, confirmations: [] as string[][] };
+		const git: typeof testGit = (args, cwd, input) => {
+			if (args[0] === "diff" && args.includes("--name-only")) {
+				seen.listings += 1;
+				if (seen.listings === 1)
+					return { code: 0, stdout: new Uint8Array(), stderr: "" };
+			}
+			if (args[0] === "diff" && args.includes("--quiet")) {
+				seen.confirmations.push([...args]);
+				if (quiet) return quiet(args, cwd, input);
+			}
+			return testGit(args, cwd, input);
+		};
+		return { git, seen };
+	}
+
+	test("a lost listing of changed paths fails closed", () => {
+		const base = head();
+		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 2;\n");
+		const tip = commitAll("source");
+		const { git, seen } = losingListing();
+		expect(() => changedPaths(root, base, tip, { git })).toThrow(
+			/listed no paths.*diff --quiet/,
+		);
+		expect(seen.confirmations).toEqual([
+			[
+				"diff",
+				"--no-renames",
+				"--no-ext-diff",
+				"--no-textconv",
+				"--quiet",
+				base,
+				tip,
+				"--",
+			],
+		]);
+	});
+
+	test("the CI gate fails closed on a lost listing instead of skipping evaluation", () => {
+		const base = head();
+		writeAt(root, "lib/shepherd/tool.ts", "export const tool = 2;\n");
+		const tip = commitAll("source");
+		const outcome = ciGate(
+			root,
+			base,
+			tip,
+			options({ git: losingListing().git }),
+		);
+		expect(outcome.code).toBe(1);
+		expect(text(outcome.lines)).not.toContain("Shepherd evals not required");
+		expect(text(outcome.lines)).toContain("diff --quiet");
+	});
+
+	test("an empty diff between different commits is confirmed and stands", () => {
+		const base = head();
+		git(root, "commit", "-q", "--allow-empty", "-m", "empty");
+		const tip = head();
+		const { git: losing, seen } = losingListing();
+		expect(changedPaths(root, base, tip, { git: losing }).paths).toEqual([]);
+		expect(seen.confirmations).toHaveLength(1);
+	});
+
+	test("no confirmation runs when the merge base is the head", () => {
+		const tip = head();
+		const { git: losing, seen } = losingListing();
+		expect(changedPaths(root, tip, tip, { git: losing }).paths).toEqual([]);
+		expect(seen.confirmations).toEqual([]);
+	});
+
+	test("a failing confirmation fails closed", () => {
+		const base = head();
+		git(root, "commit", "-q", "--allow-empty", "-m", "empty");
+		const tip = head();
+		const { git: losing } = losingListing(() => ({
+			code: 128,
+			stdout: new Uint8Array(),
+			stderr: "fatal: bad object",
+		}));
+		expect(() => changedPaths(root, base, tip, { git: losing })).toThrow(
+			/diff --quiet.*failed: fatal: bad object/,
+		);
+	});
+});
+
 describe("CI gate (7.4, 7.5)", () => {
 	test("outside gated paths succeeds without evaluation and names the compared revisions", () => {
 		const base = head();

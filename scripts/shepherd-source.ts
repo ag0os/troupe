@@ -519,11 +519,16 @@ export function captureProvenance(
 	const { top } = locate(root, git, options.layout);
 	const layout = options.layout;
 	const revision = headRevision(top, git);
-	const status = gitOk(
-		git,
-		["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-		top,
-	);
+	const statusArgs = [
+		"status",
+		"--porcelain=v1",
+		"-z",
+		"--untracked-files=normal",
+	];
+	// Bun's spawnSync can lose piped stdout and still report success, so
+	// "clean" needs a second empty read to agree.
+	let status = gitOk(git, statusArgs, top);
+	if (status.byteLength === 0) status = gitOk(git, statusArgs, top);
 	// `dirty` stays repository-wide under an explicit layout.
 	const manifest = readWorktreeSource(root, { git, layout });
 	const head = readCommitSource(root, revision, { git, strict: false, layout });

@@ -465,3 +465,52 @@ describe("result commits (1.7)", () => {
 		);
 	});
 });
+
+// Obligation: a clean provenance needs two agreeing reads. Bun 1.2.22's
+// spawnSync can drop piped stdout under load and report exit 0, and an empty
+// `git status --porcelain` would otherwise stamp a dirty build clean.
+describe("a clean provenance needs two agreeing status reads", () => {
+	/** testGit, except that the first `status` prints nothing. */
+	function losingStatus() {
+		const seen = { reads: 0 };
+		const git: typeof testGit = (args, cwd, input) => {
+			if (args[0] === "status") {
+				seen.reads += 1;
+				if (seen.reads === 1)
+					return { code: 0, stdout: new Uint8Array(), stderr: "" };
+			}
+			return testGit(args, cwd, input);
+		};
+		return { git, seen };
+	}
+
+	test("a lost status read does not stamp a dirty repository clean", () => {
+		initShepherdRepo(root);
+		writeAt(root, "notes/todo.txt", "later\n");
+		const { git, seen } = losingStatus();
+		expect(captureProvenance(root, { git })).toMatchObject({
+			dirty: true,
+			sourceDirty: false,
+		});
+		expect(seen.reads).toBe(2);
+	});
+
+	test("a clean repository reads clean twice", () => {
+		initShepherdRepo(root);
+		const { git, seen } = losingStatus();
+		expect(captureProvenance(root, { git }).dirty).toBe(false);
+		expect(seen.reads).toBe(2);
+	});
+
+	test("a status read that lists changes is believed at once", () => {
+		initShepherdRepo(root);
+		writeAt(root, "notes/todo.txt", "later\n");
+		let reads = 0;
+		const git: typeof testGit = (args, cwd, input) => {
+			if (args[0] === "status") reads += 1;
+			return testGit(args, cwd, input);
+		};
+		expect(captureProvenance(root, { git }).dirty).toBe(true);
+		expect(reads).toBe(1);
+	});
+});
