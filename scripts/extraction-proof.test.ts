@@ -1,0 +1,290 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import {
+	chmodSync,
+	copyFileSync,
+	cpSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+	assertCommittedPackage,
+	assertOutside,
+	bundledVersions,
+	checkoutPathScans,
+	committedRevision,
+	copyArtifact,
+	copyPackage,
+	sameObservation,
+	treeManifest,
+} from "./extraction-proof";
+
+const root = mkdtempSync(join(tmpdir(), "proof-helpers-"));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+describe("outside proof boundaries", () => {
+	test("an ancestor dependency, workspace or Git directory refuses the replay", () => {
+		for (const name of ["node_modules", ".shepherd", ".git"]) {
+			const parent = join(root, name);
+			const child = join(parent, "child");
+			mkdirSync(child, { recursive: true });
+			mkdirSync(join(parent, name));
+			expect(() => assertOutside(child, import.meta.dir)).toThrow(
+				"prohibited ancestor",
+			);
+		}
+	});
+	test("the checkout itself refuses the replay", () =>
+		expect(() => assertOutside(import.meta.dir, import.meta.dir)).toThrow(
+			"not outside",
+		));
+	test("artifact copies bind bytes and executable modes", () => {
+		const src = join(root, "artifact");
+		mkdirSync(src);
+		writeFileSync(join(src, "tool"), "same\n");
+		chmodSync(join(src, "tool"), 0o755);
+		const manifest = copyArtifact(src, join(root, "copy"));
+		expect(treeManifest(join(root, "copy"))).toEqual(manifest);
+		chmodSync(join(root, "copy/tool"), 0o644);
+		expect(treeManifest(join(root, "copy"))).not.toEqual(manifest);
+		writeFileSync(join(root, "copy/tool"), "DIFF\n");
+		expect(treeManifest(join(root, "copy"))).not.toEqual(manifest);
+	});
+	test("manifest records links without reading their target", () => {
+		const dir = join(root, "links");
+		mkdirSync(dir);
+		symlinkSync("/not-readable-or-present", join(dir, "link"));
+		expect(treeManifest(dir)).toEqual(["link link /not-readable-or-present"]);
+	});
+	test("raw parity catches paths, clock text, stderr and exit differences", () => {
+		const a = {
+			argv: ["binary"],
+			cwd: root,
+			code: 0,
+			stdout: "/slot 12:00:00\n",
+			stderr: "",
+		};
+		expect(sameObservation(a, { ...a })).toBe(true);
+		for (const b of [
+			{ ...a, stdout: "/other 12:00:00\n" },
+			{ ...a, stdout: "/slot 12:00:01\n" },
+			{ ...a, stderr: "finding\n" },
+			{ ...a, code: 1 },
+		])
+			expect(sameObservation(a, b)).toBe(false);
+	});
+});
+
+test("bundled dependencies are distinct from compiler-only dependencies", () => {
+	const file = join(root, "bundle");
+	writeFileSync(
+		file,
+		"// node_modules/zod/v4/core/versions.js\nvar version={major:4,minor:6,patch:5};",
+	);
+	expect(bundledVersions(file)).toEqual({ zod: "4.6.5", typescript: null });
+	writeFileSync(
+		file,
+		readFileSync(file, "utf8") +
+			'\n// node_modules/typescript/lib/typescript.js\nvar version = "5.9.2";',
+	);
+	expect(bundledVersions(file)).toEqual({ zod: "4.6.5", typescript: "5.9.2" });
+});
+
+test("parity compares displayed clocks, including the written checkpoint", async () => {
+	const { displayedSecond } = await import("./prove-shepherd-parity");
+	const result = {
+		argv: [],
+		cwd: root,
+		code: 0,
+		stdout:
+			"# Shepherd start: workspace\n2026-11-08T01:45:29-03:00\nrevision 31 at 2026-11-08T01:27:25-03:00\n",
+		stderr: "",
+	};
+	expect(displayedSecond("start", result)).toBe("2026-11-08T01:45:29-03:00");
+	const checkpoint = {
+		"checkpoint.json": Buffer.from(
+			JSON.stringify({ written: "2026-11-08T01:45:29-03:00" }),
+		).toString("base64"),
+	};
+	expect(displayedSecond("checkpoint-apply", result, checkpoint)).toBe(
+		"2026-11-08T01:45:29-03:00",
+	);
+	expect(displayedSecond("check", result)).toBeUndefined();
+});
+
+function committedFixture(name: string): { repo: string; copy: string } {
+	const repo = join(root, name);
+	mkdirSync(join(repo, "pkg"), { recursive: true });
+	writeFileSync(join(repo, "pkg/tool"), "committed\n");
+	chmodSync(join(repo, "pkg/tool"), 0o755);
+	for (const argv of [
+		["git", "init", "--quiet"],
+		["git", "add", "."],
+		[
+			"git",
+			"-c",
+			"user.name=Proof",
+			"-c",
+			"user.email=proof@example.invalid",
+			"-c",
+			"core.hooksPath=/dev/null",
+			"commit",
+			"--quiet",
+			"-m",
+			"fixture",
+		],
+	]) {
+		const result = Bun.spawnSync(argv, { cwd: repo });
+		expect(result.exitCode).toBe(0);
+	}
+	return { repo, copy: join(root, `${name}-copy`) };
+}
+
+test("committed package ignores uncommitted bytes and refuses a dirty driving tree", () => {
+	const { repo, copy } = committedFixture("dirty");
+	expect(committedRevision(repo)).toMatch(/^[a-f0-9]{40}$/);
+	writeFileSync(join(repo, "pkg/tool"), "uncommitted\n");
+	copyPackage(repo, "pkg", copy);
+	expect(readFileSync(join(copy, "tool"), "utf8")).toBe("committed\n");
+	expect(() => committedRevision(repo)).toThrow("clean worktree");
+});
+
+test("committed package assertion refuses an executable mode flip", () => {
+	const { repo, copy } = committedFixture("mode");
+	copyPackage(repo, "pkg", copy);
+	chmodSync(join(copy, "tool"), 0o644);
+	expect(() => assertCommittedPackage(repo, "pkg", copy)).toThrow(
+		"executable bits",
+	);
+});
+
+test("committed package assertion refuses an extra file", () => {
+	const { repo, copy } = committedFixture("extra");
+	copyPackage(repo, "pkg", copy);
+	writeFileSync(join(copy, "extra"), "extra\n");
+	expect(() => assertCommittedPackage(repo, "pkg", copy)).toThrow(
+		"committed HEAD",
+	);
+});
+
+async function stubPair(
+	name: string,
+	shippedBody: string,
+	candidateBody: string,
+	applies = false,
+	clock = false,
+) {
+	const { createPairing, observe } = await import("./prove-shepherd-parity");
+	const dir = join(root, `pair-${name}`);
+	const state = join(dir, ".shepherd");
+	const snapshot = join(dir, "snapshot");
+	mkdirSync(snapshot, { recursive: true });
+	writeFileSync(join(snapshot, "journal.md"), "original\n");
+	cpSync(snapshot, state, { recursive: true });
+	const paths = [join(dir, "shipped"), join(dir, "candidate")];
+	for (const [index, body] of [shippedBody, candidateBody].entries()) {
+		const path = paths[index] ?? "";
+		writeFileSync(
+			path,
+			`#!/bin/sh\nif [ "$1" = "--version" ]; then exit 0; fi\n${body}\n`,
+		);
+		chmodSync(path, 0o755);
+	}
+	const binary = join(dir, "binary");
+	const pairs: Record<string, unknown>[] = [];
+	const pair = createPairing({
+		state,
+		snapshot,
+		originalManifest: treeManifest(snapshot),
+		shipped: paths[0] ?? "",
+		candidate: paths[1] ?? "",
+		binary,
+		workspace: dir,
+		env: { PATH: process.env.PATH ?? "" },
+		evidence: join(dir, "evidence"),
+		put: (from) => copyFileSync(from, binary),
+		observe,
+		pairs,
+		align: async () => {},
+	});
+	const result = await pair(
+		applies ? "checkpoint-apply" : clock ? "start" : "check",
+		[],
+		applies,
+	);
+	return { result, pairs };
+}
+
+test("pairing rejects differing stdout", async () => {
+	await expect(
+		stubPair("stdout", "echo same", "echo different"),
+	).rejects.toThrow("PARITY DIFFERENCE");
+});
+test("pairing rejects differing exit", async () => {
+	await expect(stubPair("exit", "exit 0", "exit 1")).rejects.toThrow(
+		"PARITY DIFFERENCE",
+	);
+});
+test("pairing rejects differing stderr", async () => {
+	await expect(
+		stubPair("stderr", "echo same >&2", "echo different >&2"),
+	).rejects.toThrow("PARITY DIFFERENCE");
+});
+test("pairing retries displayed-clock straddles and records every pair", async () => {
+	const { pairs } = await stubPair(
+		"clock",
+		"echo 2026-11-08T01:00:00Z",
+		"if [ -e counted ]; then echo 2026-11-08T01:00:00Z; else touch counted; echo 2026-11-08T01:00:01Z; fi",
+		false,
+		true,
+	);
+	expect(pairs.map((p) => [p.retry, p.straddled])).toEqual([
+		[0, true],
+		[1, false],
+	]);
+});
+test("pairing rejects differing applied record bytes", async () => {
+	const checkpoint = `printf '%s' '{"written":"2026-11-08T01:00:00Z"}' > .shepherd/checkpoint.json`;
+	await expect(
+		stubPair(
+			"records",
+			`${checkpoint}\necho same > .shepherd/journal.md`,
+			`${checkpoint}\necho different > .shepherd/journal.md`,
+			true,
+		),
+	).rejects.toThrow("resulting record bytes");
+});
+test("pairing rejects a candidate dry run that writes journal.md", async () => {
+	await expect(
+		stubPair(
+			"readonly",
+			"echo same",
+			"echo changed > .shepherd/journal.md\necho same",
+		),
+	).rejects.toThrow("candidate read-only command preserved");
+});
+test("pairing accepts an identical pair", async () => {
+	const { result, pairs } = await stubPair(
+		"identical",
+		"echo same",
+		"echo same",
+	);
+	expect(result.code).toBe(0);
+	expect(pairs).toHaveLength(1);
+	expect(pairs[0]?.stdoutEqual).toBe(true);
+});
+
+test("checkout scan refuses parent-directory bytes in either generated input", () => {
+	const clean = Buffer.from("no checkout references");
+	const parent = Buffer.from(
+		`${dirname(realpathSync(root))}/another-checkout/lib.ts`,
+	);
+	expect(() => checkoutPathScans(parent, clean, root)).toThrow("checkout path");
+	expect(() => checkoutPathScans(clean, parent, root)).toThrow("checkout path");
+	expect(checkoutPathScans(clean, clean, root)).toHaveLength(2);
+});

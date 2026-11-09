@@ -122,7 +122,7 @@ describe("the ownership inventory (O19)", () => {
 
 	test("extraction scripts are all listed by exact path as transitional verification code", () => {
 		const extraction = tracked("scripts").filter((path) =>
-			/extraction|shepherd-copy/.test(path),
+			/extraction|shepherd-copy|prove-shepherd-parity/.test(path),
 		);
 		expect(extraction.length).toBeGreaterThan(0);
 		expect(extraction.filter((path) => !isOwned(path))).toEqual([]);

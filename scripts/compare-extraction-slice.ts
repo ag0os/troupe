@@ -28,7 +28,6 @@ import {
 	buildShepherd,
 	buildWorkspaces,
 	checkoutSlot,
-	childEnv,
 	cloneSlot,
 	describeRan,
 	expectedVersionLine,
@@ -36,6 +35,7 @@ import {
 	guardEvidence,
 	guardWorkspace,
 	installFakes,
+	isolatedEnv,
 	liveSnapshot,
 	parseArgs,
 	readBaseline,
@@ -185,7 +185,7 @@ async function main(): Promise<number> {
 			join(slot, "agents/__fixtures__/shepherd/workspaces.json"),
 			join(scratch, "workspaces"),
 		);
-		const env = childEnv({ PATH: `${fakes}:${process.env.PATH}` });
+		const env = isolatedEnv(scratch, { PATH: `${fakes}:${process.env.PATH}` });
 		const lines: string[] = [];
 		const records: string[] = [];
 		for (const [name, cwd] of workspaces) {
@@ -242,7 +242,7 @@ async function main(): Promise<number> {
 		);
 
 		// 3. tool doctor with the candidate first on PATH.
-		const doctorEnv = childEnv({
+		const doctorEnv = isolatedEnv(scratch, {
 			PATH: `${join(slot, "bin")}:${fakes}:${process.env.PATH}`,
 		});
 		const doctor = run(
