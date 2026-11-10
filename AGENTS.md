@@ -30,6 +30,7 @@ Troupe is a Bun + strict TypeScript repository for Markdown-declared CLI agents,
 - `bun scripts/check-extraction-gates.ts`: Prove each root and package gate fails on a planted type, lint and test error in a disposable copy.
 - `bun test ./scripts/shepherd-copy.test.ts`: Check the extracted package against the original layout. Root `bun test <path>` filters by substring, so prefix root paths with `./`.
 - Inside `extractions/shepherd/`: `bun run typecheck`, `bun run check`, `bun test`, the package's own gates, which CI runs after the root ones.
+- Fallow (static analysis: unused code, import cycles, duplication, complexity): `bunx fallow@3.41.0` from the root analyzes the hub, and `bunx fallow@3.41.0 -r extractions/shepherd` the package; `fallow architecture` checks cycles alone. `.fallowrc.jsonc` at the root and in the package name the entries fallow cannot find (the tools' `*.d/main.ts` behind their shell wrappers, and the hand-run extraction scripts, which retire in phase 3), and the root one leaves out the `extractions/` mirror. It is advisory, not a gate: neither CI nor `check:all` runs it.
 - `bun run lint`, `bun run lint:fix`, `bun run format` — Biome linting/formatting helpers; some mutate files.
 
 ## Extracted Shepherd Package

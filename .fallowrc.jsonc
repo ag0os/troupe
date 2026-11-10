@@ -1,0 +1,18 @@
+{
+	"minimumVersion": "3.41.0",
+	// The package tools' bun sources: shell wrappers in packages/*/tools/ exec
+	// bun on these, which fallow cannot follow.
+	"entry": ["packages/*/tools/*.d/main.ts"],
+	// Extraction scripts run by hand; they retire in phase 3.
+	"supportEntry": [
+		"scripts/check-extraction-commits.ts",
+		"scripts/compare-extraction-slice.ts",
+		"scripts/prove-extraction-harness.ts",
+		"scripts/replay-extraction-outside.ts"
+	],
+	// The extracted package mirrors the Shepherd tree; run it on its own with
+	// -r extractions/shepherd.
+	"ignorePatterns": ["extractions/**"],
+	// System provided, used by a test.
+	"ignoreBinaries": ["chflags"]
+}

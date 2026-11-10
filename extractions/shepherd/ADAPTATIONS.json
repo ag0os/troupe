@@ -193,6 +193,7 @@
 		}
 	],
 	"extractionOnly": [
+		".fallowrc.jsonc",
 		".gitignore",
 		"ADAPTATIONS.json",
 		"biome.json",
