@@ -906,3 +906,38 @@ test("check reports lost evidence and its carried CURRENT text", () => {
 	});
 	expect(finding(findings, "current-line-dropped").message).toContain(warning);
 });
+
+describe("finding shape across the check family", () => {
+	test("keeps key order and omits line only where none is given", () => {
+		const { workspace, tree } = fixture({
+			"root/.shepherd/CURRENT.md":
+				"Updated: 2026-10-05\nCurrent work\n\n## Items\n- **NEXT** keep going, see [x](missing.md)\n",
+			"root/.shepherd/work/todo/loose/notes.md": "notes\n",
+		});
+		const findings = checkWorkspace(
+			workspace,
+			tree,
+			config({
+				problems: [
+					{
+						file: join(workspace.state, "config.json"),
+						key: "marks.extra",
+						problem: "unknown key",
+					},
+				],
+			}),
+			TODAY,
+		);
+		const shape = (code: string) => JSON.stringify(finding(findings, code));
+
+		expect(shape("config-invalid")).toBe(
+			'{"level":"error","code":"config-invalid","file":"config.json","message":"marks.extra: unknown key"}',
+		);
+		expect(shape("item-no-status")).toBe(
+			'{"level":"warn","code":"item-no-status","file":"work/todo/loose","message":"work item has no STATUS.md"}',
+		);
+		expect(shape("link-broken")).toBe(
+			'{"level":"error","code":"link-broken","file":"CURRENT.md","line":5,"message":"link to missing.md does not resolve"}',
+		);
+	});
+});
