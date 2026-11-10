@@ -1,9 +1,8 @@
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
-import { mdFiles, read, symlinkComponent, walk } from "./text";
+import { writeFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
+import { liveFiles } from "./live-files";
+import { read, symlinkComponent } from "./text";
 import type { Workspace } from "./tree";
-
-const STATES = ["todo", "in-progress", "done"] as const;
 
 export interface ArchivedItem {
 	workspace: string;
@@ -15,36 +14,6 @@ export interface ArchivedItem {
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function liveFiles(workspace: Workspace): string[] {
-	const files = [
-		"CURRENT.md",
-		"MEMORY.md",
-		"HANDOFF.md",
-		"charter.md",
-		"work/README.md",
-		"archive/INDEX.md",
-	]
-		.map((file) => join(workspace.state, file))
-		.filter((file) => existsSync(file));
-	files.push(
-		...mdFiles(join(workspace.state, "memories")),
-		...mdFiles(join(workspace.state, "docs")),
-		...walk(join(workspace.state, "integrations"), (file) =>
-			file.endsWith(".md"),
-		),
-	);
-
-	for (const state of STATES) {
-		const dir = join(workspace.state, "work", state);
-		if (!existsSync(dir)) continue;
-		for (const slug of readdirSync(dir).sort()) {
-			const status = join(dir, slug, "STATUS.md");
-			if (existsSync(status)) files.push(status);
-		}
-	}
-	return files;
 }
 
 function rewriteFile(
@@ -122,7 +91,7 @@ export function rewriteArchiveReferences(
 	if (moves.length === 0) return [];
 	const rewritten: string[] = [];
 	for (const workspace of workspaces) {
-		for (const file of liveFiles(workspace)) {
+		for (const file of liveFiles(workspace).files) {
 			if (rewriteFile(file, workspace, moves, home, onSkip))
 				rewritten.push(file);
 		}

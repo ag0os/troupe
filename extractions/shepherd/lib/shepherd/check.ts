@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
-import { checkLinks, decodedLinkTarget } from "./check-links";
+import { basename, dirname, join, resolve } from "node:path";
+import { checkLinks, linkTargets } from "./check-links";
 import { checkModules } from "./check-modules";
 import { checkWork } from "./check-work";
 import { carriedEvidence, hashPaths, readCheckpoint } from "./checkpoint";
@@ -8,6 +8,7 @@ import type { Config } from "./config";
 import { contextTiers } from "./context";
 import { droppedLines, readBaseline, readDroppedSources } from "./current-prev";
 import { daysBetween, localDate } from "./dates";
+import { findingCollector } from "./findings";
 import { LockError, lockStatus } from "./lock";
 import { moduleCatalog } from "./module-resolution";
 import { currentItems, updatedName } from "./query-items";
@@ -66,19 +67,6 @@ function symlinksUnder(dir: string): string[] {
 	return links;
 }
 
-function linkTargets(file: string): Set<string> {
-	const targets = new Set<string>();
-	for (const { line } of proseLines(read(file))) {
-		for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-			const target = decodedLinkTarget(match[1]?.split("#")[0] ?? "");
-			if (target && !/^[a-z]+:/i.test(target)) {
-				targets.add(resolve(dirname(file), target));
-			}
-		}
-	}
-	return targets;
-}
-
 function withoutInlineCode(line: string): string {
 	const runs = [...line.matchAll(/`+/g)];
 	let result = "";
@@ -112,22 +100,7 @@ export function checkWorkspace(
 	home?: string,
 	toolEnv?: ToolEnv,
 ): Finding[] {
-	const findings: Finding[] = [];
-	const add = (
-		level: FindingLevel,
-		code: string,
-		path: string,
-		message: string,
-		line?: number,
-	) => {
-		findings.push({
-			level,
-			code,
-			file: relative(workspace.state, path) || ".",
-			...(line === undefined ? {} : { line }),
-			message,
-		});
-	};
+	const { findings, add } = findingCollector(workspace);
 
 	const probe: ToolEnv = toolEnv ?? {
 		cwd: workspace.dir,
