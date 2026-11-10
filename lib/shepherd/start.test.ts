@@ -16,10 +16,10 @@ import {
 	nextCheckpoint,
 } from "./checkpoint-write";
 import { loadConfig } from "./config";
+import { recordFreshness } from "./freshness";
 import { TEMPLATES } from "./guides";
 import { renderStart, runStart, startJson } from "./start";
 import { collectStart } from "./start-collect";
-import { recordFreshness } from "./status";
 import { fakeToolEnv, makeTree } from "./test-support";
 import { words } from "./text";
 import { discoverTree } from "./tree";

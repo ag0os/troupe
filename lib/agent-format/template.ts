@@ -8,18 +8,18 @@ export interface TemplateProblem {
 	offset: number;
 }
 
-export type TemplateCondition =
+type TemplateCondition =
 	| { kind: "args" }
 	| { kind: "boolean"; flag: string }
 	| { kind: "enum"; flag: string; value: string };
 
-export type TemplateInline =
+type TemplateInline =
 	| { kind: "text"; text: string }
 	| { kind: "args" }
 	| { kind: "cwd" }
 	| { kind: "flag"; name: string };
 
-export type TemplateNode =
+type TemplateNode =
 	| TemplateInline
 	| {
 			kind: "if";
@@ -48,7 +48,7 @@ type Tag =
  * `flag.<name>`, or an enum comparison `flag.<name> == "<value>"`.
  * A block tag alone on its line removes that whole line from the output.
  */
-export function parseTemplate(
+function parseTemplate(
 	template: string,
 	flags: Readonly<Record<string, FlagSpec>>,
 ): { nodes: TemplateNode[]; problems: TemplateProblem[] } {

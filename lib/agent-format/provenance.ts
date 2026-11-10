@@ -230,7 +230,7 @@ export interface SourceInput {
 }
 
 /** Domain of one origin's own digest inside `InputProvenance`. */
-export const ORIGIN_DOMAIN = "troupe-agent-origin-v2";
+const ORIGIN_DOMAIN = "troupe-agent-origin-v2";
 
 function revisionOf(
 	revision: SourceInputDefinition["revision"],

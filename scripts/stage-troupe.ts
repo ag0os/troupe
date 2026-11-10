@@ -104,7 +104,7 @@ function isTestPath(path: string): boolean {
 }
 
 /** The members the export map needs, checked against the allowlist. */
-export function planStage(root: string): {
+function planStage(root: string): {
 	pkg: Record<string, unknown>;
 	members: string[];
 } {

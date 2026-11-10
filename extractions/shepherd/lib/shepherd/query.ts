@@ -47,18 +47,18 @@ import {
 	type RegistryResult,
 	type ToolEnv,
 } from "./sessions";
-import { ownsDirectory } from "./status";
 import {
 	type ListedSession,
 	listedSessions,
 	STATUS_WORDS,
 } from "./status-parse";
 import { journalChain, journalFenceProblem } from "./text";
-import { result, type ToolResult, treeError, usage } from "./tool";
+import { result, type ToolResult, treeError, usage } from "./tool-result";
 import {
 	discoverTree,
 	enclosingWorkspace,
 	isWorkspace,
+	ownsDirectory,
 	type Workspace,
 	WorkspaceTreeError,
 } from "./tree";
@@ -66,7 +66,7 @@ import { findChildWorkspaces, STATE_DIR } from "./workspace";
 
 type ToolFlags = Readonly<Record<string, string | boolean>>;
 
-export const QUERIES = [
+const QUERIES = [
 	"items",
 	"item",
 	"sessions",
@@ -76,7 +76,7 @@ export const QUERIES = [
 ] as const;
 type QueryName = (typeof QUERIES)[number];
 
-export type QueryProblem = {
+type QueryProblem = {
 	code: string;
 	file: string;
 	line?: number;

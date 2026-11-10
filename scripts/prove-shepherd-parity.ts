@@ -263,7 +263,7 @@ export function createPairing(options: {
 	return pair;
 }
 
-export async function proveParity(args: Record<string, string>): Promise<void> {
+async function proveParity(args: Record<string, string>): Promise<void> {
 	const source = realpathSync(args["workspace-source"] ?? "");
 	const shipped = realpathSync(args.shipped ?? "");
 	const candidate = realpathSync(args.candidate ?? "");

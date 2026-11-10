@@ -197,7 +197,7 @@ function git(args: string[], cwd: string): string {
 }
 
 /** Copy the tracked files of `repo` into a new directory, link root dependencies and run setup. */
-export function disposableCopy(repo: string, parent: string): string {
+function disposableCopy(repo: string, parent: string): string {
 	const copy = join(parent, "troupe");
 	for (const path of git(["ls-files", "-z"], repo).split("\0")) {
 		if (path === "") continue;
@@ -243,10 +243,7 @@ function clean(copy: string, round: string): Row[] {
 	});
 }
 
-export function checkGates(
-	copy: string,
-	log: (row: Row) => void = () => {},
-): Row[] {
+function checkGates(copy: string, log: (row: Row) => void = () => {}): Row[] {
 	const rows: Row[] = [];
 	const record = (row: Row) => {
 		rows.push(row);

@@ -9,7 +9,9 @@ import {
 	sep,
 } from "node:path";
 import type { Finding, FindingLevel } from "./check";
-import { mdFiles, proseLines, read, walk } from "./text";
+import { findingCollector } from "./findings";
+import { liveFiles } from "./live-files";
+import { mdFiles, proseLines, read } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
 const STATES = ["todo", "in-progress", "done"] as const;
@@ -25,7 +27,7 @@ function isWithin(parent: string, child: string): boolean {
 }
 
 /** Decode a Markdown link target, keeping malformed percent escapes literal. */
-export function decodedLinkTarget(target: string): string {
+function decodedLinkTarget(target: string): string {
 	try {
 		return decodeURIComponent(target);
 	} catch {
@@ -33,40 +35,18 @@ export function decodedLinkTarget(target: string): string {
 	}
 }
 
-function liveFiles(workspace: Workspace): {
-	files: string[];
-	doneStatus: Set<string>;
-} {
-	const files = [
-		"CURRENT.md",
-		"MEMORY.md",
-		"HANDOFF.md",
-		"charter.md",
-		"work/README.md",
-		"archive/INDEX.md",
-	]
-		.map((file) => join(workspace.state, file))
-		.filter((file) => existsSync(file));
-	files.push(
-		...mdFiles(join(workspace.state, "memories")),
-		...mdFiles(join(workspace.state, "docs")),
-		...walk(join(workspace.state, "integrations"), (file) =>
-			file.endsWith(".md"),
-		),
-	);
-
-	const doneStatus = new Set<string>();
-	for (const state of STATES) {
-		const dir = join(workspace.state, "work", state);
-		if (!existsSync(dir)) continue;
-		for (const slug of readdirSync(dir).sort()) {
-			const status = join(dir, slug, "STATUS.md");
-			if (!existsSync(status)) continue;
-			files.push(status);
-			if (state === "done") doneStatus.add(status);
+/** The local files a Markdown file's links point to, resolved. */
+export function linkTargets(file: string): Set<string> {
+	const targets = new Set<string>();
+	for (const { line } of proseLines(read(file))) {
+		for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
+			const target = decodedLinkTarget(match[1]?.split("#")[0] ?? "");
+			if (target && !/^[a-z]+:/i.test(target)) {
+				targets.add(resolve(dirname(file), target));
+			}
 		}
 	}
-	return { files, doneStatus };
+	return targets;
 }
 
 function findItem(stateDir: string, slug: string): string | undefined {
@@ -111,22 +91,7 @@ export function checkLinks(
 	tree: WorkspaceTree,
 	home?: string,
 ): Finding[] {
-	const findings: Finding[] = [];
-	const add = (
-		level: FindingLevel,
-		code: string,
-		path: string,
-		message: string,
-		line: number,
-	) => {
-		findings.push({
-			level,
-			code,
-			file: relative(workspace.state, path) || ".",
-			line,
-			message,
-		});
-	};
+	const { findings, add } = findingCollector(workspace);
 
 	const { files, doneStatus } = liveFiles(workspace);
 	const memoryNames = new Set(

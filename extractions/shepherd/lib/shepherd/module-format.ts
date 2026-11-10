@@ -1,7 +1,7 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument } from "yaml";
 import { CORE_SLOTS } from "./charter-slots";
 
-export const IDENTIFIER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const IDENTIFIER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const selectable = (value: string) =>
 	IDENTIFIER.test(value) && /^[a-z-]+$/.test(value);
 const keyComponent = (value: string) =>

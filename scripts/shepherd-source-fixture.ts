@@ -60,8 +60,7 @@ export const SHEPHERD_DECLARATION =
 	"---\ndescription: Fixture Shepherd\nbackends: [claude, codex]\n---\nShepherd body\n";
 
 /** A side-effect-free extension, so the declaration builds with it. */
-export const SHEPHERD_EXTENSION =
-	"export function prepare() {\n\treturn {};\n}\n";
+const SHEPHERD_EXTENSION = "export function prepare() {\n\treturn {};\n}\n";
 
 /**
  * Paths the v1 source membership selects, one or more per kind of entry, for

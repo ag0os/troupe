@@ -463,7 +463,7 @@ export function writeEvidence(dir: string, name: string, text: string): string {
 }
 
 /** The first line of every evidence file: the Bun that ran the script. */
-export function evidenceHeader(): string {
+function evidenceHeader(): string {
 	return `# bun ${Bun.version} (Bun.version of the evidence script)`;
 }
 

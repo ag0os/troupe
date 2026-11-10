@@ -67,7 +67,7 @@ export function builtInModules(): ModuleCandidate[] {
 		};
 	});
 }
-export function workspaceModules(
+function workspaceModules(
 	root: string,
 	layer: "inherited" | "local",
 	tolerateUnreadable = false,

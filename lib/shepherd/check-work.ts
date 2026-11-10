@@ -1,9 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
-import type { Finding, FindingLevel } from "./check";
-import { decodedLinkTarget } from "./check-links";
+import { dirname, join } from "node:path";
+import type { Finding } from "./check";
+import { linkTargets } from "./check-links";
 import type { Config } from "./config";
 import { daysBetween, localDate, monthOf } from "./dates";
+import { findingCollector } from "./findings";
 import { type ModuleCatalog, moduleCatalog } from "./module-resolution";
 import {
 	closedDate,
@@ -21,19 +22,6 @@ import type { Workspace } from "./tree";
 import { declaredModules } from "./workspace";
 
 const STATES = ["todo", "in-progress", "done"] as const;
-
-function linkTargets(file: string): Set<string> {
-	const targets = new Set<string>();
-	for (const { line } of proseLines(read(file))) {
-		for (const match of line.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-			const target = decodedLinkTarget(match[1]?.split("#")[0] ?? "");
-			if (target && !/^[a-z]+:/i.test(target)) {
-				targets.add(resolve(dirname(file), target));
-			}
-		}
-	}
-	return targets;
-}
 
 /** What an item's STATUS and measurement notes say about its pull requests. */
 export type ItemRecord = {
@@ -153,7 +141,7 @@ export function itemRecord(
 }
 
 /** The file-only source: STATUS is done and its Outcome says the work landed. */
-export function landedInFiles(record: ItemRecord): Landed | undefined {
+function landedInFiles(record: ItemRecord): Landed | undefined {
 	if (!record.done || record.outcome === undefined) return undefined;
 	const outcome = record.outcome;
 	// A sentence ends at . ! or ? and a space, a blank line, or a list item; a
@@ -206,22 +194,7 @@ export function checkWork(
 	catalog: ModuleCatalog = moduleCatalog(workspace.dir, undefined, true),
 	landedSource: LandedSource = landedInFiles,
 ): Finding[] {
-	const findings: Finding[] = [];
-	const add = (
-		level: FindingLevel,
-		code: string,
-		path: string,
-		message: string,
-		line?: number,
-	) => {
-		findings.push({
-			level,
-			code,
-			file: relative(workspace.state, path) || ".",
-			...(line === undefined ? {} : { line }),
-			message,
-		});
-	};
+	const { findings, add } = findingCollector(workspace);
 
 	// The software method's records: on when the charter declares it, loaded or not.
 	const records = declaredModules(catalog.charter).has("software");

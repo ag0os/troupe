@@ -44,9 +44,7 @@ export function modelHeaderLine(
 }
 
 /** The header lines that tell a session what its packages offer (D14). */
-export function packageHeaderLines(
-	packages: readonly PackageRecord[],
-): string[] {
+function packageHeaderLines(packages: readonly PackageRecord[]): string[] {
 	const tools = packages.flatMap((p) =>
 		Object.entries(p.tools).map(
 			([tool, { access }]) => `${p.name} ${tool} (${access})`,

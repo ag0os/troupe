@@ -23,7 +23,7 @@ import {
 } from "./text";
 import type { Workspace, WorkspaceTree } from "./tree";
 
-export type ArchiveMoveStatus = "planned" | "moved" | "skipped";
+type ArchiveMoveStatus = "planned" | "moved" | "skipped";
 
 type ArchiveMoveBase = {
 	kind: "journal" | "item";

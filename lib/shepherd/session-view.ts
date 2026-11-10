@@ -1,6 +1,6 @@
 import type { AdapterResult, Running } from "./sessions";
-import { ownsDirectory, type UncheckedSession } from "./status";
-import type { ListedSession } from "./status-parse";
+import type { ListedSession, UncheckedSession } from "./status-parse";
+import { ownsDirectory } from "./tree";
 
 export type Drift = {
 	code: "session-unrecorded" | "session-gone";

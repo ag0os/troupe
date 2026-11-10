@@ -205,7 +205,7 @@ function mapValues<T, U>(
  * Native settings with prepared rules and directories merged in once.
  * Returns nothing when the result is empty, so no `--settings` is emitted.
  */
-export function mergeSettings(
+function mergeSettings(
 	native: Readonly<Record<string, unknown>> | undefined,
 	extra: ExtraAllowRules | undefined,
 ): Record<string, unknown> | undefined {

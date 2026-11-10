@@ -28,12 +28,10 @@ import {
 } from "./types";
 
 /** Framework flags every binary owns; declarations may not reuse them. */
-export const FRAMEWORK_FLAGS = Object.keys(
+const FRAMEWORK_FLAGS = Object.keys(
 	FRAMEWORK_OPTIONS,
 ) as readonly FrameworkOption[];
-export const RESERVED_SHORTS = Object.keys(
-	FRAMEWORK_SHORTS,
-) as readonly string[];
+const RESERVED_SHORTS = Object.keys(FRAMEWORK_SHORTS) as readonly string[];
 
 /** Stable separator between the body and each include. */
 export const PROMPT_SEPARATOR = "\n\n---\n\n";

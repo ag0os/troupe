@@ -16,7 +16,7 @@ import { previewAgent } from "./run";
 import { materializeAgentSpec, parseAgentMarkdown } from "./schema";
 import type { AgentSpec } from "./types";
 
-export const CANARY_AGENT_FILE = "agents/canary/codex.md";
+const CANARY_AGENT_FILE = "agents/canary/codex.md";
 /** Sent as the initial prompt, so the adapter's `-- <prompt>` is exercised too. */
 export const CANARY_USER_PROMPT = "troupe canary user prompt";
 
@@ -80,7 +80,7 @@ export interface PromptText {
 }
 
 /** Flatten `codex debug prompt-input` JSON into role-tagged text items. */
-export function promptTexts(json: string): PromptText[] {
+function promptTexts(json: string): PromptText[] {
 	const list: unknown = JSON.parse(json);
 	if (!Array.isArray(list)) {
 		throw new Error("codex debug prompt-input did not print a JSON list");
@@ -162,7 +162,7 @@ export interface PromptInputOptions {
 }
 
 /** Run `codex debug prompt-input <args>` and return its role-tagged items. */
-export async function promptInput(
+async function promptInput(
 	args: readonly string[],
 	options: PromptInputOptions,
 ): Promise<PromptText[]> {

@@ -29,7 +29,7 @@ export type PackageRecord = {
 	guides: Record<string, GuideDeclaration>;
 };
 
-export const PACKAGE_NAME = /^[a-z]+(?:-[a-z]+)*$/;
+const PACKAGE_NAME = /^[a-z]+(?:-[a-z]+)*$/;
 
 /**
  * Names a package may not take: `shepherd tool <name>` would be a core
