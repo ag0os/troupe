@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { recordFreshness } from "./freshness";
 import type { AdapterResult, Running, RunningSessionsResult } from "./sessions";
-import { liveReports, recordFreshness } from "./status";
+import { liveReports } from "./status";
 import { makeTree } from "./test-support";
 import { discoverTree } from "./tree";
 

@@ -1,8 +1,7 @@
 import type { Config } from "./config";
 import { sessionPrefixFor } from "./session-name";
 import { claudeRegistry, codexIndex, type ToolEnv } from "./sessions";
-import { ownsDirectory } from "./status";
-import type { Workspace } from "./tree";
+import { ownsDirectory, type Workspace } from "./tree";
 
 /** The session that ran a tool command, as its harness reports it. */
 export type Caller = {

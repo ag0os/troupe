@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config";
+import { recordFreshness } from "./freshness";
 import { statusItems } from "./query-items";
 import type { AdapterResult, Running, RunningSessionsResult } from "./sessions";
-import { type LiveReport, liveReports, recordFreshness } from "./status";
+import { type LiveReport, liveReports } from "./status";
 import { noNext, STATUS_WORDS, type StatusItem } from "./status-parse";
 import type { Workspace, WorkspaceTree } from "./tree";
 

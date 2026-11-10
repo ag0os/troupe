@@ -7,9 +7,9 @@ import {
 	readBaseline,
 	readDroppedSources,
 } from "./current-prev";
+import { recordFreshness } from "./freshness";
 import { lockStatus } from "./lock";
 import type { ToolEnv } from "./sessions";
-import { recordFreshness } from "./status";
 import { type ChainEntry, journalChain } from "./text";
 import type { Workspace } from "./tree";
 import { findEnclosingWorkspace, STATE_DIR } from "./workspace";

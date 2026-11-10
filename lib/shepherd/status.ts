@@ -1,20 +1,22 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readCheckpoint } from "./checkpoint";
 import type { Config } from "./config";
 import { updatedName } from "./query-items";
 import { sessionPrefixFor } from "./session-name";
 import { type Drift, sessionView } from "./session-view";
+import type { Running, RunningSessionsResult } from "./sessions";
 import {
-	latestClaudeTranscriptMtime,
-	type Running,
-	type RunningSessionsResult,
-	type ToolEnv,
-} from "./sessions";
-import { type ListedSession, listedSessions } from "./status-parse";
-import { hasChildWorkspace, type Workspace, type WorkspaceTree } from "./tree";
-
-export type UncheckedSession = ListedSession & { reason: string };
+	type ListedSession,
+	listedSessions,
+	type UncheckedSession,
+} from "./status-parse";
+import {
+	hasChildWorkspace,
+	ownsDirectory,
+	type Workspace,
+	type WorkspaceTree,
+} from "./tree";
 
 export type LiveReport = {
 	shepherd: Running[];
@@ -45,18 +47,6 @@ function within(parent: string, child: string): boolean {
 		path === "" ||
 		(!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path))
 	);
-}
-
-/**
- * Whether a workspace owns a session's directory: exactly its own directory
- * when child workspaces sit beneath it, anything within it otherwise.
- */
-export function ownsDirectory(
-	dir: string,
-	hasChildren: boolean,
-	cwd: string,
-): boolean {
-	return hasChildren ? cwd === dir : within(dir, cwd);
 }
 
 function escapeRegExp(value: string): string {
@@ -189,44 +179,4 @@ export function liveReports(
 		(session) => !listedNames.has(session.name) && !owner(session.cwd),
 	);
 	return { byWorkspace, unattributed };
-}
-
-function writtenMtime(workspace: Workspace, file: string): number {
-	try {
-		return statSync(join(workspace.state, file)).mtimeMs;
-	} catch {
-		return 0;
-	}
-}
-
-function timestamp(ms: number): string {
-	const date = new Date(ms);
-	const part = (value: number) => String(value).padStart(2, "0");
-	return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`;
-}
-
-/** Describe whether CURRENT and the journal cover the last Claude activity. */
-export function recordFreshness(
-	workspace: Workspace,
-	toolEnv: Pick<ToolEnv, "home">,
-	options: { excludeRunningSession?: Date } = {},
-): string | undefined {
-	const lastRecord = Math.max(
-		writtenMtime(workspace, "CURRENT.md"),
-		writtenMtime(workspace, "journal.md"),
-	);
-	const lastActivity = latestClaudeTranscriptMtime(
-		toolEnv,
-		workspace.dir,
-		options.excludeRunningSession
-			? { lastRecord, now: options.excludeRunningSession }
-			: undefined,
-	);
-	if (lastActivity === undefined) return undefined;
-	const gapMinutes = Math.round((lastActivity - lastRecord) / 60_000);
-	const when = `last Shepherd activity ${timestamp(lastActivity)}, CURRENT/journal last written ${timestamp(lastRecord)}`;
-	if (gapMinutes <= 10) return `record up to date (${when})`;
-	const gap =
-		gapMinutes >= 120 ? `${Math.round(gapMinutes / 60)}h` : `${gapMinutes} min`;
-	return `STALE? ${gap} of Shepherd activity after the last record (${when}); resume that session to bring it up to date`;
 }

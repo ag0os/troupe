@@ -130,6 +130,18 @@ function isWithin(parent: string, child: string): boolean {
 	);
 }
 
+/**
+ * Whether a workspace owns a session's directory: exactly its own directory
+ * when child workspaces sit beneath it, anything within it otherwise.
+ */
+export function ownsDirectory(
+	dir: string,
+	hasChildren: boolean,
+	cwd: string,
+): boolean {
+	return hasChildren ? cwd === dir : isWithin(dir, cwd);
+}
+
 /** Apply selectors or the command's default workspace scope. */
 export function selectWorkspaces(
 	tree: WorkspaceTree,

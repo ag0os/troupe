@@ -26,6 +26,8 @@ export type ListedSession = {
 	codex: boolean;
 };
 
+export type UncheckedSession = ListedSession & { reason: string };
+
 /** Whether CURRENT explicitly says that no NEXT item is set. */
 export function noNext(text: string): boolean {
 	return /No NEXT is set/i.test(text);

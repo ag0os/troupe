@@ -47,18 +47,18 @@ import {
 	type RegistryResult,
 	type ToolEnv,
 } from "./sessions";
-import { ownsDirectory } from "./status";
 import {
 	type ListedSession,
 	listedSessions,
 	STATUS_WORDS,
 } from "./status-parse";
 import { journalChain, journalFenceProblem } from "./text";
-import { result, type ToolResult, treeError, usage } from "./tool";
+import { result, type ToolResult, treeError, usage } from "./tool-result";
 import {
 	discoverTree,
 	enclosingWorkspace,
 	isWorkspace,
+	ownsDirectory,
 	type Workspace,
 	WorkspaceTreeError,
 } from "./tree";
