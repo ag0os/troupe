@@ -229,7 +229,7 @@ export function checkoutDenial(checkout: string): string[] {
 	];
 }
 
-export function checkedRun(argv: string[], cwd: string, env = childEnv()): Ran {
+function checkedRun(argv: string[], cwd: string, env = childEnv()): Ran {
 	const result = run(argv, cwd, env);
 	if (result.code !== 0)
 		throw new Error(

@@ -19,7 +19,7 @@ export const ADOPTED_GATED_PATHS: GatedPathPolicy = "expanded";
  * runner (`lib/agent-format/`), the compiler, `package.json` and the rubric,
  * policy and checkers ungated, so changes there could evade evaluation.
  */
-export const NARROWER_GATED_PATHS = {
+const NARROWER_GATED_PATHS = {
 	files: ["agents/shepherd.ts"],
 	trees: ["system-prompts/shepherd", "lib/shepherd"],
 } as const;

@@ -153,7 +153,7 @@ const STDOUT_CONSOLE = [
  * (`fs.writeSync(1, ...)`, `Bun.write(Bun.stdout, ...)`) and children that
  * inherit stdout, which the extension contract already forbids (D-015).
  */
-export function absorbStdout(): () => void {
+function absorbStdout(): () => void {
 	const target = console as unknown as Record<string, unknown>;
 	const write = process.stdout.write;
 	const methods = STDOUT_CONSOLE.map((name) => [name, target[name]] as const);
@@ -621,7 +621,7 @@ export type SignalSource = (
 ) => () => void;
 
 /** This process's SIGHUP, SIGINT and SIGTERM. */
-export const processSignals: SignalSource = (handler) => {
+const processSignals: SignalSource = (handler) => {
 	const listeners = RUNNER_SIGNALS.map((name) => {
 		const listener = () => handler(name);
 		process.on(name, listener);
@@ -633,12 +633,12 @@ export const processSignals: SignalSource = (handler) => {
 };
 
 /** The conventional exit code of a process ended by `signal`. */
-export function signalExitCode(signal: RunnerSignal): number {
+function signalExitCode(signal: RunnerSignal): number {
 	return 128 + SIGNAL_NUMBERS[signal];
 }
 
 /** The abort reason of a run a signal interrupted. */
-export class SignalAbort extends Error {
+class SignalAbort extends Error {
 	readonly signal: RunnerSignal;
 
 	constructor(signal: RunnerSignal) {
@@ -1199,7 +1199,7 @@ export async function decodeStream(
 }
 
 /** Resolves once stdout and stderr have flushed what was written so far. */
-export async function flushStdio(): Promise<void> {
+async function flushStdio(): Promise<void> {
 	await new Promise<void>((done) => process.stdout.write("", () => done()));
 	await new Promise<void>((done) => process.stderr.write("", () => done()));
 }

@@ -20,7 +20,7 @@ import type { Workspace, WorkspaceTree } from "./tree";
  * since dispatch never runs them; dotfiles and directories are not tools.
  * No tool is run (docs/PACKAGES.md).
  */
-export function packageFileFindings(module: ModuleCandidate): Finding[] {
+function packageFileFindings(module: ModuleCandidate): Finding[] {
 	const record = module.package;
 	if (!record || module.body === undefined) return [];
 	const findings: Finding[] = [];

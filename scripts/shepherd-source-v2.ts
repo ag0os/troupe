@@ -47,7 +47,7 @@ import {
 	type SourceManifest,
 } from "../lib/entries/provenance";
 
-export const SOURCE_DOMAIN_V2 = "troupe-agent-source-v2";
+const SOURCE_DOMAIN_V2 = "troupe-agent-source-v2";
 export const FRAMEWORK_ORIGIN = "framework/troupe";
 export const PACKAGE_ORIGIN = "package/shepherd";
 
@@ -70,14 +70,14 @@ export const PACKAGE_FILES = [
  * `*.spec.ts` and paths beneath `__fixtures__` or `__snapshots__` are left
  * out; other helpers stay selected.
  */
-export const PACKAGE_TREES = [
+const PACKAGE_TREES = [
 	{ dir: "lib/shepherd", tests: false },
 	{ dir: "packages", tests: true },
 	{ dir: "system-prompts/shepherd", tests: true },
 ] as const;
 
 /** Never selected: outputs, the staged distribution and eval evidence. */
-export const EXCLUDED_DIRS = [
+const EXCLUDED_DIRS = [
 	"bin",
 	"extractions/.troupe-dist",
 	"evals/shepherd/artifacts",
@@ -89,7 +89,7 @@ export const EXCLUDED_DIRS = [
 const EXCLUDED_NAMES = new Set([".DS_Store", "node_modules", "__pycache__"]);
 
 /** Runtime tools, whose executable status dispatch checks. */
-export function isRuntimeTool(path: string): boolean {
+function isRuntimeTool(path: string): boolean {
 	return /^packages\/[^/]+\/tools\//.test(path);
 }
 
@@ -262,7 +262,7 @@ function blobId(bytes: Uint8Array, algorithm: "sha1" | "sha256"): string {
  * Files outside the selection (tests under `lib/shepherd`, `biome.json`)
  * never make the package dirty.
  */
-export function packageMarker(
+function packageMarker(
 	input: SourceInput,
 	revision: NonNullable<V2Layout["revision"]>,
 ): OriginMarker {

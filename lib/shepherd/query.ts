@@ -66,7 +66,7 @@ import { findChildWorkspaces, STATE_DIR } from "./workspace";
 
 type ToolFlags = Readonly<Record<string, string | boolean>>;
 
-export const QUERIES = [
+const QUERIES = [
 	"items",
 	"item",
 	"sessions",
@@ -76,7 +76,7 @@ export const QUERIES = [
 ] as const;
 type QueryName = (typeof QUERIES)[number];
 
-export type QueryProblem = {
+type QueryProblem = {
 	code: string;
 	file: string;
 	line?: number;

@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-export const extracted = realpathSync(
+const extracted = realpathSync(
 	mkdtempSync(join(tmpdir(), "builder-hooks-pkg-")),
 );
 cpSync(resolve(import.meta.dir, ".."), join(extracted, "software"), {

@@ -27,7 +27,7 @@ function isWithin(parent: string, child: string): boolean {
 }
 
 /** Decode a Markdown link target, keeping malformed percent escapes literal. */
-export function decodedLinkTarget(target: string): string {
+function decodedLinkTarget(target: string): string {
 	try {
 		return decodeURIComponent(target);
 	} catch {

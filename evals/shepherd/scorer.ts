@@ -43,7 +43,7 @@ export const SCORER_ISOLATION = [
 	"--session-id",
 	"--system-prompt",
 ] as const;
-export const SCORER_SETTINGS = { disableAllHooks: true };
+const SCORER_SETTINGS = { disableAllHooks: true };
 /** The packet's evidence files, in packet order (4.2). */
 export const PACKET_FILES = [
 	["claude-fixture-notes.md", "fixture facts"],
@@ -123,7 +123,7 @@ export function scorerArgv(config: ScorerConfig, sessionId: string): string[] {
 }
 
 /** What the isolation options leave the scorer, recorded with each invocation. */
-export function effectiveSettings(): Record<string, unknown> {
+function effectiveSettings(): Record<string, unknown> {
 	return {
 		settingSources: [],
 		settings: SCORER_SETTINGS,

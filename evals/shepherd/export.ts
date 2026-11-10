@@ -101,7 +101,7 @@ function plain(path: string): string {
 }
 
 /** The spelling Python's `json.dumps` gives a string with `ensure_ascii`. */
-export function asciiEscaped(text: string): string {
+function asciiEscaped(text: string): string {
 	// Python escapes each UTF-16 code unit, so a surrogate pair is two escapes.
 	return text.replace(/[^\p{ASCII}]/gu, (c) =>
 		Array.from(

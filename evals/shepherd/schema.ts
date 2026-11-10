@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-export const RESULT_SCHEMA_VERSION = 1;
+const RESULT_SCHEMA_VERSION = 1;
 export const MUST_IDS = [
 	"A.M1",
 	"A.M2",
@@ -29,11 +29,11 @@ export const MUST_IDS = [
 ] as const;
 /** The gate's six trials (3.1); never taken from a result's own policy. */
 export const GATE_TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"] as const;
-export const MAX_BEHAVIORAL = 2;
-export const MAX_EXEMPT_VOIDS = 2;
+const MAX_BEHAVIORAL = 2;
+const MAX_EXEMPT_VOIDS = 2;
 /** The first scoring round and the one later rescoring round R1 allows. */
-export const MAX_SCORING_ROUNDS = 2;
-export const MAX_INVOCATIONS_PER_ROUND = 2;
+const MAX_SCORING_ROUNDS = 2;
+const MAX_INVOCATIONS_PER_ROUND = 2;
 
 const rubricSchema = z.strictObject({
 	rubricVersion: z.literal(1),
@@ -337,7 +337,7 @@ const resultSchema = z.strictObject({
 export type Result = z.infer<typeof resultSchema>;
 
 /** A behavioural attempt that passed every Must together, in a complete session. */
-export function attemptPassed(attempt: Attempt): boolean {
+function attemptPassed(attempt: Attempt): boolean {
 	return (
 		attempt.kind === "behavioral" &&
 		attempt.valid &&
@@ -349,7 +349,7 @@ export function attemptPassed(attempt: Attempt): boolean {
 }
 
 /** The failure an operator cancellation records; it uses up no scoring round. */
-export const CANCELLED = "cancelled";
+const CANCELLED = "cancelled";
 
 /** Invocations that count toward scoring rounds and retries. */
 function counted(invocations: ScorerInvocation[]): ScorerInvocation[] {
@@ -389,7 +389,7 @@ export function frozenVoid(attempt: Attempt): boolean {
  * Voids, plus unscored attempts whose scoring rounds are exhausted: they
  * consumed no behavioural attempt (R1) and count against the same cap.
  */
-export function exemptVoids(attempts: Attempt[]): number {
+function exemptVoids(attempts: Attempt[]): number {
 	return attempts.filter(
 		(a) => a.kind === "void" || (a.kind === "unscored" && !awaitingScore(a)),
 	).length;

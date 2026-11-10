@@ -191,7 +191,7 @@ function inlineTable(entries: [string, string][]): string {
  * A TOML basic string. JSON escapes are valid TOML except that DEL must be
  * escaped too, and a lone surrogate has no TOML form at all.
  */
-export function tomlString(text: string): string {
+function tomlString(text: string): string {
 	if (!text.isWellFormed()) {
 		throw new Error("text with an unpaired surrogate has no TOML form");
 	}
@@ -210,7 +210,7 @@ function configKey(key: string): string {
 	return key;
 }
 
-export function tomlValue(value: unknown, path: string): string {
+function tomlValue(value: unknown, path: string): string {
 	if (typeof value === "string") return tomlString(value);
 	if (typeof value === "boolean") return String(value);
 	if (typeof value === "number" && Number.isFinite(value)) return String(value);

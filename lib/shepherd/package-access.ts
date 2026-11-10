@@ -10,7 +10,7 @@ import {
 } from "./package-resolution";
 import { findEnclosingWorkspace, STATE_DIR } from "./workspace";
 
-export function isWorkspace(dir: string): boolean {
+function isWorkspace(dir: string): boolean {
 	return existsSync(join(dir, STATE_DIR));
 }
 

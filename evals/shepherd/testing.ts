@@ -35,14 +35,14 @@ export function versionLineAt(
 }
 
 const rubric = loadRubric();
-export const TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"];
+const TRIALS = ["A", "D", "E", "G", "E-neg", "G-neg"];
 const HASH = (digit: string) => `sha256:${digit.repeat(64)}`;
 const HEX = "a".repeat(64);
 const T0 = "2026-10-13T15:00:00.000Z";
 const T1 = "2026-10-13T15:10:00.000Z";
 export const RUN_ID = "20261013T150000Z-abc123";
 
-export const knownCost = (usd = 0.5): Cost => ({
+const knownCost = (usd = 0.5): Cost => ({
 	usd,
 	reason: null,
 	usage: null,

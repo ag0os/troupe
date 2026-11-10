@@ -141,7 +141,7 @@ export function itemRecord(
 }
 
 /** The file-only source: STATUS is done and its Outcome says the work landed. */
-export function landedInFiles(record: ItemRecord): Landed | undefined {
+function landedInFiles(record: ItemRecord): Landed | undefined {
 	if (!record.done || record.outcome === undefined) return undefined;
 	const outcome = record.outcome;
 	// A sentence ends at . ! or ? and a space, a blank line, or a list item; a

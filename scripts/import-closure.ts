@@ -64,7 +64,7 @@ export interface FileEdges {
 	opaque: OpaqueRef[];
 }
 
-export function formatOpaque(ref: OpaqueRef): string {
+function formatOpaque(ref: OpaqueRef): string {
 	return `${ref.file}:${ref.line}: ${ref.what}`;
 }
 

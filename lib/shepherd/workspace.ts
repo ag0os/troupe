@@ -1,10 +1,4 @@
-import {
-	type Dirent,
-	existsSync,
-	readdirSync,
-	readFileSync,
-	realpathSync,
-} from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const STATE_DIR = ".shepherd";
@@ -15,25 +9,6 @@ export const STATE_DIR = ".shepherd";
  * or a large repository must stay fast.
  */
 export const CHILD_DEPTH = 3;
-
-export type Module = { name: string; body: string; path: string };
-
-/**
- * Capability modules in a workspace's integrations dir: workspace-local ones
- * for the launch directory, inherited ones for an enclosing workspace.
- */
-export function loadIntegrations(root: string): Module[] {
-	const dir = join(root, STATE_DIR, "integrations");
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter((file) => file.endsWith(".md"))
-		.sort()
-		.map((file) => ({
-			name: file,
-			body: readFileSync(join(dir, file), "utf8"),
-			path: realpathSync(join(dir, file)),
-		}));
-}
 
 /**
  * The nearest parent directory that is itself a Shepherd workspace. Its

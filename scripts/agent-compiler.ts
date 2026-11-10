@@ -45,7 +45,7 @@ import {
 export * from "../lib/agent-format/compiler";
 
 /** Directories whose modules extensions may import by relative path. */
-export const FRAMEWORK_DIRS = ["lib/agent-format", "lib/shepherd"] as const;
+const FRAMEWORK_DIRS = ["lib/agent-format", "lib/shepherd"] as const;
 
 /** The fixed 22-agent roster (D-008, D-036). */
 export const ROSTER = [
