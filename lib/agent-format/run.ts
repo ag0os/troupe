@@ -583,7 +583,8 @@ function messageOf(error: unknown): string {
  * of the process, so output that preparation schedules for later (a timer,
  * an unawaited promise) cannot follow the envelope. The envelope goes
  * through the writer captured before absorbing, and the process exits once
- * both streams have flushed, before any such callback can run.
+ * the writes to both streams have completed, before any such callback can
+ * run.
  */
 export async function previewAndExit(
 	spec: Readonly<AgentSpec>,
@@ -593,7 +594,7 @@ export async function previewAndExit(
 ): Promise<never> {
 	const writeOut = process.stdout.write.bind(process.stdout);
 	absorbStdout();
-	const stdio = drainingStdio();
+	const stdio = drainingStdio({ stdout: (text, done) => writeOut(text, done) });
 	let envelope = "";
 	const code = await previewAgent(spec, extension, invocation, {
 		isDirectory: io.isDirectory,
@@ -601,9 +602,9 @@ export async function previewAndExit(
 			envelope += text;
 		},
 		stderr: stdio.stderr,
-		signals: processSignals,
+		signals: stdio.signals,
 	});
-	await new Promise<void>((done) => writeOut(envelope, () => done()));
+	stdio.stdout(envelope);
 	return stdio.exit(code);
 }
 
@@ -864,7 +865,10 @@ export interface ExecuteIo
 	/** Where runner-created resources go; the OS temp directory by default. */
 	tmpRoot?: string;
 	interpolate?: Interpolate;
-	/** Resolves once everything written so far has reached the terminal. */
+	/**
+	 * Resolves once everything written so far has completed, before the
+	 * backend spawns; a signal ends the wait.
+	 */
 	flush?: () => Promise<void>;
 	/** Replaces adapter selection, e.g. in tests. */
 	adapterFor?: (backend: Backend) => BackendAdapter;
@@ -1060,7 +1064,7 @@ async function lifecycle(
 		for (const message of prepared.beforeRunMessages) {
 			io.stdout(message.endsWith("\n") ? message : `${message}\n`);
 		}
-		await io.flush?.();
+		await scope.guard(io.flush?.());
 		const env = definedEnv({
 			...io.env,
 			...(prepared.codexHome === undefined
@@ -1202,38 +1206,63 @@ export async function decodeStream(
 export interface DrainingStdio {
 	stdout: (text: string) => void;
 	stderr: (text: string) => void;
-	/** Resolves once every write made through `stdout` and `stderr` has drained. */
+	/** Resolves once every write made through `stdout` and `stderr` has completed. */
 	drained: () => Promise<void>;
-	/** Exits with the code once `drained` resolves. */
+	/** The process's signals, noting each one for `exit`. */
+	signals: SignalSource;
+	/**
+	 * Exits with the code once `drained` resolves, without a time limit. A
+	 * terminating signal ends the wait and exits with 128+n; so does a run
+	 * that a noted signal already ended, which does not wait at all.
+	 */
 	exit: (code: number) => Promise<never>;
 }
 
+type StreamWrite = (text: string, done: () => void) => void;
+
 /**
- * The exit that keeps docs/AGENT-FORMAT.md's promise that output reaches the
- * reader first. Bun runs a write's callback once the reader has taken its
- * bytes, in write order, but runs an empty write's callback at once, so the
- * wait is on the callback of the last real write to each stream.
+ * The exit behind docs/AGENT-FORMAT.md's promise that a normal exit waits
+ * for the runner's writes to stdout and stderr to complete. Bun runs a
+ * write's callback once the stream has handed its bytes to the destination,
+ * in write order, but runs an empty write's callback at once, so the wait is
+ * on the callback of the last nonempty write to each stream. A callback is
+ * not a sign that a reader consumed the bytes. `stdout` replaces the stdout
+ * write, for a caller that captured it before absorbing stdout.
  */
-export function drainingStdio(): DrainingStdio {
+export function drainingStdio(
+	options: { stdout?: StreamWrite } = {},
+): DrainingStdio {
+	const writeOut: StreamWrite =
+		options.stdout ?? ((text, done) => process.stdout.write(text, done));
+	const writeErr: StreamWrite = (text, done) =>
+		process.stderr.write(text, done);
 	let out: Promise<void> = Promise.resolve();
 	let err: Promise<void> = Promise.resolve();
-	const write = (stream: NodeJS.WriteStream, text: string) =>
-		new Promise<void>((done) => {
-			stream.write(text, () => done());
-		});
+	let received: RunnerSignal | undefined;
+	const write = (to: StreamWrite, text: string) =>
+		new Promise<void>((done) => to(text, () => done()));
 	const drained = async () => {
 		await out;
 		await err;
 	};
 	return {
 		stdout: (text) => {
-			out = write(process.stdout, text);
+			if (text !== "") out = write(writeOut, text);
 		},
 		stderr: (text) => {
-			err = write(process.stderr, text);
+			if (text !== "") err = write(writeErr, text);
 		},
 		drained,
+		signals: (handler) =>
+			processSignals((signal) => {
+				received = signal;
+				handler(signal);
+			}),
 		exit: async (code) => {
+			if (received !== undefined && code === signalExitCode(received)) {
+				process.exit(code);
+			}
+			processSignals((signal) => process.exit(signalExitCode(signal)));
 			await drained();
 			process.exit(code);
 		},
@@ -1253,7 +1282,7 @@ export async function runAndExit(
 		stdout: stdio.stdout,
 		stderr: stdio.stderr,
 		env: process.env,
-		signals: processSignals,
+		signals: stdio.signals,
 		flush: stdio.drained,
 	});
 	return stdio.exit(code);
@@ -1364,7 +1393,7 @@ export async function dispatchAndExit(
 		env: process.env,
 		stdout: stdio.stdout,
 		stderr: stdio.stderr,
-		signals: processSignals,
+		signals: stdio.signals,
 	});
 	if (code === undefined) return;
 	await stdio.exit(code);
