@@ -106,6 +106,8 @@ Backend: <claude|codex>
 
 Secrets are redacted in previews. Print mode captures and buffers backend output, then writes it when the backend exits. Stream mode decodes backend JSON lines as they arrive. Interactive mode inherits terminal IO.
 
+Everything a binary writes to stdout and stderr reaches the reader before the process exits, whatever the size and whether the reader is a file, a pipe or a terminal. This holds on every exit the generated entry takes: help, version, parse errors, preview, a run and a dispatch `exit`.
+
 For Claude children, the runner removes an inherited `CLAUDE_PROJECT_DIR`. It does not set `CLAUDE_FORGE_DIR`.
 
 ## Extensions

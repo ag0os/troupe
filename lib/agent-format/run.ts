@@ -593,18 +593,18 @@ export async function previewAndExit(
 ): Promise<never> {
 	const writeOut = process.stdout.write.bind(process.stdout);
 	absorbStdout();
+	const stdio = drainingStdio();
 	let envelope = "";
 	const code = await previewAgent(spec, extension, invocation, {
 		isDirectory: io.isDirectory,
 		stdout: (text) => {
 			envelope += text;
 		},
-		stderr: (text) => process.stderr.write(text),
+		stderr: stdio.stderr,
 		signals: processSignals,
 	});
 	await new Promise<void>((done) => writeOut(envelope, () => done()));
-	await new Promise<void>((done) => process.stderr.write("", () => done()));
-	process.exit(code);
+	return stdio.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,10 +1198,46 @@ export async function decodeStream(
 	}
 }
 
-/** Resolves once stdout and stderr have flushed what was written so far. */
-async function flushStdio(): Promise<void> {
-	await new Promise<void>((done) => process.stdout.write("", () => done()));
-	await new Promise<void>((done) => process.stderr.write("", () => done()));
+/** Writers for both streams and a wait for what was written through them. */
+export interface DrainingStdio {
+	stdout: (text: string) => void;
+	stderr: (text: string) => void;
+	/** Resolves once every write made through `stdout` and `stderr` has drained. */
+	drained: () => Promise<void>;
+	/** Exits with the code once `drained` resolves. */
+	exit: (code: number) => Promise<never>;
+}
+
+/**
+ * The exit that keeps docs/AGENT-FORMAT.md's promise that output reaches the
+ * reader first. Bun runs a write's callback once the reader has taken its
+ * bytes, in write order, but runs an empty write's callback at once, so the
+ * wait is on the callback of the last real write to each stream.
+ */
+export function drainingStdio(): DrainingStdio {
+	let out: Promise<void> = Promise.resolve();
+	let err: Promise<void> = Promise.resolve();
+	const write = (stream: NodeJS.WriteStream, text: string) =>
+		new Promise<void>((done) => {
+			stream.write(text, () => done());
+		});
+	const drained = async () => {
+		await out;
+		await err;
+	};
+	return {
+		stdout: (text) => {
+			out = write(process.stdout, text);
+		},
+		stderr: (text) => {
+			err = write(process.stderr, text);
+		},
+		drained,
+		exit: async (code) => {
+			await drained();
+			process.exit(code);
+		},
+	};
 }
 
 /** The generated entry's execution path: run, flush, exit with the code. */
@@ -1211,16 +1247,16 @@ export async function runAndExit(
 	invocation: ParsedInvocation,
 	io: Pick<CliIo, "isDirectory">,
 ): Promise<never> {
+	const stdio = drainingStdio();
 	const code = await executeAgent(spec, extension, invocation, {
 		isDirectory: io.isDirectory,
-		stdout: (text) => process.stdout.write(text),
-		stderr: (text) => process.stderr.write(text),
+		stdout: stdio.stdout,
+		stderr: stdio.stderr,
 		env: process.env,
 		signals: processSignals,
-		flush: flushStdio,
+		flush: stdio.drained,
 	});
-	await flushStdio();
-	process.exit(code);
+	return stdio.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,14 +1358,14 @@ export async function dispatchAndExit(
 	extension: AgentExtension,
 	argv: readonly string[],
 ): Promise<void> {
+	const stdio = drainingStdio();
 	const code = await runDispatch(spec, extension, argv, {
 		cwd: process.cwd(),
 		env: process.env,
-		stdout: (text) => process.stdout.write(text),
-		stderr: (text) => process.stderr.write(text),
+		stdout: stdio.stdout,
+		stderr: stdio.stderr,
 		signals: processSignals,
 	});
 	if (code === undefined) return;
-	await flushStdio();
-	process.exit(code);
+	await stdio.exit(code);
 }

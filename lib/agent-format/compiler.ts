@@ -1427,7 +1427,7 @@ export function generateEntry(
 	const lines: string[] = [
 		'import { statSync } from "node:fs";',
 		`import { ${stamped ? "resolveCli, resolveVersion" : "resolveCli"} } from ${JSON.stringify(cli)};`,
-		`import { ${dispatched ? "dispatchAndExit, " : ""}previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
+		`import { ${dispatched ? "dispatchAndExit, " : ""}drainingStdio, previewAndExit, runAndExit } from ${JSON.stringify(run)};`,
 	];
 	if (agent.extension && names.length > 0) {
 		lines.push(
@@ -1443,24 +1443,25 @@ export function generateEntry(
 			"await dispatchAndExit(spec, extension, process.argv.slice(2));",
 		);
 	}
+	lines.push("const stdio = drainingStdio();");
 	if (stamped) {
 		lines.push(
 			`const versioned = resolveVersion(spec.id, ${JSON.stringify(versionLine)}, process.argv.slice(2), {`,
-			"\tstdout: (text) => process.stdout.write(text),",
-			"\tstderr: (text) => process.stderr.write(text),",
+			"\tstdout: stdio.stdout,",
+			"\tstderr: stdio.stderr,",
 			"});",
-			"if (versioned) process.exit(versioned.exitCode);",
+			"if (versioned) await stdio.exit(versioned.exitCode);",
 		);
 	}
 	lines.push(
 		"const io = {",
 		"\tcwd: process.cwd(),",
-		"\tstdout: (text) => process.stdout.write(text),",
-		"\tstderr: (text) => process.stderr.write(text),",
+		"\tstdout: stdio.stdout,",
+		"\tstderr: stdio.stderr,",
 		'\tisDirectory: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? "missing",',
 		"};",
 		"const cli = resolveCli(spec, process.argv.slice(2), io);",
-		'if ("exitCode" in cli) process.exit(cli.exitCode);',
+		'if ("exitCode" in cli) await stdio.exit(cli.exitCode);',
 		"if (cli.invocation.showPrompt) await previewAndExit(spec, extension, cli.invocation, io);",
 		"await runAndExit(spec, extension, cli.invocation, io);",
 		"",
