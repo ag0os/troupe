@@ -1212,8 +1212,8 @@ export interface DrainingStdio {
 	signals: SignalSource;
 	/**
 	 * Exits with the code once `drained` resolves, without a time limit. A
-	 * terminating signal ends the wait and exits with 128+n; so does a run
-	 * that a noted signal already ended, which does not wait at all.
+	 * terminating signal ends the wait and exits with 128+n, and a run a
+	 * signal ended does not wait at all (see `drainingStdio`).
 	 */
 	exit: (code: number) => Promise<never>;
 }
@@ -1226,8 +1226,12 @@ type StreamWrite = (text: string, done: () => void) => void;
  * write's callback once the stream has handed its bytes to the destination,
  * in write order, but runs an empty write's callback at once, so the wait is
  * on the callback of the last nonempty write to each stream. A callback is
- * not a sign that a reader consumed the bytes. `stdout` replaces the stdout
- * write, for a caller that captured it before absorbing stdout.
+ * not a sign that a reader consumed the bytes. `exit` abandons pending
+ * output when its code is 128+n for any signal `signals` has passed on, so
+ * a run that a signal ended does not wait whichever of several signals came
+ * last, while a SIGINT the run ignored does not stop a later normal exit from
+ * waiting. `stdout` replaces the stdout write, for a caller that captured it
+ * before absorbing stdout.
  */
 export function drainingStdio(
 	options: { stdout?: StreamWrite } = {},
@@ -1238,7 +1242,7 @@ export function drainingStdio(
 		process.stderr.write(text, done);
 	let out: Promise<void> = Promise.resolve();
 	let err: Promise<void> = Promise.resolve();
-	let received: RunnerSignal | undefined;
+	const received = new Set<RunnerSignal>();
 	const write = (to: StreamWrite, text: string) =>
 		new Promise<void>((done) => to(text, () => done()));
 	const drained = async () => {
@@ -1255,12 +1259,12 @@ export function drainingStdio(
 		drained,
 		signals: (handler) =>
 			processSignals((signal) => {
-				received = signal;
+				received.add(signal);
 				handler(signal);
 			}),
 		exit: async (code) => {
-			if (received !== undefined && code === signalExitCode(received)) {
-				process.exit(code);
+			for (const signal of received) {
+				if (code === signalExitCode(signal)) process.exit(code);
 			}
 			processSignals((signal) => process.exit(signalExitCode(signal)));
 			await drained();
