@@ -106,6 +106,8 @@ Backend: <claude|codex>
 
 Secrets are redacted in previews. Print mode captures and buffers backend output, then writes it when the backend exits. Stream mode decodes backend JSON lines as they arrive. Interactive mode inherits terminal IO.
 
+On a normal exit (help, version, parse errors, preview, a run and a dispatch `exit`) the binary waits, without a time limit, until the writes it made through the runner to stdout and stderr have completed, whatever their size, for a destination that is open and accepts output. That is not a promise that a downstream reader has consumed them or that a terminal has shown them, and output an extension writes directly is outside it. A terminating signal (SIGHUP, SIGINT, SIGTERM) ends the wait, abandons what is still pending and exits with 128 plus the signal number; so does the wait before the backend spawns.
+
 For Claude children, the runner removes an inherited `CLAUDE_PROJECT_DIR`. It does not set `CLAUDE_FORGE_DIR`.
 
 ## Extensions
