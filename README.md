@@ -1,6 +1,6 @@
 # Troupe
 
-A troupe of agents: each one declared once in this repo, compiled into a binary in `bin/`, and run from the terminal. The shared format supports Claude Code and Codex, so an agent is written once and runs on either backend it declares. Shepherd, the day to day assistant and manager, is built here too.
+A troupe of agents: each one declared once in this repo, compiled into a binary in `bin/`, and run from the terminal. The shared format supports Claude Code and Codex, so an agent is written once and runs on either backend it declares. Shepherd, the day to day assistant and manager, started here and now lives in its own repository, [troupe-shepherd](https://github.com/ag0os/troupe-shepherd), as a package built on Troupe; the copy still in this tree is being removed.
 
 Formerly `claude-forge`; the repo was renamed in place on 2026-09-29.
 
@@ -58,6 +58,7 @@ A fresh checkout runs `bun install`, then `bun run setup:extractions`, before it
 ## Docs
 
 - [docs/AGENT-FORMAT.md](docs/AGENT-FORMAT.md): read before writing or changing a declaration or extension. It owns the schema, command line, backend mapping and compilation.
+- [troupe-shepherd](https://github.com/ag0os/troupe-shepherd): Shepherd's own repository. Install and use Shepherd from there; its `docs/` hold the current manual and setup guide.
 - [extractions/shepherd/docs/SHEPHERD.md](extractions/shepherd/docs/SHEPHERD.md): read to use, configure or extend Shepherd. The package owns Shepherd's documentation (`PACKAGES.md`, `SHEPHERD.md`, `SHEPHERD-EVALS.md`, `SETUP.md`, `STAMPS.md`); the first four keep transitional copies under `docs/`.
 - [extractions/shepherd/docs/SETUP.md](extractions/shepherd/docs/SETUP.md): read when setting up a new machine.
 - [docs/COACH.md](docs/COACH.md): read to use `tutors:coach` or write a subject pack for it.
